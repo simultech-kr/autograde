@@ -34,7 +34,7 @@ WSL2 VS Code Extension의 로그인 → clone → push → 제출 → 채점 →
 - instructor 변경을 학생 repository PR로 배포
 - pull-request submission의 GitHub head/base/open/draft 검증
 - LMS 업로드와 학생용 HTTP CLI fallback
-- platform bulk roster import
+- GitHub login에서 numeric user ID를 자동 조회하는 roster resolution
 - 성적에 반영할 제출을 별도로 선택하는 grade-selection UI
 - 악의적인 학생 코드로부터 숨은 테스트를 격리하는 2단계 runner sandbox
 
@@ -68,10 +68,11 @@ SQLite, snapshot, workspace를 같은 backup/restore 단위로 다룹니다.
 ## 2. 학생 등록과 활성화 코드
 
 GitHub login과 numeric user ID는 repository 배정·표시 metadata입니다. 기본
-활성화 코드 경로의 학생 인증 근거가 아닙니다. 현재 platform CLI는 roster를
-한 명씩 등록하므로 instructor credential로 `gh api users/<login> --jq .id` 등을
-실행해 repository metadata를 확인한 뒤 등록합니다. 자동 bulk resolution은 다음
-단계입니다.
+활성화 코드 경로의 학생 인증 근거가 아닙니다. Platform CLI는 학생을 한 명씩 등록하거나
+UTF-8 roster CSV를 일괄 import할 수 있지만 GitHub login을 numeric user ID로 자동 변환하지는
+않습니다. Instructor credential로 `gh api users/<login> --jq .id` 등을 실행해 repository
+metadata를 확인한 뒤 개별 명령 또는 CSV의 `github_user_id,github_login` 한 쌍에 넣습니다.
+자동 bulk resolution은 다음 단계입니다.
 
 ```bash
 autograde-platform student add 20260001 \

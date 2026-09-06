@@ -11,6 +11,7 @@ import pytest
 import autograde.platform_state as platform_state_module
 from autograde.platform_auth import hash_student_password
 from autograde.platform_state import (
+    CourseRosterImportEntry,
     DeviceAuthorizationExpired,
     DeviceAuthorizationState,
     PlatformAccessDenied,
@@ -24,6 +25,7 @@ from autograde.platform_state import (
     RefreshTokenReuseDetected,
     ResultPolicy,
     StudentActivationState,
+    StudentIdentityKind,
     SubmissionMode,
     SubmissionState,
 )
@@ -244,7 +246,7 @@ def test_bootstrap_has_an_independent_migration_namespace(database: Path) -> Non
     StateStore(database)
     platform = PlatformStateStore(database)
 
-    assert platform.schema_version() == 7
+    assert platform.schema_version() == 8
     with sqlite3.connect(database) as connection:
         tables = {
             row[0]
@@ -333,9 +335,8 @@ def test_v4_migration_backfills_existing_refresh_rotation_count(
             (verifier("6"), expires, expires, created, created),
         )
         connection.commit()
-
     migrated = PlatformStateStore(database)
-    assert migrated.schema_version() == 7
+    assert migrated.schema_version() == 8
     with sqlite3.connect(database) as connection:
         family = connection.execute(
             "SELECT course_key, refresh_rotation_count "
@@ -356,6 +357,226 @@ def test_v4_migration_backfills_existing_refresh_rotation_count(
     assert session == (COURSE,)
     assert activation_attempts == (0,)
     assert activation_table == (1,)
+
+
+def test_v8_migration_removes_inactive_passwords_and_enforces_invariant(
+    database: Path,
+) -> None:
+    created = "2026-09-01T00:00:00.000000Z"
+    initialize_legacy_platform_schema(database, through=7, applied_at=created)
+    password_hash = hash_student_password("482731")
+    with sqlite3.connect(database) as connection:
+        connection.execute("PRAGMA foreign_keys = ON")
+        for student_id, student_key, student_active, enrollment_active in (
+            (1, "global-inactive", 0, 1),
+            (2, "enrollment-inactive", 1, 0),
+            (3, "fully-active", 1, 1),
+        ):
+            connection.execute(
+                "INSERT INTO platform_students ("
+                "id, student_key, auth_subject, github_user_id, github_login, "
+                "active, created_at, updated_at, identity_kind"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'github')",
+                (
+                    student_id,
+                    student_key,
+                    f"github:{100 + student_id}",
+                    100 + student_id,
+                    f"student-{student_id}",
+                    student_active,
+                    created,
+                    created,
+                ),
+            )
+            connection.execute(
+                "INSERT INTO platform_enrollments ("
+                "id, student_id, course_key, active, created_at, updated_at"
+                ") VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    student_id,
+                    student_id,
+                    COURSE,
+                    enrollment_active,
+                    created,
+                    created,
+                ),
+            )
+            connection.execute(
+                "INSERT INTO platform_student_passwords ("
+                "enrollment_id, password_hash, failed_attempts, locked_until, "
+                "updated_at) VALUES (?, ?, 0, NULL, ?)",
+                (student_id, password_hash, created),
+            )
+        connection.commit()
+    # A legacy database may also contain an orphan if an old writer disabled
+    # foreign keys.  Migration 8 treats it as inactive and removes it.
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "INSERT INTO platform_student_passwords ("
+            "enrollment_id, password_hash, failed_attempts, locked_until, updated_at"
+            ") VALUES (999, ?, 0, NULL, ?)",
+            (password_hash, created),
+        )
+
+    migrated = PlatformStateStore(database)
+
+    assert migrated.schema_version() == 8
+    with sqlite3.connect(database) as connection:
+        remaining = connection.execute(
+            "SELECT enrollment_id FROM platform_student_passwords"
+        ).fetchall()
+        triggers = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'trigger'"
+            )
+        }
+    assert remaining == [(3,)]
+    assert {
+        "trg_platform_student_password_active_insert",
+        "trg_platform_student_password_active_update",
+        "trg_platform_enrollment_password_cleanup",
+        "trg_platform_student_password_cleanup",
+    } <= triggers
+
+    with sqlite3.connect(database) as connection:
+        connection.execute("PRAGMA foreign_keys = ON")
+        for enrollment_id in (1, 2):
+            with pytest.raises(
+                sqlite3.IntegrityError, match="requires active enrollment"
+            ):
+                connection.execute(
+                    "INSERT INTO platform_student_passwords ("
+                    "enrollment_id, password_hash, failed_attempts, locked_until, "
+                    "updated_at) VALUES (?, ?, 0, NULL, ?)",
+                    (enrollment_id, password_hash, created),
+                )
+            connection.rollback()
+
+        with pytest.raises(
+            sqlite3.IntegrityError, match="requires active enrollment"
+        ):
+            connection.execute(
+                "UPDATE platform_student_passwords "
+                "SET enrollment_id = 2 WHERE enrollment_id = 3"
+            )
+        connection.rollback()
+        assert connection.execute(
+            "SELECT COUNT(*) FROM platform_student_passwords WHERE enrollment_id = 3"
+        ).fetchone()[0] == 1
+
+        connection.execute(
+            "UPDATE platform_enrollments SET active = 0 WHERE id = 3"
+        )
+        assert connection.execute(
+            "SELECT COUNT(*) FROM platform_student_passwords WHERE enrollment_id = 3"
+        ).fetchone()[0] == 0
+        connection.execute(
+            "UPDATE platform_enrollments SET active = 1 WHERE id = 3"
+        )
+        connection.execute(
+            "INSERT INTO platform_student_passwords ("
+            "enrollment_id, password_hash, failed_attempts, locked_until, updated_at"
+            ") VALUES (3, ?, 0, NULL, ?)",
+            (password_hash, created),
+        )
+        connection.execute("UPDATE platform_students SET active = 0 WHERE id = 3")
+        assert connection.execute(
+            "SELECT COUNT(*) FROM platform_student_passwords WHERE enrollment_id = 3"
+        ).fetchone()[0] == 0
+
+        # A credential must never transfer to another course or student.
+        connection.execute("UPDATE platform_students SET active = 1 WHERE id = 3")
+        connection.execute(
+            "INSERT INTO platform_student_passwords ("
+            "enrollment_id, password_hash, failed_attempts, locked_until, updated_at"
+            ") VALUES (3, ?, 0, NULL, ?)",
+            (password_hash, created),
+        )
+        connection.execute(
+            "UPDATE platform_enrollments SET course_key = 'other-course' WHERE id = 3"
+        )
+        assert connection.execute(
+            "SELECT COUNT(*) FROM platform_student_passwords WHERE enrollment_id = 3"
+        ).fetchone()[0] == 0
+        connection.execute(
+            "UPDATE platform_enrollments SET course_key = ? WHERE id = 3",
+            (COURSE,),
+        )
+        connection.execute(
+            "INSERT INTO platform_student_passwords ("
+            "enrollment_id, password_hash, failed_attempts, locked_until, updated_at"
+            ") VALUES (3, ?, 0, NULL, ?)",
+            (password_hash, created),
+        )
+        connection.execute(
+            "INSERT INTO platform_students ("
+            "id, student_key, auth_subject, github_user_id, github_login, active, "
+            "created_at, updated_at, identity_kind"
+            ") VALUES (4, 'replacement-owner', 'github:104', 104, "
+            "'student-4', 1, ?, ?, 'github')",
+            (created, created),
+        )
+        connection.execute(
+            "UPDATE platform_enrollments SET student_id = 4 WHERE id = 3"
+        )
+        assert connection.execute(
+            "SELECT COUNT(*) FROM platform_student_passwords WHERE enrollment_id = 3"
+        ).fetchone()[0] == 0
+        connection.commit()
+
+        # Trigger effects participate in the surrounding transaction.  A
+        # rollback restores both the parent state and its credential.
+        connection.execute(
+            "INSERT INTO platform_student_passwords ("
+            "enrollment_id, password_hash, failed_attempts, locked_until, updated_at"
+            ") VALUES (3, ?, 0, NULL, ?)",
+            (password_hash, created),
+        )
+        connection.commit()
+        connection.execute("BEGIN")
+        connection.execute(
+            "UPDATE platform_enrollments SET active = 0 WHERE id = 3"
+        )
+        assert connection.execute(
+            "SELECT COUNT(*) FROM platform_student_passwords WHERE enrollment_id = 3"
+        ).fetchone()[0] == 0
+        with pytest.raises(
+            sqlite3.IntegrityError, match="requires active enrollment"
+        ):
+            connection.execute(
+                "INSERT INTO platform_student_passwords ("
+                "enrollment_id, password_hash, failed_attempts, locked_until, "
+                "updated_at) VALUES (3, ?, 0, NULL, ?)",
+                (password_hash, created),
+            )
+        connection.rollback()
+        assert connection.execute(
+            "SELECT active FROM platform_enrollments WHERE id = 3"
+        ).fetchone()[0] == 1
+        assert connection.execute(
+            "SELECT COUNT(*) FROM platform_student_passwords WHERE enrollment_id = 3"
+        ).fetchone()[0] == 1
+
+    imported = migrated.import_course_roster(
+        course_key=COURSE,
+        entries=(
+            CourseRosterImportEntry(
+                student_key="enrollment-inactive",
+                auth_subject="github:102",
+                identity_kind=StudentIdentityKind.GITHUB,
+                github_user_id=102,
+                github_login="student-2",
+                active=True,
+            ),
+        ),
+    )
+    assert imported[0][1].active is True
+    with pytest.raises(PlatformNotFound, match="password credential"):
+        migrated.get_student_password_credential(
+            student_key="enrollment-inactive",
+            course_key=COURSE,
+        )
 
 
 @pytest.mark.parametrize(
@@ -867,6 +1088,54 @@ def test_course_deactivation_requires_a_new_student_password_after_reactivation(
         )
 
 
+def test_setting_password_requires_active_student_and_enrollment(
+    store: PlatformStateStore,
+) -> None:
+    fixture = PlatformFixture(store)
+    password_hash = hash_student_password("482731")
+
+    store.upsert_enrollment(
+        student_id=fixture.student.id,
+        course_key=COURSE,
+        active=False,
+        at=NOW + timedelta(seconds=1),
+    )
+    with pytest.raises(PlatformAccessDenied, match="active course enrollment"):
+        store.set_student_password_hash(
+            student_id=fixture.student.id,
+            course_key=COURSE,
+            password_hash=password_hash,
+            at=NOW + timedelta(seconds=2),
+        )
+
+    store.upsert_enrollment(
+        student_id=fixture.student.id,
+        course_key=COURSE,
+        active=True,
+        at=NOW + timedelta(seconds=3),
+    )
+    store.set_student_active(
+        fixture.student.id,
+        False,
+        at=NOW + timedelta(seconds=4),
+    )
+    with pytest.raises(PlatformAccessDenied, match="active course enrollment"):
+        store.set_student_password_hash(
+            student_id=fixture.student.id,
+            course_key=COURSE,
+            password_hash=password_hash,
+            at=NOW + timedelta(seconds=5),
+        )
+
+    with store._connection() as connection:
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM platform_student_passwords"
+            ).fetchone()[0]
+            == 0
+        )
+
+
 def test_password_rotation_revokes_sessions_without_deleting_the_replacement(
     store: PlatformStateStore,
 ) -> None:
@@ -877,17 +1146,24 @@ def test_password_rotation_revokes_sessions_without_deleting_the_replacement(
         password_hash=hash_student_password("123456"),
         at=NOW,
     )
+    fixture.session()
     replacement = store.set_student_password_hash(
         student_id=fixture.student.id,
         course_key=COURSE,
         password_hash=hash_student_password("654321"),
-        at=NOW + timedelta(seconds=1),
+        at=NOW + timedelta(seconds=3),
     )
 
     current = store.get_student_password_credential(
         student_key="s001", course_key=COURSE
     )
     assert current.password_hash == replacement.password_hash
+    with pytest.raises(PlatformAccessDenied, match="revoked"):
+        store.authorize_access_token(
+            access_token_hash=verifier("1"),
+            course_key=COURSE,
+            at=NOW + timedelta(seconds=4),
+        )
 
 
 def test_legacy_password_hash_is_reported_as_requiring_a_reset(

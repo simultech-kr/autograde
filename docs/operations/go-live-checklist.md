@@ -19,6 +19,8 @@ LAN을 선택했다면 이 체크리스트와 [신뢰 LAN 외부 접속 파일�
 - 개인 업무 credential이나 중요한 데이터가 있는 host에서 제출물을 신뢰할 수 없음
 - Pilot config/roster의 대상 course 또는 data root를 확인하지 못함
 - Config CSV, roster CSV, SQLite 또는 credential file 권한을 제한할 수 없음
+- 실제 roster를 repository에 commit했거나 비밀번호 원문이 든 roster 전체를 학생과 공유함
+- 실제 비밀번호를 commit/push한 뒤 전원 교체와 기존 수령 코드·session 폐기를 하지 않음
 - Extension에 표시된 service origin을 교수자 안내와 대조할 수 없음
 - Loopback 밖의 주소를 신뢰 LAN 가이드의 server/Extension 이중 opt-in, 실제 RFC 1918
   interface bind, source-subnet firewall, 단기 실행·종료 후 폐기 없이 사용함
@@ -43,9 +45,13 @@ filesystem, network, process/UID와 kernel 격리를 제공하지 않습니다.
 - [ ] `grading_runtime`이 정확히 `pilot-local`이다.
 - [ ] `bundle_worker_count`가 시험 장비에 맞는 양의 정수다.
 - [ ] Config에 secret, 비밀번호/hash, 수령·활성화 코드나 학생 개인정보가 없다.
-- [ ] Roster는 별도 UTF-8 CSV이고 `student_key,active` schema를 따른다.
-- [ ] Roster의 ID, 중복, 빈 값과 active 상태를 교수자가 확인했다.
-- [ ] 실제 학생 roster 대신 합성 ID를 우선 사용한다.
+- [ ] Roster는 별도 UTF-8 CSV이고 `student_key,active,password` schema를 따른다.
+- [ ] Active 행은 서로 다른 ASCII 숫자 6자리 `password`를 가지며 inactive 행은 비어 있다.
+- [ ] Roster의 ID, 비밀번호 중복, 빈 값과 active 상태를 교수자가 확인했다.
+- [ ] 비밀번호 원문이 든 roster는 교수자만 읽을 수 있고 POSIX에서는 현재 사용자 소유의 정확한
+      mode `0600`이며, Windows에서는 이에 준하는 계정 ACL을 사용한다.
+- [ ] Repository에 추적된 `pilot/roster.csv`는 합성 로컬 시험에만 사용하고, 실제 학생 roster는
+      repository 밖 또는 ignore된 local path에 보관한다.
 
 잘못된 config와 roster가 database 변경 전에 거부되는 negative test도 수행합니다.
 
@@ -54,16 +60,20 @@ filesystem, network, process/UID와 kernel 격리를 제공하지 않습니다.
 - [ ] Data root가 다른 수업·개발 작업과 공유되지 않는다.
 - [ ] Data root directory는 owner만 접근할 수 있다.
 - [ ] SQLite, server secret과 instructor token은 owner만 읽을 수 있다.
-- [ ] 학생 전용 비밀번호는 ASCII 숫자 6자리이고 학교 포털과 재사용하지 않으며 hash만
-      SQLite에 둔다.
+- [ ] 학생 전용 비밀번호는 ASCII 숫자 6자리이고 학교 포털과 재사용하지 않는다. 원문은 보호된
+      roster에만 두고 SQLite에는 hash만 둔다.
 - [ ] 학생별 무작위 비밀번호를 사용하고 server의 5회 실패 시 5분 잠금과 reverse proxy IP
       rate limit을 확인했다.
+- [ ] Roster 전체나 비밀번호 목록을 학생에게 보내지 않고, 본인을 확인한 개별 채널로 각
+      학생에게 자신의 비밀번호 하나만 전달했다.
+- [ ] 동일 roster 재-import가 credential을 변경하지 않고, 다른 값은 `--replace-passwords` 없이
+      적용 전에 거부되는 것을 확인했다. 이 flag는 검토한 일괄 회전에만 사용한다.
 - [ ] Dashboard의 `재설정 필요` 학생에게 숫자 6자리 비밀번호를 다시 설정해 legacy
       `scrypt$v1` hash가 없다.
 - [ ] 숫자 6자리 단일 인증을 감독되는 20~25명 단기 파일럿 밖에서 사용하지 않는다.
 - [ ] 초기 전용 비밀번호 전달과 분실 시 본인 확인·재설정 절차가 있다.
-- [ ] 활성화 코드는 **매 Sign In마다** 학생별 새 mode `0600` 파일과 새 경로로 발급하고
-      덮어쓰지 않는다.
+- [ ] 호환 `Autograde: Sign In` 경로를 시험할 때에는 활성화 코드를 **매 Sign In마다** 학생별
+      새 mode `0600` 파일과 새 경로로 발급하고 덮어쓰지 않는다.
 - [ ] Raw 활성화 코드와 instructor token을 CSV, URL, log 또는 repository에 넣지 않는다.
 - [ ] 파일럿 종료 후 보존 또는 폐기할 data root의 정확한 경로를 기록했다.
 
@@ -92,6 +102,7 @@ filesystem, network, process/UID와 kernel 격리를 제공하지 않습니다.
 - [ ] 학생·교과목·과제·pending device 중 하나라도 다른 수령 코드는 원자적으로 거부된다.
 - [ ] 수령 코드 session에서는 수락한 과제 외의 목록·다운로드·제출·결과가 보이지 않는다.
 - [ ] 수령 코드와 비밀번호 원문은 DB, URL, log, Dashboard, Extension 저장소에 남지 않는다.
+      비밀번호 원문이 있는 교수자 전용 roster만 의도된 예외다.
 - [ ] 미등록 또는 inactive 학생은 활성화 코드를 발급·사용할 수 없다.
 - [ ] 활성화 코드는 한 번 소비하면 재사용할 수 없다.
 - [ ] 같은 학생의 다음 로그인에는 새 활성화 코드를 발급하며, 학기 초 코드나 소비된 코드를

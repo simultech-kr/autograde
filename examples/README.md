@@ -11,7 +11,8 @@
 
 현재 이 디렉터리의 `roster.csv`는 기존 Git collection 형식 참고 자료이며 local
 direct-bundle 파일럿 roster로 사용하지 않습니다. 별도로 만들 필요 없이 repository의
-[`pilot/roster.csv`](../pilot/roster.csv)에 있는 `student_key,active` 20명 예제를 사용합니다.
+[`pilot/roster.csv`](../pilot/roster.csv)에 있는 `student_key,active,password` 20명 합성 예제를
+사용합니다. 이 비밀번호는 로컬 시험 전용이며 외부 파일럿이나 실제 학생에게 사용하지 않습니다.
 Roster 작성·import 절차는
 [`docs/operations/direct-bundle-mvp.md`](../docs/operations/direct-bundle-mvp.md)를 따릅니다.
 

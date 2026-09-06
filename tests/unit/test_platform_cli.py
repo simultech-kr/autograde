@@ -6,6 +6,7 @@ import os
 import re
 import signal
 import sqlite3
+import stat
 import threading
 from pathlib import Path
 from types import SimpleNamespace
@@ -13,6 +14,7 @@ from types import SimpleNamespace
 import pytest
 
 import autograde.platform_cli as platform_cli
+from autograde.platform_auth import verify_student_password
 from autograde.platform_cli import main
 from autograde.platform_grader import InfrastructureGradingError
 from autograde.platform_service import PlatformAPIError, StudentPlatformService
@@ -776,6 +778,35 @@ def test_password_file_requires_exactly_six_digits(tmp_path, value: str) -> None
 
     with pytest.raises(ValueError, match="숫자 6자리"):
         platform_cli._read_student_password(password_file)
+
+
+def test_password_set_cli_refuses_inactive_enrollment_without_leaking_pin(
+    tmp_path,
+    capsys,
+) -> None:
+    data_root = tmp_path / "private"
+    assert invoke(data_root, "student", "add", "000123", "--inactive") == 0
+    capsys.readouterr()
+    password_file = tmp_path / "password.txt"
+    password_file.write_text("482731\n", encoding="utf-8")
+    password_file.chmod(0o600)
+
+    assert (
+        invoke(
+            data_root,
+            "student",
+            "password-set",
+            "000123",
+            "--password-file",
+            str(password_file),
+        )
+        == 1
+    )
+    captured = capsys.readouterr()
+    failure = json.loads(captured.err)
+    assert failure["error"]["code"] == "platform_access_denied"
+    assert "active course enrollment" in failure["error"]["message"]
+    assert "482731" not in captured.out + captured.err
 
 
 def test_platform_cli_refuses_activation_file_overwrite_before_reissuing(
@@ -2130,7 +2161,7 @@ def test_local_student_add_and_validated_roster_import(
     assert invoke(data_root, "student", "import", str(roster)) == 0
     imported = output(capsys)["result"]
     assert imported == {
-        "atomic": False,
+        "atomic": True,
         "count": 2,
         "course_key": COURSE,
         "github_count": 1,
@@ -2147,6 +2178,456 @@ def test_local_student_add_and_validated_roster_import(
             (state.get_student_by_key("20260003").id, COURSE),
         ).fetchone()["active"]
     assert active == 0
+
+
+def test_roster_import_sets_six_digit_passwords_only_for_active_enrollments(
+    tmp_path,
+    capsys,
+) -> None:
+    data_root = tmp_path / "private"
+    roster = tmp_path / "roster.csv"
+    roster.write_text(
+        "student_key,active,password\n"
+        "000123,true,012345\n"
+        "000124,false,\n",
+        encoding="utf-8",
+    )
+    roster.chmod(0o600)
+
+    assert invoke(data_root, "student", "import", str(roster)) == 0
+    captured = capsys.readouterr()
+    assert "012345" not in captured.out + captured.err
+
+    state = PlatformStateStore(data_root / "state.sqlite3")
+    credential = state.get_student_password_credential(
+        student_key="000123", course_key=COURSE
+    )
+    assert verify_student_password("012345", credential.password_hash)
+    with pytest.raises(PlatformNotFound, match="password credential"):
+        state.get_student_password_credential(
+            student_key="000124", course_key=COURSE
+        )
+    inactive_student = state.get_student_by_key("000124")
+    with state._connection() as connection:
+        stored_for_inactive = connection.execute(
+            "SELECT COUNT(*) FROM platform_student_passwords AS p "
+            "JOIN platform_enrollments AS e ON e.id = p.enrollment_id "
+            "WHERE e.student_id = ? AND e.course_key = ?",
+            (inactive_student.id, COURSE),
+        ).fetchone()[0]
+    assert stored_for_inactive == 0
+    assert b"012345" not in (data_root / "state.sqlite3").read_bytes()
+
+    # Transitioning an active enrollment to inactive removes its password.
+    roster.write_text(
+        "student_key,active,password\n"
+        "000123,false,\n"
+        "000124,false,\n",
+        encoding="utf-8",
+    )
+    roster.chmod(0o600)
+    assert invoke(data_root, "student", "import", str(roster)) == 0
+    capsys.readouterr()
+    with state._connection() as connection:
+        active_password_count = connection.execute(
+            "SELECT COUNT(*) FROM platform_student_passwords AS p "
+            "JOIN platform_enrollments AS e ON e.id = p.enrollment_id "
+            "WHERE e.student_id = ? AND e.course_key = ?",
+            (state.get_student_by_key("000123").id, COURSE),
+        ).fetchone()[0]
+    assert active_password_count == 0
+
+
+def test_roster_password_import_is_idempotent_and_requires_explicit_replacement(
+    tmp_path,
+    capsys,
+) -> None:
+    data_root = tmp_path / "private"
+    roster = tmp_path / "roster.csv"
+    roster.write_text(
+        "student_key,password\n000123,012345\n",
+        encoding="utf-8",
+    )
+    roster.chmod(0o600)
+
+    assert invoke(data_root, "student", "import", str(roster)) == 0
+    capsys.readouterr()
+    state = PlatformStateStore(data_root / "state.sqlite3")
+    initial = state.get_student_password_credential(
+        student_key="000123", course_key=COURSE
+    )
+    initial = state.record_student_password_failure(
+        enrollment_id=initial.enrollment_id,
+        expected_password_hash=initial.password_hash,
+        max_failed_attempts=1,
+        lockout_seconds=300,
+    )
+    assert initial.failed_attempts == 1
+    assert initial.locked_until is not None
+
+    assert invoke(data_root, "student", "import", str(roster)) == 0
+    capsys.readouterr()
+    unchanged = state.get_student_password_credential(
+        student_key="000123", course_key=COURSE
+    )
+    assert unchanged.password_hash == initial.password_hash
+    assert unchanged.updated_at == initial.updated_at
+    assert unchanged.failed_attempts == initial.failed_attempts
+    assert unchanged.locked_until == initial.locked_until
+
+    passwordless_roster = tmp_path / "passwordless-roster.csv"
+    passwordless_roster.write_text(
+        "student_key,active\n000123,true\n",
+        encoding="utf-8",
+    )
+    assert (
+        invoke(data_root, "student", "import", str(passwordless_roster))
+        == 0
+    )
+    capsys.readouterr()
+    after_passwordless_import = state.get_student_password_credential(
+        student_key="000123", course_key=COURSE
+    )
+    assert after_passwordless_import.password_hash == initial.password_hash
+    assert after_passwordless_import.updated_at == initial.updated_at
+    assert after_passwordless_import.failed_attempts == initial.failed_attempts
+    assert after_passwordless_import.locked_until == initial.locked_until
+
+    roster.write_text(
+        "student_key,password\n"
+        "000999,111111\n"
+        "000123,543210\n",
+        encoding="utf-8",
+    )
+    roster.chmod(0o600)
+    assert invoke(data_root, "student", "import", str(roster)) == 1
+    failure = json.loads(capsys.readouterr().err)
+    assert "--replace-passwords" in failure["error"]["message"]
+    rejected = state.get_student_password_credential(
+        student_key="000123", course_key=COURSE
+    )
+    assert rejected.password_hash == initial.password_hash
+    with pytest.raises(PlatformNotFound):
+        state.get_student_by_key("000999")
+
+    assert (
+        invoke(
+            data_root,
+            "student",
+            "import",
+            str(roster),
+            "--replace-passwords",
+        )
+        == 0
+    )
+    capsys.readouterr()
+    changed = state.get_student_password_credential(
+        student_key="000123", course_key=COURSE
+    )
+    assert changed.password_hash != initial.password_hash
+    assert verify_student_password("543210", changed.password_hash)
+    assert changed.failed_attempts == 0
+    assert changed.locked_until is None
+
+
+def test_roster_import_requires_explicit_replacement_for_legacy_password_hash(
+    tmp_path,
+    capsys,
+) -> None:
+    data_root = tmp_path / "private"
+    roster = tmp_path / "roster.csv"
+    roster.write_text(
+        "student_key,password\n000123,012345\n",
+        encoding="utf-8",
+    )
+    roster.chmod(0o600)
+    assert invoke(data_root, "student", "import", str(roster)) == 0
+    capsys.readouterr()
+
+    with sqlite3.connect(data_root / "state.sqlite3") as connection:
+        connection.execute(
+            "UPDATE platform_student_passwords "
+            "SET password_hash = replace(password_hash, 'scrypt$v2$', 'scrypt$v1$')"
+        )
+
+    assert invoke(data_root, "student", "import", str(roster)) == 1
+    failure = json.loads(capsys.readouterr().err)
+    assert "--replace-passwords" in failure["error"]["message"]
+
+    assert (
+        invoke(
+            data_root,
+            "student",
+            "import",
+            str(roster),
+            "--replace-passwords",
+        )
+        == 0
+    )
+    capsys.readouterr()
+    state = PlatformStateStore(data_root / "state.sqlite3")
+    credential = state.get_student_password_credential(
+        student_key="000123", course_key=COURSE
+    )
+    assert credential.password_hash.startswith("scrypt$v2$")
+    assert verify_student_password("012345", credential.password_hash)
+
+
+def test_roster_import_cas_rejects_concurrent_password_rotation_atomically(
+    tmp_path,
+    capsys,
+    monkeypatch,
+) -> None:
+    data_root = tmp_path / "private"
+    initial_roster = tmp_path / "initial.csv"
+    initial_roster.write_text(
+        "student_key,password\n000123,012345\n",
+        encoding="utf-8",
+    )
+    initial_roster.chmod(0o600)
+    assert invoke(data_root, "student", "import", str(initial_roster)) == 0
+    capsys.readouterr()
+
+    roster = tmp_path / "roster.csv"
+    roster.write_text(
+        "student_key,password\n"
+        "000999,111111\n"
+        "000123,012345\n",
+        encoding="utf-8",
+    )
+    roster.chmod(0o600)
+    real_import = PlatformStateStore.import_course_roster
+    raced = False
+
+    def rotate_before_transaction(self, **kwargs):
+        nonlocal raced
+        if not raced:
+            raced = True
+            competing = PlatformStateStore(self.database)
+            student = competing.get_student_by_key("000123")
+            competing.set_student_password_hash(
+                student_id=student.id,
+                course_key=COURSE,
+                password_hash=platform_cli.hash_student_password("654321"),
+            )
+        return real_import(self, **kwargs)
+
+    monkeypatch.setattr(
+        PlatformStateStore,
+        "import_course_roster",
+        rotate_before_transaction,
+    )
+
+    assert invoke(data_root, "student", "import", str(roster)) == 1
+    captured = capsys.readouterr()
+    failure = json.loads(captured.err)
+    assert failure["error"]["code"] == "platform_conflict"
+    assert "changed during validation" in failure["error"]["message"]
+    assert "012345" not in captured.out + captured.err
+    assert "654321" not in captured.out + captured.err
+    state = PlatformStateStore(data_root / "state.sqlite3")
+    with pytest.raises(PlatformNotFound):
+        state.get_student_by_key("000999")
+    credential = state.get_student_password_credential(
+        student_key="000123", course_key=COURSE
+    )
+    assert verify_student_password("654321", credential.password_hash)
+
+
+def test_roster_import_cas_rejects_concurrently_created_password_atomically(
+    tmp_path,
+    capsys,
+    monkeypatch,
+) -> None:
+    data_root = tmp_path / "private"
+    roster = tmp_path / "roster.csv"
+    roster.write_text(
+        "student_key,password\n"
+        "000999,111111\n"
+        "000123,012345\n",
+        encoding="utf-8",
+    )
+    roster.chmod(0o600)
+    real_import = PlatformStateStore.import_course_roster
+    raced = False
+
+    def create_password_before_transaction(self, **kwargs):
+        nonlocal raced
+        if not raced:
+            raced = True
+            competing = PlatformStateStore(self.database)
+            student = competing.upsert_local_student(
+                student_key="000123",
+                auth_subject="local:000123",
+            )
+            competing.upsert_enrollment(
+                student_id=student.id,
+                course_key=COURSE,
+            )
+            competing.set_student_password_hash(
+                student_id=student.id,
+                course_key=COURSE,
+                password_hash=platform_cli.hash_student_password("654321"),
+            )
+        return real_import(self, **kwargs)
+
+    monkeypatch.setattr(
+        PlatformStateStore,
+        "import_course_roster",
+        create_password_before_transaction,
+    )
+
+    assert invoke(data_root, "student", "import", str(roster)) == 1
+    failure = json.loads(capsys.readouterr().err)
+    assert failure["error"]["code"] == "platform_conflict"
+    state = PlatformStateStore(data_root / "state.sqlite3")
+    with pytest.raises(PlatformNotFound):
+        state.get_student_by_key("000999")
+    credential = state.get_student_password_credential(
+        student_key="000123", course_key=COURSE
+    )
+    assert verify_student_password("654321", credential.password_hash)
+
+
+@pytest.mark.parametrize(
+    "password",
+    ["", "12345", "1234567", "abcdef", "１２３４５６"],
+)
+def test_roster_import_rejects_missing_or_invalid_active_password_before_writes(
+    tmp_path,
+    capsys,
+    password,
+) -> None:
+    data_root = tmp_path / "private"
+    roster = tmp_path / "invalid-roster.csv"
+    roster.write_text(
+        "student_key,active,password\n"
+        "000123,true,012345\n"
+        f"000124,true,{password}\n",
+        encoding="utf-8",
+    )
+    roster.chmod(0o600)
+
+    assert invoke(data_root, "student", "import", str(roster)) == 1
+    failure = json.loads(capsys.readouterr().err)
+    assert "row 3" in failure["error"]["message"]
+    state = PlatformStateStore(data_root / "state.sqlite3")
+    with pytest.raises(PlatformNotFound):
+        state.get_student_by_key("000123")
+
+
+@pytest.mark.parametrize(
+    "rows",
+    [
+        "000123,true,012345\n000124,true,012345\n",
+        "000123,true,012345\n000124,false,654321\n",
+    ],
+)
+def test_roster_import_rejects_duplicate_or_inactive_passwords_before_writes(
+    tmp_path,
+    capsys,
+    rows,
+) -> None:
+    data_root = tmp_path / "private"
+    roster = tmp_path / "invalid-roster.csv"
+    roster.write_text(
+        "student_key,active,password\n" + rows,
+        encoding="utf-8",
+    )
+    roster.chmod(0o600)
+
+    assert invoke(data_root, "student", "import", str(roster)) == 1
+    failure = json.loads(capsys.readouterr().err)
+    assert "row 3" in failure["error"]["message"]
+    state = PlatformStateStore(data_root / "state.sqlite3")
+    with pytest.raises(PlatformNotFound):
+        state.get_student_by_key("000123")
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX file permissions only")
+@pytest.mark.parametrize("mode", [0o644, 0o1600])
+def test_roster_with_passwords_requires_private_file_permissions(
+    tmp_path,
+    capsys,
+    mode,
+) -> None:
+    data_root = tmp_path / "private"
+    roster = tmp_path / "roster.csv"
+    roster.write_text(
+        "student_key,password\n000123,012345\n",
+        encoding="utf-8",
+    )
+    roster.chmod(mode)
+    if stat.S_IMODE(roster.stat().st_mode) != mode:
+        pytest.skip("filesystem does not preserve the requested permission bits")
+
+    assert invoke(data_root, "student", "import", str(roster)) == 1
+    failure = json.loads(capsys.readouterr().err)
+    assert "mode 0600" in failure["error"]["message"]
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX file semantics only")
+def test_roster_import_rejects_symbolic_and_hard_links(
+    tmp_path,
+    capsys,
+) -> None:
+    data_root = tmp_path / "private"
+    target = tmp_path / "target.csv"
+    target.write_text(
+        "student_key,password\n000123,012345\n",
+        encoding="utf-8",
+    )
+    target.chmod(0o600)
+    symbolic_link = tmp_path / "symbolic.csv"
+    symbolic_link.symlink_to(target)
+
+    assert invoke(data_root, "student", "import", str(symbolic_link)) == 1
+    assert "unavailable" in json.loads(capsys.readouterr().err)["error"]["message"]
+
+    hard_link = tmp_path / "hard.csv"
+    os.link(target, hard_link)
+    assert invoke(data_root, "student", "import", str(hard_link)) == 1
+    assert "regular file" in json.loads(capsys.readouterr().err)["error"]["message"]
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX replacement semantics only")
+def test_roster_import_reads_open_descriptor_if_path_is_replaced(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    roster = tmp_path / "roster.csv"
+    roster.write_text(
+        "student_key,password\n000123,012345\n",
+        encoding="utf-8",
+    )
+    roster.chmod(0o600)
+    replacement = tmp_path / "replacement.csv"
+    replacement.write_text(
+        "student_key,password\nattacker,999999\n",
+        encoding="utf-8",
+    )
+    replacement.chmod(0o600)
+    real_fstat = os.fstat
+    replaced = False
+
+    def replace_after_open(descriptor):
+        nonlocal replaced
+        info = real_fstat(descriptor)
+        if not replaced:
+            os.replace(replacement, roster)
+            replaced = True
+        return info
+
+    monkeypatch.setattr(platform_cli.os, "fstat", replace_after_open)
+    state = PlatformStateStore(tmp_path / "state.sqlite3")
+    rows = platform_cli._read_roster_csv(
+        roster,
+        state=state,
+        course_key=COURSE,
+    )
+
+    assert replaced
+    assert [row["student_key"] for row in rows] == ["000123"]
 
 
 def test_roster_import_validates_all_rows_before_any_write(

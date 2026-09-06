@@ -178,6 +178,26 @@ class PlatformEnrollment:
 
 
 @dataclass(frozen=True)
+class CourseRosterImportEntry:
+    """One fully validated operator roster row for an atomic state import.
+
+    Password verifiers, never plaintext passwords, cross the persistence API.
+    ``password_managed`` distinguishes an expected-absent credential from a
+    passwordless import that must leave any existing credential unchanged.
+    """
+
+    student_key: str
+    auth_subject: str
+    identity_kind: StudentIdentityKind
+    github_user_id: Optional[int]
+    github_login: Optional[str]
+    active: bool
+    password_managed: bool = False
+    expected_password_hash: Optional[str] = None
+    new_password_hash: Optional[str] = None
+
+
+@dataclass(frozen=True)
 class DeviceAuthorization:
     authorization_id: str
     course_key: str
@@ -1380,6 +1400,66 @@ END;
 """
 
 
+_MIGRATION_8 = """
+DELETE FROM platform_student_passwords
+WHERE NOT EXISTS (
+    SELECT 1
+    FROM platform_enrollments AS e
+    JOIN platform_students AS p ON p.id = e.student_id
+    WHERE e.id = platform_student_passwords.enrollment_id
+      AND e.active = 1
+      AND p.active = 1
+);
+
+CREATE TRIGGER trg_platform_student_password_active_insert
+BEFORE INSERT ON platform_student_passwords
+WHEN NOT EXISTS (
+    SELECT 1
+    FROM platform_enrollments AS e
+    JOIN platform_students AS p ON p.id = e.student_id
+    WHERE e.id = NEW.enrollment_id
+      AND e.active = 1
+      AND p.active = 1
+)
+BEGIN
+    SELECT RAISE(ABORT, 'student password requires active enrollment');
+END;
+
+CREATE TRIGGER trg_platform_student_password_active_update
+BEFORE UPDATE ON platform_student_passwords
+WHEN NOT EXISTS (
+    SELECT 1
+    FROM platform_enrollments AS e
+    JOIN platform_students AS p ON p.id = e.student_id
+    WHERE e.id = NEW.enrollment_id
+      AND e.active = 1
+      AND p.active = 1
+)
+BEGIN
+    SELECT RAISE(ABORT, 'student password requires active enrollment');
+END;
+
+CREATE TRIGGER trg_platform_enrollment_password_cleanup
+AFTER UPDATE OF active, student_id, course_key ON platform_enrollments
+WHEN NEW.active = 0
+  OR NEW.student_id != OLD.student_id
+  OR NEW.course_key != OLD.course_key
+BEGIN
+    DELETE FROM platform_student_passwords WHERE enrollment_id = NEW.id;
+END;
+
+CREATE TRIGGER trg_platform_student_password_cleanup
+AFTER UPDATE OF active ON platform_students
+WHEN NEW.active = 0
+BEGIN
+    DELETE FROM platform_student_passwords
+    WHERE enrollment_id IN (
+        SELECT id FROM platform_enrollments WHERE student_id = NEW.id
+    );
+END;
+"""
+
+
 _MIGRATIONS = {
     1: _MIGRATION_1,
     2: _MIGRATION_2,
@@ -1388,6 +1468,7 @@ _MIGRATIONS = {
     5: _MIGRATION_5,
     6: _MIGRATION_6,
     7: _MIGRATION_7,
+    8: _MIGRATION_8,
 }
 _LATEST_SCHEMA_VERSION = max(_MIGRATIONS)
 
@@ -1429,6 +1510,16 @@ def _password_hash(value: str) -> str:
     ):
         raise ValueError("password_hash must use the supported scrypt format")
     return normalized
+
+
+def _local_identity_columns(student_key: str) -> Tuple[int, str]:
+    identity_digest = hashlib.sha256(
+        f"autograde-local-student:{student_key}".encode("utf-8")
+    ).hexdigest()
+    github_user_id = (1 << 62) | (
+        int(identity_digest[:16], 16) & ((1 << 62) - 1)
+    )
+    return github_user_id, f"autograde-local-{identity_digest}"
 
 
 def _claim_tag(value: str) -> str:
@@ -1712,13 +1803,7 @@ class PlatformStateStore:
 
         student_key = _required_text(student_key, "student_key")
         auth_subject = _required_text(auth_subject, "auth_subject")
-        identity_digest = hashlib.sha256(
-            f"autograde-local-student:{student_key}".encode("utf-8")
-        ).hexdigest()
-        github_user_id = (1 << 62) | (
-            int(identity_digest[:16], 16) & ((1 << 62) - 1)
-        )
-        github_login = f"autograde-local-{identity_digest}"
+        github_user_id, github_login = _local_identity_columns(student_key)
         now = utc_iso(at)
         with self._write() as connection:
             previous = connection.execute(
@@ -1876,11 +1961,6 @@ class PlatformStateStore:
                 "SELECT 1 FROM platform_students WHERE id = ?", (student_id,)
             ).fetchone() is None:
                 raise PlatformNotFound(f"student {student_id} was not found")
-            previous = connection.execute(
-                "SELECT active FROM platform_enrollments "
-                "WHERE student_id = ? AND course_key = ?",
-                (student_id, course_key),
-            ).fetchone()
             connection.execute(
                 """
                 INSERT INTO platform_enrollments (
@@ -1891,7 +1971,10 @@ class PlatformStateStore:
                 """,
                 (student_id, course_key, int(active), now, now),
             )
-            if previous is not None and bool(previous["active"]) and not active:
+            # An inactive enrollment must never retain credentials.  Repeat the
+            # cleanup even when it was already inactive so an out-of-band or
+            # legacy password cannot become valid after a later reactivation.
+            if not active:
                 self._revoke_course_credentials(
                     connection,
                     student_id=student_id,
@@ -1904,6 +1987,265 @@ class PlatformStateStore:
                 (student_id, course_key),
             ).fetchone()
         return self._enrollment(row)
+
+    def import_course_roster(
+        self,
+        *,
+        course_key: str,
+        entries: Sequence[CourseRosterImportEntry],
+        at: Optional[DatetimeValue] = None,
+    ) -> Tuple[Tuple[PlatformStudent, PlatformEnrollment], ...]:
+        """Atomically apply a prevalidated roster with password-hash CAS.
+
+        Password hashing intentionally happens before this call.  For managed
+        password rows, ``expected_password_hash`` captures the credential seen
+        during CSV validation and is rechecked after ``BEGIN IMMEDIATE`` before
+        any row is changed.  A concurrent credential rotation therefore rolls
+        back the complete roster instead of being silently overwritten.
+        """
+
+        course_key = _required_text(course_key, "course_key")
+        normalized: list[CourseRosterImportEntry] = []
+        seen_student_keys: set[str] = set()
+        seen_subjects: set[str] = set()
+        seen_github_ids: set[int] = set()
+        for entry in entries:
+            if not isinstance(entry, CourseRosterImportEntry):
+                raise TypeError("roster entries must be CourseRosterImportEntry values")
+            student_key = _required_text(entry.student_key, "student_key")
+            auth_subject = _required_text(entry.auth_subject, "auth_subject")
+            try:
+                identity_kind = StudentIdentityKind(entry.identity_kind)
+            except ValueError as exc:
+                raise ValueError("identity_kind is invalid") from exc
+            if not isinstance(entry.active, bool):
+                raise TypeError("active must be a boolean")
+            if not isinstance(entry.password_managed, bool):
+                raise TypeError("password_managed must be a boolean")
+            if identity_kind == StudentIdentityKind.GITHUB:
+                if entry.github_user_id is None or entry.github_login is None:
+                    raise ValueError(
+                        "GitHub roster entries require github_user_id and github_login"
+                    )
+                github_user_id = _positive_int(
+                    entry.github_user_id, "github_user_id"
+                )
+                github_login = _required_text(entry.github_login, "github_login")
+            else:
+                if entry.github_user_id is not None or entry.github_login is not None:
+                    raise ValueError(
+                        "local roster entries must not include GitHub identity fields"
+                    )
+                github_user_id = None
+                github_login = None
+            expected_password_hash = (
+                _password_hash(entry.expected_password_hash)
+                if entry.expected_password_hash is not None
+                else None
+            )
+            new_password_hash = (
+                _password_hash(entry.new_password_hash)
+                if entry.new_password_hash is not None
+                else None
+            )
+            if not entry.password_managed and (
+                expected_password_hash is not None or new_password_hash is not None
+            ):
+                raise ValueError(
+                    "unmanaged roster passwords must not include password hashes"
+                )
+            if entry.password_managed and not entry.active:
+                raise ValueError("inactive roster entries cannot manage a password")
+            if (
+                entry.password_managed
+                and expected_password_hash is None
+                and new_password_hash is None
+            ):
+                raise ValueError(
+                    "managed roster password must expect or set a credential"
+                )
+            if new_password_hash is not None and not new_password_hash.startswith(
+                "scrypt$v2$"
+            ):
+                raise ValueError("new roster passwords must use the current hash format")
+            if student_key in seen_student_keys:
+                raise PlatformConflict("roster duplicates student_key")
+            if auth_subject in seen_subjects:
+                raise PlatformConflict("roster duplicates auth_subject")
+            if github_user_id is not None and github_user_id in seen_github_ids:
+                raise PlatformConflict("roster duplicates github_user_id")
+            seen_student_keys.add(student_key)
+            seen_subjects.add(auth_subject)
+            if github_user_id is not None:
+                seen_github_ids.add(github_user_id)
+            normalized.append(
+                CourseRosterImportEntry(
+                    student_key=student_key,
+                    auth_subject=auth_subject,
+                    identity_kind=identity_kind,
+                    github_user_id=github_user_id,
+                    github_login=github_login,
+                    active=entry.active,
+                    password_managed=entry.password_managed,
+                    expected_password_hash=expected_password_hash,
+                    new_password_hash=new_password_hash,
+                )
+            )
+        if not normalized:
+            raise ValueError("roster must contain at least one student")
+
+        now = utc_iso(at)
+        with self._write() as connection:
+            existing_rows: dict[str, Optional[sqlite3.Row]] = {}
+            # Recheck every identity and credential snapshot before the first
+            # write so any failure rolls back the roster as a unit.
+            for entry in normalized:
+                existing = connection.execute(
+                    "SELECT * FROM platform_students WHERE student_key = ?",
+                    (entry.student_key,),
+                ).fetchone()
+                existing_rows[entry.student_key] = existing
+                subject_owner = connection.execute(
+                    "SELECT student_key FROM platform_students WHERE auth_subject = ?",
+                    (entry.auth_subject,),
+                ).fetchone()
+                if (
+                    subject_owner is not None
+                    and subject_owner["student_key"] != entry.student_key
+                ):
+                    raise PlatformConflict(
+                        "roster identity is owned by another student"
+                    )
+                if existing is not None:
+                    differs = (
+                        existing["identity_kind"] != entry.identity_kind.value
+                        or existing["auth_subject"] != entry.auth_subject
+                    )
+                    if entry.identity_kind == StudentIdentityKind.GITHUB:
+                        differs = differs or (
+                            int(existing["github_user_id"])
+                            != entry.github_user_id
+                            or existing["github_login"] != entry.github_login
+                        )
+                    if differs:
+                        raise PlatformConflict(
+                            "roster conflicts with an existing student identity"
+                        )
+                    if entry.password_managed and not bool(existing["active"]):
+                        raise PlatformAccessDenied(
+                            "password requires an active student and course enrollment"
+                        )
+                if entry.password_managed:
+                    credential = connection.execute(
+                        """
+                        SELECT pw.password_hash
+                        FROM platform_student_passwords AS pw
+                        JOIN platform_enrollments AS e ON e.id = pw.enrollment_id
+                        JOIN platform_students AS p ON p.id = e.student_id
+                        WHERE p.student_key = ? AND e.course_key = ?
+                        """,
+                        (entry.student_key, course_key),
+                    ).fetchone()
+                    actual_hash = (
+                        str(credential["password_hash"])
+                        if credential is not None
+                        else None
+                    )
+                    expected_hash = entry.expected_password_hash
+                    credential_matches = (
+                        actual_hash is None and expected_hash is None
+                    ) or (
+                        actual_hash is not None
+                        and expected_hash is not None
+                        and hmac.compare_digest(actual_hash, expected_hash)
+                    )
+                    if not credential_matches:
+                        raise PlatformConflict(
+                            "roster password state changed during validation; retry import"
+                        )
+
+            imported: list[Tuple[PlatformStudent, PlatformEnrollment]] = []
+            for entry in normalized:
+                student_row = existing_rows[entry.student_key]
+                if student_row is None:
+                    if entry.identity_kind == StudentIdentityKind.GITHUB:
+                        assert entry.github_user_id is not None
+                        assert entry.github_login is not None
+                        github_user_id = entry.github_user_id
+                        github_login = entry.github_login
+                    else:
+                        github_user_id, github_login = _local_identity_columns(
+                            entry.student_key
+                        )
+                    try:
+                        connection.execute(
+                            """
+                            INSERT INTO platform_students (
+                                student_key, auth_subject, identity_kind,
+                                github_user_id, github_login,
+                                active, created_at, updated_at
+                            ) VALUES (?, ?, ?, ?, ?, 1, ?, ?)
+                            """,
+                            (
+                                entry.student_key,
+                                entry.auth_subject,
+                                entry.identity_kind.value,
+                                github_user_id,
+                                github_login,
+                                now,
+                                now,
+                            ),
+                        )
+                    except sqlite3.IntegrityError as exc:
+                        raise PlatformConflict(
+                            "roster identity conflicts with an existing student"
+                        ) from exc
+                    student_row = connection.execute(
+                        "SELECT * FROM platform_students WHERE student_key = ?",
+                        (entry.student_key,),
+                    ).fetchone()
+                    assert student_row is not None
+                connection.execute(
+                    """
+                    INSERT INTO platform_enrollments (
+                        student_id, course_key, active, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(student_id, course_key) DO UPDATE SET
+                        active = excluded.active, updated_at = excluded.updated_at
+                    """,
+                    (
+                        student_row["id"],
+                        course_key,
+                        int(entry.active),
+                        now,
+                        now,
+                    ),
+                )
+                if not entry.active:
+                    self._revoke_course_credentials(
+                        connection,
+                        student_id=int(student_row["id"]),
+                        course_key=course_key,
+                        now=now,
+                    )
+                if entry.password_managed and entry.new_password_hash is not None:
+                    self._set_student_password_hash_in_connection(
+                        connection,
+                        student_id=int(student_row["id"]),
+                        course_key=course_key,
+                        password_hash=entry.new_password_hash,
+                        now=now,
+                    )
+                enrollment_row = connection.execute(
+                    "SELECT * FROM platform_enrollments "
+                    "WHERE student_id = ? AND course_key = ?",
+                    (student_row["id"], course_key),
+                ).fetchone()
+                assert enrollment_row is not None
+                imported.append(
+                    (self._student(student_row), self._enrollment(enrollment_row))
+                )
+        return tuple(imported)
 
     @staticmethod
     def _revoke_course_credentials(
@@ -1990,47 +2332,74 @@ class PlatformStateStore:
         password_hash = _password_hash(password_hash)
         now = utc_iso(at)
         with self._write() as connection:
-            enrollment = connection.execute(
-                "SELECT * FROM platform_enrollments "
-                "WHERE student_id = ? AND course_key = ?",
-                (student_id, course_key),
-            ).fetchone()
-            if enrollment is None:
-                raise PlatformNotFound("course enrollment was not found")
-            previous = connection.execute(
-                "SELECT password_hash FROM platform_student_passwords "
-                "WHERE enrollment_id = ?",
-                (enrollment["id"],),
-            ).fetchone()
-            connection.execute(
-                """
-                INSERT INTO platform_student_passwords (
-                    enrollment_id, password_hash, failed_attempts,
-                    locked_until, updated_at
-                ) VALUES (?, ?, 0, NULL, ?)
-                ON CONFLICT(enrollment_id) DO UPDATE SET
-                    password_hash = excluded.password_hash,
-                    failed_attempts = 0,
-                    locked_until = NULL,
-                    updated_at = excluded.updated_at
-                """,
-                (enrollment["id"], password_hash, now),
-            )
-            if previous is not None and not hmac.compare_digest(
-                str(previous["password_hash"]), password_hash
-            ):
-                self._revoke_course_credentials(
-                    connection,
-                    student_id=student_id,
-                    course_key=course_key,
-                    now=now,
-                    delete_password=False,
-                )
-            row = self._student_password_row(
+            row = self._set_student_password_hash_in_connection(
                 connection,
-                enrollment_id=int(enrollment["id"]),
+                student_id=student_id,
+                course_key=course_key,
+                password_hash=password_hash,
+                now=now,
             )
         return self._student_password(row)
+
+    def _set_student_password_hash_in_connection(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        student_id: int,
+        course_key: str,
+        password_hash: str,
+        now: str,
+    ) -> sqlite3.Row:
+        enrollment = connection.execute(
+            """
+            SELECT e.*, p.active AS student_active
+            FROM platform_enrollments AS e
+            JOIN platform_students AS p ON p.id = e.student_id
+            WHERE e.student_id = ? AND e.course_key = ?
+            """,
+            (student_id, course_key),
+        ).fetchone()
+        if enrollment is None:
+            raise PlatformNotFound("course enrollment was not found")
+        if not bool(enrollment["student_active"]) or not bool(enrollment["active"]):
+            raise PlatformAccessDenied(
+                "student does not have an active course enrollment"
+            )
+        previous = connection.execute(
+            "SELECT password_hash FROM platform_student_passwords "
+            "WHERE enrollment_id = ?",
+            (enrollment["id"],),
+        ).fetchone()
+        connection.execute(
+            """
+            INSERT INTO platform_student_passwords (
+                enrollment_id, password_hash, failed_attempts,
+                locked_until, updated_at
+            ) VALUES (?, ?, 0, NULL, ?)
+            ON CONFLICT(enrollment_id) DO UPDATE SET
+                password_hash = excluded.password_hash,
+                failed_attempts = 0,
+                locked_until = NULL,
+                updated_at = excluded.updated_at
+            """,
+            (enrollment["id"], password_hash, now),
+        )
+        if previous is not None and not hmac.compare_digest(
+            str(previous["password_hash"]), password_hash
+        ):
+            self._revoke_course_credentials(
+                connection,
+                student_id=student_id,
+                course_key=course_key,
+                now=now,
+                delete_password=False,
+            )
+        row = self._student_password_row(
+            connection,
+            enrollment_id=int(enrollment["id"]),
+        )
+        assert row is not None
+        return row
 
     def get_student_password_credential(
         self, *, student_key: str, course_key: str
@@ -2054,6 +2423,26 @@ class PlatformStateStore:
         if row is None:
             raise PlatformNotFound("student password credential was not found")
         return self._student_password(row)
+
+    def find_student_password_credential(
+        self, *, student_key: str, course_key: str
+    ) -> Optional[StudentPasswordCredential]:
+        """Return an operator CAS snapshot, including inactive enrollments."""
+
+        student_key = _required_text(student_key, "student_key")
+        course_key = _required_text(course_key, "course_key")
+        with self._connection() as connection:
+            row = connection.execute(
+                """
+                SELECT c.*, e.student_id, e.course_key, p.student_key
+                FROM platform_student_passwords AS c
+                JOIN platform_enrollments AS e ON e.id = c.enrollment_id
+                JOIN platform_students AS p ON p.id = e.student_id
+                WHERE p.student_key = ? AND e.course_key = ?
+                """,
+                (student_key, course_key),
+            ).fetchone()
+        return self._student_password(row) if row is not None else None
 
     def record_student_password_failure(
         self,

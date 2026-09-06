@@ -17,9 +17,9 @@ program을 실행하면 그 program도 host filesystem, 현재 OS 사용자 권�
 
 Pilot config에는 공개 가능한 course/path/service endpoint/network mode/runtime 값만 저장하고
 raw token, 비밀번호·비밀번호 hash, 수령/활성화 코드, instructor password나 학생 레코드를
-넣지 않습니다. Roster는 별도
-CSV로 관리하고 필요한 `student_key,active`만 수집합니다. Environment file과 shell profile을
-설정 source로 사용하지 않습니다.
+넣지 않습니다. Roster는 별도 CSV로 관리하며 `student_key,active,password`를 사용합니다.
+`password`는 초기 등록을 위한 원문이므로 roster 전체가 교수자 전용 credential입니다.
+Environment file과 shell profile을 설정 source로 사용하지 않습니다.
 
 아래 GitHub service 인증과 container 격리 항목은 해당 기능을 선택하는 production 배포
 기준입니다. 외부 QR 파일럿은 TLS reverse proxy를 요구하지만 이것이 `pilot-local` grader를
@@ -47,8 +47,23 @@ production-safe하게 만들지는 않습니다.
   GitHub numeric user ID/login은 repository 배정·표시 metadata이며 인증 근거가 아닙니다.
 - 전용 비밀번호는 `000000`부터 `999999`까지의 **ASCII 숫자 6자리**만 허용하고, random salt를
   사용하는 `scrypt$v2` hash로만 저장합니다. 순차 번호, 학번 일부와 생일은 피하고 학생마다
-  무작위 값을 개별 전달합니다. CLI는 terminal에서 두 번 입력하거나 owner-only mode `0600`
-  파일만 읽으며 argv와 roster CSV로 받지 않습니다.
+  중복되지 않는 무작위 값을 사용합니다. Roster의 `password` 열이 있으면 active 행은 모두
+  값을 가져야 하고 inactive 행은 비워야 하며, 한 CSV 안의 중복 비밀번호는 거부합니다.
+- 비밀번호 원문을 포함한 roster는 repository 밖 또는 ignore된 local path에 두고, POSIX에서는
+  현재 교수자가 소유한 mode `0600` regular file만 import합니다. Windows에서도 교수자 계정만
+  읽도록 ACL을 제한합니다. Roster 전체를 학생에게 공유하지 않고 신원을 확인한 개별 채널로
+  각 학생에게 자신의 비밀번호 하나만 전달합니다. CSV 내용을 terminal/log로 출력하지 않습니다.
+  WSL2에서 서버를 실행하면 roster를 `/mnt/c` 같은 Windows mount가 아니라 WSL Linux
+  filesystem에 보관하고 `chmod 600`을 적용합니다.
+- CLI import는 모든 행을 검증한 뒤 원문을 `scrypt$v2`로 hash해 저장하며 응답에는 비밀번호를
+  포함하지 않습니다. 동일한 roster 재-import는 password hash를 다시 만들지 않는 no-op입니다.
+  기존 credential과 값이 다르면 기본적으로 전체 적용 전에 실패하고, 검토한 일괄 회전에만
+  `--replace-passwords`를 명시합니다. 개별 분실·재설정에는 대화형 `student password-set` 또는
+  owner-only mode `0600` password file을 사용할 수 있으며 argv로는 받지 않습니다.
+- Repository에 추적된 `pilot/roster.csv`의 ID와 비밀번호는 로컬 자동 시험용 합성 값입니다.
+  외부 파일럿 또는 실제 학생에게 사용하지 않으며, 실제 roster를 commit하지 않습니다.
+  실제 비밀번호가 한 번이라도 commit 또는 push되었다면 파일 삭제나 history 정리만 믿지 않고
+  노출된 학생 비밀번호를 모두 즉시 교체해 기존 수령 코드와 session을 폐기합니다.
 - 비밀번호 확인은 계정 존재 여부와 무관하게 같은 scrypt 경로를 실행하고 공개 오류를
   통일합니다. 6자리 값의 제한된 경우의 수를 보완하기 위해 enrollment별 5회 실패 시 5분 잠금,
   process별 4개 password-hash 동시성 상한과 reverse proxy의 IP rate limit을 모두

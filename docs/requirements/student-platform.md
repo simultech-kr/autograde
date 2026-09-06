@@ -12,11 +12,12 @@
 - Course, data root, service URL/listen/port, network 접근 mode, runtime과 worker 수는
   환경변수가 아니라 명시적으로 선택한 local pilot config CSV에서 읽습니다. 기본 network
   mode는 loopback-only입니다. Roster는 별도 UTF-8 CSV입니다.
-- roster의 필수 식별자는 학교 `student_key`입니다. Git 호환 모드를 쓰는 학생만 GitHub
-  login과 numeric user ID를 함께 가집니다.
-- 학교 SSO는 사용하지 않습니다. 기본 인증은 active course enrollment에
-  결합된 학생별 1회용 활성화 코드를 사용합니다. 파일럿 로그인에는 GitHub OAuth나
-  인증용 환경변수를 사용하지 않습니다.
+- roster는 학교 `student_key`, 수강 `active` 상태와 학생별 ASCII 숫자 6자리 `password`를
+  가집니다. Git 호환 모드를 쓰는 학생만 GitHub login과 numeric user ID를 함께 가집니다.
+- 학교 SSO는 사용하지 않습니다. 권장 인증은 active course enrollment에 결합된 학생별
+  Autograde 전용 비밀번호로 HTTPS 과제 페이지에서 10분·1회용 수령 코드를 발급하는
+  방식입니다. 교수자 발급 1회용 활성화 코드는 호환 경로입니다. 파일럿 로그인에는 GitHub
+  OAuth나 인증용 환경변수를 사용하지 않습니다.
 - 공용 실습 장비에는 서비스 URL만 지속합니다. Access/refresh token과 token audience는
   Extension Host 메모리 전용이며 VS Code/WSL session을 넘어 복구하지 않습니다.
 - 선택적으로 등록한 GitHub ID/login은 repository 배정·표시 metadata입니다. 활성화 코드
@@ -32,48 +33,50 @@
 
 ## 확정된 사용자 흐름
 
-### 1. 학기 초 roster 등록과 매 로그인 코드 발급
+### 1. 학기 초 roster와 학생별 전용 비밀번호 등록
 
-1. 관리자가 `student_key` roster를 준비하고 CLI의 개별 등록 또는 UTF-8 CSV import로
-   active enrollment를 만듭니다.
+1. 관리자가 `student_key,active,password` UTF-8 roster를 준비하고 CLI import로 active
+   enrollment와 초기 전용 비밀번호를 만듭니다. Active 행은 서로 다른 ASCII 숫자 6자리
+   비밀번호를 가져야 하고 inactive 행은 비웁니다.
 2. Git 호환 모드를 쓰는 경우에만 관리자가 GitHub login과 numeric user ID를 함께
    등록합니다.
-3. 학생이 로그인할 때마다 관리자는 active enrollment의 `student_key`로 **새** 1회용
-   활성화 코드를 발급합니다. 기본은 mode `0600` 전용 파일이고, 명시적으로 요청한
-   경우에만 stdout에 코드를 표시합니다. 학기 초에 한 코드를 장기 배포하거나 이전에
-   소비한 코드를 다시 안내하지 않습니다.
-4. 관리자는 매번 새로 발급한 코드를 인증된 LMS 등의 개별 채널로 해당 학생에게만
-   전달합니다. 공유 course key, 공용 문서, repository로 배포하지 않습니다.
-5. roster에 없거나 비활성인 사용자는 활성화 코드를 발급·사용할 수 없고
+3. 비밀번호 원문이 든 roster는 repository 밖 또는 ignore된 local path에 보관하고, 교수자만
+   읽을 수 있게 보호합니다. POSIX에서는 현재 사용자 소유의 mode `0600` regular file만
+   import합니다. Repository의 `pilot/roster.csv`는 합성 로컬 시험용이며 실제 학생에게
+   사용하지 않습니다.
+4. 관리자는 신원이 확인된 LMS 등의 개별 채널로 각 학생에게 자신의 비밀번호 하나만
+   전달합니다. 전체 roster, 공유 course key, 공용 문서 또는 repository로 배포하지 않습니다.
+5. 같은 roster 재-import는 기존 비밀번호를 변경하지 않습니다. 다른 값은 명시적
+   `--replace-passwords`가 있어야 일괄 교체하고, 개별 분실은 `student password-set`으로
+   처리합니다.
+6. roster에 없거나 비활성인 사용자는 수령 코드나 활성화 코드를 발급·사용할 수 없고
    수업·과제·제출 API에 접근할 수 없습니다.
 
 ### 2. VS Code 연결
 
-1. 학생이 Linux/macOS local 또는 Windows WSL filesystem의 전용 수업 폴더를 VS Code
-   workspace root로 열고 신뢰한 뒤 `Autograde: Sign In`을 실행합니다.
-2. Extension은 device authorization을 시작하고 짧은 `user_code`와 인증 URL을
-   표시합니다.
-3. 학생은 Sign In 화면에 표시된 service origin의 scheme, host와 port가 교수자가 안내한
-   값과 같은지 확인합니다. 다르면 활성화 코드를 입력하지 않고 중단합니다.
-4. 학생은 기본 브라우저의 `/activate`에서 Extension 연결 코드와
-   개별로 전달받은 학생 활성화 코드를 함께 입력합니다. 페이지에
-   표시된 device label과 VS Code 연결 코드가 자신의 요청과 같은지 확인합니다.
-5. 서비스는 두 코드의 course, 만료, 상태와 active enrollment를 확인하고
-   GET에서 서명 cookie로 묶은 authorization/course/user-code HMAC/CSRF와 POST를 다시
-   검증한 뒤 활성화 코드 소비와 device 승인을 원자적으로 처리합니다.
-6. Extension은 outbound polling으로 승인을 확인하고 access/refresh token을
-   발급받습니다. WSL에 callback port를 열지 않습니다.
-7. Extension은 token을 현재 Extension Host 메모리에만 둡니다. Service URL 설정은
+1. 학생은 교수자가 제시한 과제 QR을 휴대폰으로 열고 HTTPS service origin, 교과목과 과제를
+   확인합니다. 주소나 인증서가 안내와 다르면 비밀번호를 입력하지 않습니다.
+2. 학생은 웹 페이지에 자신의 학번과 Autograde 전용 비밀번호를 입력하고, 10분 동안 한 번만
+   사용할 수 있는 과제 수령 코드를 발급받습니다.
+3. Linux/macOS local 또는 Windows WSL filesystem의 전용 수업 폴더를 VS Code workspace
+   root로 열고 신뢰합니다. Autograde 사이드바에서 서버 주소를 확인한 뒤 **수령 코드 입력 및
+   다운로드**를 누르므로 Command Palette나 별도 callback port가 필요하지 않습니다.
+4. Extension은 임시 device authorization을 만들고 같은 service origin으로 수령 코드를
+   전송합니다. 서비스는 코드의 course·assignment·student·만료·1회용 상태와 pending device를
+   원자적으로 검증하고 승인합니다.
+5. Extension은 bounded polling으로 access/refresh token을 발급받고 수령한 과제 starter를
+   바로 다운로드합니다. 이 session은 수락한 과제에만 scope됩니다.
+6. Extension은 token을 현재 Extension Host 메모리에만 둡니다. Service URL 설정은
    machine scope로 유지되지만 access/refresh token과 audience는 SecretStorage, workspace,
    Git 설정, 환경변수와 로그에 저장하지 않습니다.
-8. VS Code 창 종료, `Developer: Reload Window`, Extension Host 재시작 또는 WSL 재연결
-   뒤에는 다시 Sign In하고 이번 로그인용 새 활성화 코드를 입력합니다.
-9. 자리를 떠나기 전 `Autograde: Sign Out`으로 server session을 폐기합니다. 비정상 종료로
+7. 다른 과제를 받을 때, 또는 VS Code 창 종료, `Developer: Reload Window`, Extension Host
+   재시작이나 WSL 재연결 뒤에는 해당 과제 페이지에서 새 수령 코드를 발급받습니다.
+8. 자리를 떠나기 전 `Autograde: Sign Out`으로 server session을 폐기합니다. 비정상 종료로
    명시적 폐기를 확인하지 못하면 server의 절대 만료 또는 다음 로그인 교체에 의존합니다.
 
-이 흐름은 [RFC 8628](https://datatracker.ietf.org/doc/html/rfc8628)을 참고한
-device-pairing profile입니다. 실제 endpoint와 오류 contract를 구현하기 전까지 RFC 8628
-완전 준수라고 표현하지 않습니다.
+교수자가 매 로그인마다 고엔트로피 활성화 코드를 별도 발급하고 학생이 `/activate`에 입력하는
+기존 `Autograde: Sign In` device-pairing은 호환 경로로 유지합니다. 권장 과제 수령 흐름은
+학생별 roster 비밀번호와 과제별 수령 코드를 사용합니다.
 
 ### 3. 매주 과제 배포
 
@@ -155,10 +158,10 @@ review와 audit UI로 사용할 수 있지만, mutable PR 번호나 merge 결과
 
 ### 인증과 수강 권한
 
-- `AUTH-01`: 기본 웹 인증은 active course enrollment에 결합된 학생별
-  high-entropy 1회용 활성화 코드를 사용합니다.
-- `AUTH-02`: 서비스는 활성화 credential에서 `student_key -> active enrollment`를
-  server-side로 해석하며 Extension이 보낸 학생 식별자를 신뢰하지 않습니다.
+- `AUTH-01`: 권장 웹 인증은 active course enrollment의 `student_key`와 학생별 Autograde
+  전용 비밀번호를 HTTPS 과제 페이지에서 확인하고, 과제별 10분·1회용 수령 코드를 발급합니다.
+- `AUTH-02`: 서비스는 비밀번호 확인 결과와 수령 코드에서 학생·교과목·과제를 server-side로
+  해석하며 Extension이 보낸 학생 식별자를 신뢰하지 않습니다.
 - `AUTH-03`: device user code는 1회용이며 기본 5분 후 만료됩니다.
 - `AUTH-04`: access token 기본 수명은 15분입니다.
 - `AUTH-05`: refresh token은 사용할 때마다 rotation하지만 session의 최초 발급 시각을 기준으로
@@ -182,33 +185,43 @@ review와 audit UI로 사용할 수 있지만, mutable PR 번호나 merge 결과
   보존 history와 family별 refresh rotation에는 원자적 hard cap을 적용합니다.
 - `AUTH-13`: 폐기·만료된 credential history는 retention 이후에만, submission 감사 참조가
   없는 경우에만 GC하며 학생 session 목록은 active 우선으로 bounded 반환합니다.
-- `AUTH-14`: 활성화 코드는 130-bit entropy를 갖고 기본 7일 후 만료합니다.
+- `AUTH-14`: 호환 로그인용 활성화 코드는 130-bit entropy를 갖고 기본 7일 후 만료합니다.
   enrollment당 미사용 코드는 하나만 허용하고 재발급 시 기존 코드를 폐기합니다. 각 Sign In은
   새 코드를 발급·전달·소비하는 단위이며 소비된 코드는 다음 로그인에 재사용하지 않습니다.
-- `AUTH-15`: 운영 CLI는 활성화 코드를 새 mode `0600` 파일에 덮어쓰기 없이
+- `AUTH-15`: 운영 CLI는 호환 활성화 코드를 새 mode `0600` 파일에 덮어쓰기 없이
   기록하거나, 운영자가 명시적으로 선택한 경우에만 stdout에 한 번 표시합니다.
   raw 코드는 SQLite, URL, log에 저장하지 않고 인증된 LMS 등의 개별 채널로 전달합니다.
-- `AUTH-16`: 활성화 코드 소비와 pending device 승인은 하나의 원자적
+- `AUTH-16`: 호환 활성화 코드 소비와 pending device 승인은 하나의 원자적
   transaction으로 처리합니다. 재사용·만료·타 course·오류 코드는 같은 안전한
   공개 오류로 거부하고, device별 기본 5회 실패 후 해당 device authorization을 거부합니다.
-- `AUTH-17`: Local CSV 파일럿의 로그인은 GitHub OAuth, GitHub App과 인증용 환경변수 없이
-  활성화 코드 및 browser/device flow만으로 동작해야 합니다. Git repository production
-  호환 인증은 이 workflow와 별도 범위입니다.
-- `AUTH-18`: `/activate` GET은 pending authorization ID, course, user-code HMAC, CSRF를
+- `AUTH-17`: Local CSV 파일럿의 권장 로그인은 GitHub OAuth, GitHub App과 인증용 환경변수 없이
+  roster 비밀번호, 과제 수령 코드 및 device flow만으로 동작해야 합니다. 호환 활성화 코드와
+  Git repository production 인증은 이 workflow와 별도 경로입니다.
+- `AUTH-18`: 호환 `/activate` GET은 pending authorization ID, course, user-code HMAC, CSRF를
   만료 있는 서명 `HttpOnly`/`SameSite` cookie로 묶고 device label을 표시합니다.
   POST는 cookie와 모든 binding을 다시 검증해야 하며 raw 활성화 secret은 POST
   body 외의 URL, query, cookie에 넣지 않습니다.
 - `AUTH-19`: Extension은 설정된 service URL만 machine scope로 지속하고 access/refresh token과
   audience는 메모리에서만 유지합니다. 시작할 때 구버전 SecretStorage credential을 삭제하며,
   window reload·Extension Host 종료·WSL 재연결 후에는 로그인 상태가 없어야 합니다.
-- `AUTH-20`: Extension은 browser를 열기 전에 verification URL의 origin이 설정된 service
+- `AUTH-20`: 호환 Sign In에서 Extension은 browser를 열기 전에 verification URL의 origin이 설정된 service
   origin과 정확히 일치하는지 검사하고 사용자에게 그 origin을 표시해야 합니다.
 - `AUTH-21`: `Autograde: Sign Out`은 server의 현재 session 폐기를 먼저 시도합니다. 통신 실패
   시 local memory만 지우는 선택은 server session이 절대 만료 또는 다음 로그인 교체까지
   남을 수 있음을 명시적으로 경고해야 합니다.
+- `AUTH-22`: 학생 비밀번호는 정확히 ASCII 숫자 6자리이며 `scrypt$v2`로만 SQLite에 저장하고,
+  원문은 보호된 roster 밖의 DB·URL·log·Dashboard·Extension 저장소에 남기지 않습니다.
+- `AUTH-23`: 비밀번호 실패는 계정 존재 여부와 관계없이 같은 공개 오류와 hash 경로를 사용하고,
+  enrollment별 5회 실패 시 5분 잠금 및 bounded hash concurrency를 적용합니다.
+- `AUTH-24`: 과제 수령 코드는 학생·교과목·과제와 pending device에 결합되고 기본 10분 후
+  만료되며, 한 번의 원자적 승인에서만 소비할 수 있습니다. 원문은 keyed digest로만 저장합니다.
+- `AUTH-25`: 비밀번호 기반 발급과 수령 코드 교환은 HTTPS에서만 허용하며 같은 장비의 loopback
+  HTTP만 개발 예외입니다. 신뢰 LAN HTTP opt-in은 이 흐름을 활성화하지 않습니다.
+- `AUTH-26`: 수령 코드로 만든 session은 수락한 과제에만 scope되어 다른 과제의 목록,
+  다운로드, 제출과 결과를 읽을 수 없습니다.
 
-위 token 수명은 현재 MVP CLI의 고정값이고 session admission/retention과 activation
-입력 실패 상한은 `serve` 옵션으로 조정할 수 있습니다. 활성화 코드 만료는
+위 token 수명은 현재 MVP CLI의 고정값이고 session admission/retention과 호환 activation
+입력 실패 상한은 `serve` 옵션으로 조정할 수 있습니다. 호환 활성화 코드 만료는
 발급 명령에서 30일 이내로 선택할 수 있습니다. 4시간은 sliding idle timeout이 아니라
 최초 session 발급 시각 기준 절대 상한이며 refresh가 갱신하지 않습니다.
 public client의

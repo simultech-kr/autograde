@@ -24,8 +24,10 @@ from .platform_auth import (
     PlatformAuthError,
     create_or_load_auth_secret,
     create_or_load_instructor_token,
+    hash_student_password,
     new_public_id,
     validate_student_password,
+    verify_student_password,
 )
 from .platform_bundle import BundleError, BundleStore
 from .platform_bundle_worker import (
@@ -65,6 +67,7 @@ from .platform_service import (
 )
 from .platform_state import (
     BundleAssignmentRelease,
+    CourseRosterImportEntry,
     OperatorSubmissionView,
     PlatformAssignment,
     PlatformConflict,
@@ -245,6 +248,14 @@ def build_parser() -> argparse.ArgumentParser:
         "import", help="validate and import a course roster CSV"
     )
     import_students.add_argument("csv_file", type=Path)
+    import_students.add_argument(
+        "--replace-passwords",
+        action="store_true",
+        help=(
+            "replace passwords that differ from existing credentials; without "
+            "this flag, mismatches fail safely"
+        ),
+    )
     list_students = student_commands.add_parser(
         "list", help="list enrolled students and aggregate status"
     )
@@ -653,41 +664,67 @@ def _read_roster_csv(
     path: Path,
     *,
     state: PlatformStateStore,
+    course_key: str,
+    replace_passwords: bool = False,
 ) -> list[dict[str, Any]]:
     """Parse and validate every roster row before the first database write."""
 
     source = path.expanduser().absolute()
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
     try:
-        info = source.lstat()
+        descriptor = os.open(source, flags)
     except OSError as exc:
         raise ValueError("roster CSV is unavailable") from exc
-    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
-        raise ValueError("roster CSV must be one regular file")
-    if info.st_size > 4 * 1024 * 1024:
-        raise ValueError("roster CSV exceeds the 4 MiB limit")
     try:
-        with source.open("r", encoding="utf-8-sig", newline="") as stream:
-            reader = csv.DictReader(stream, skipinitialspace=True)
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+            raise ValueError("roster CSV must be one regular file")
+        if info.st_size > 4 * 1024 * 1024:
+            raise ValueError("roster CSV exceeds the 4 MiB limit")
+        with os.fdopen(
+            descriptor, "r", encoding="utf-8-sig", newline=""
+        ) as stream:
+            descriptor = -1
+            reader = csv.DictReader(stream, skipinitialspace=False)
             fields = reader.fieldnames
             if fields is None:
                 raise ValueError("roster CSV must include a header")
             if len(fields) != len(set(fields)):
                 raise ValueError("roster CSV has duplicate columns")
-            allowed = {"student_key", "github_user_id", "github_login", "active"}
+            allowed = {
+                "student_key",
+                "github_user_id",
+                "github_login",
+                "active",
+                "password",
+            }
             if "student_key" not in fields or set(fields) - allowed:
                 raise ValueError(
                     "roster CSV columns must be student_key and optional "
-                    "github_user_id, github_login, active"
+                    "github_user_id, github_login, active, password"
                 )
             if ("github_user_id" in fields) != ("github_login" in fields):
                 raise ValueError(
                     "roster CSV must include both GitHub columns or neither"
+                )
+            has_password_column = "password" in fields
+            if has_password_column and os.name == "posix" and (
+                info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o600
+            ):
+                raise ValueError(
+                    "roster CSV containing passwords must be owned by the current "
+                    "user and mode 0600"
                 )
             raw_rows = list(reader)
     except UnicodeError as exc:
         raise ValueError("roster CSV must be UTF-8") from exc
     except csv.Error as exc:
         raise ValueError("roster CSV is malformed") from exc
+    except OSError as exc:
+        raise ValueError("cannot read roster CSV") from exc
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
     if not raw_rows:
         raise ValueError("roster CSV must contain at least one student")
     if len(raw_rows) > 10_000:
@@ -696,6 +733,7 @@ def _read_roster_csv(
     parsed: list[dict[str, Any]] = []
     seen_keys: set[str] = set()
     seen_github_ids: set[int] = set()
+    seen_passwords: set[str] = set()
     for line_number, row in enumerate(raw_rows, start=2):
         if None in row:
             raise ValueError(f"roster CSV row {line_number} has extra fields")
@@ -741,6 +779,32 @@ def _read_roster_csv(
         else:
             raise ValueError(f"roster CSV row {line_number} has invalid active")
 
+        password: str | None = None
+        if has_password_column:
+            raw_password = row.get("password") or ""
+            if active and not raw_password:
+                raise ValueError(
+                    f"roster CSV row {line_number} has no password for an active "
+                    "enrollment"
+                )
+            if not active and raw_password:
+                raise ValueError(
+                    f"roster CSV row {line_number} must leave password blank for an "
+                    "inactive enrollment"
+                )
+            if raw_password:
+                try:
+                    password = validate_student_password(raw_password)
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(
+                        f"roster CSV row {line_number} has invalid password: {exc}"
+                    ) from None
+                if password in seen_passwords:
+                    raise ValueError(
+                        f"roster CSV row {line_number} duplicates another password"
+                    )
+                seen_passwords.add(password)
+
         expected_subject = (
             f"github:{github_user_id}"
             if github_user_id is not None
@@ -778,12 +842,40 @@ def _read_roster_csv(
                 raise PlatformConflict(
                     f"roster CSV row {line_number} conflicts with an existing student"
                 )
+        password_action: str | None = None
+        current_password = None
+        if active and password is not None:
+            if existing is not None:
+                current_password = state.find_student_password_credential(
+                    student_key=student_key,
+                    course_key=course_key,
+                )
+            if current_password is None:
+                password_action = "set"
+            elif current_password.password_hash.startswith(
+                "scrypt$v2$"
+            ) and verify_student_password(password, current_password.password_hash):
+                password_action = "unchanged"
+            elif replace_passwords:
+                password_action = "replace"
+            else:
+                raise PlatformConflict(
+                    f"roster CSV row {line_number} password differs from the "
+                    "existing credential; pass --replace-passwords to replace it"
+                )
         parsed.append(
             {
                 "student_key": student_key,
                 "github_user_id": github_user_id,
                 "github_login": github_login,
                 "active": active,
+                "password": password,
+                "password_action": password_action,
+                "expected_password_hash": (
+                    current_password.password_hash
+                    if active and password is not None and current_password is not None
+                    else None
+                ),
             }
         )
     return parsed
@@ -871,21 +963,48 @@ def _dispatch(
             password=_read_student_password(args.password_file),
         )
     if args.command == "student" and args.student_command == "import":
-        rows = _read_roster_csv(args.csv_file, state=state)
-        imported = []
+        rows = _read_roster_csv(
+            args.csv_file,
+            state=state,
+            course_key=course_key,
+            replace_passwords=args.replace_passwords,
+        )
+        entries = []
         for row in rows:
-            student = _ensure_roster_student(
-                state,
-                student_key=row["student_key"],
-                github_user_id=row["github_user_id"],
-                github_login=row["github_login"],
+            github_user_id = row["github_user_id"]
+            identity_kind = (
+                StudentIdentityKind.GITHUB
+                if github_user_id is not None
+                else StudentIdentityKind.LOCAL
             )
-            enrollment = state.upsert_enrollment(
-                student_id=student.id,
-                course_key=course_key,
-                active=row["active"],
+            password = row["password"]
+            new_password_hash = (
+                hash_student_password(password)
+                if row["password_action"] in {"set", "replace"}
+                and password is not None
+                else None
             )
-            imported.append((student, enrollment))
+            entries.append(
+                CourseRosterImportEntry(
+                    student_key=row["student_key"],
+                    auth_subject=(
+                        f"github:{github_user_id}"
+                        if github_user_id is not None
+                        else f"local:{row['student_key']}"
+                    ),
+                    identity_kind=identity_kind,
+                    github_user_id=github_user_id,
+                    github_login=row["github_login"],
+                    active=row["active"],
+                    password_managed=(row["password_action"] is not None),
+                    expected_password_hash=row["expected_password_hash"],
+                    new_password_hash=new_password_hash,
+                )
+            )
+        imported = state.import_course_roster(
+            course_key=course_key,
+            entries=entries,
+        )
         return {
             "course_key": course_key,
             "count": len(imported),
@@ -897,10 +1016,7 @@ def _dispatch(
                 student.identity_kind == StudentIdentityKind.GITHUB
                 for student, _ in imported
             ),
-            # PlatformStateStore currently exposes single-student transactions.
-            # The CLI validates the complete CSV first, but reports this
-            # limitation instead of claiming all-or-nothing persistence.
-            "atomic": False,
+            "atomic": True,
             "validation": "all_rows_before_apply",
         }
     if args.command == "assignment":
@@ -2158,7 +2274,7 @@ def _course_key(args: argparse.Namespace, parser: argparse.ArgumentParser) -> st
 
 
 def _read_student_password(path: Optional[Path]) -> str:
-    """Read a password without accepting it in argv or roster CSV."""
+    """Read a password without accepting it in command-line arguments."""
 
     if path is None:
         password = getpass.getpass("Autograde 전용 비밀번호(숫자 6자리): ")

@@ -66,6 +66,7 @@ Java 수동 제출 시험은 JDK를 설치한 뒤 진행해야 합니다. 경로
 
 ```bash
 .venv/bin/autograde-platform --pilot-config pilot/course.csv init
+chmod 600 pilot/roster.csv
 .venv/bin/autograde-platform --pilot-config pilot/course.csv student import pilot/roster.csv
 ```
 

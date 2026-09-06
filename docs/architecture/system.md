@@ -52,9 +52,12 @@ duplicate, type, URL, bind와 runtime 조합을 검증해야 합니다. Network 
 `disabled`이고 이때 HTTP는 loopback에만 bind합니다.
 
 Roster는 별도 UTF-8 CSV입니다. 파일럿의 필수 identity는 `student_key`이며 `active`가 course
-API admission을 결정합니다. Config에는 학생 레코드를 넣지 않고 roster에는 server token,
-dashboard credential이나 채점 설정을 넣지 않습니다. CSV는 설정의 source이며 SQLite는 실행
-중 인증·제출 원장입니다.
+API admission을 결정하고 `password`가 초기 학생별 ASCII 숫자 6자리 credential을 제공합니다.
+CLI는 전체 파일을 검증한 뒤 password를 hash해 SQLite에 넣고 원문을 출력하지 않습니다.
+Config에는 학생 레코드를 넣지 않고 roster에는 server token, dashboard credential이나 채점
+설정을 넣지 않습니다. 비밀번호 원문 때문에 roster 전체는 교수자 전용 credential이며 실제
+학생 파일은 repository 밖 또는 ignore된 local path에 둡니다. CSV는 설정의 source이며
+SQLite는 실행 중 인증·제출 원장입니다.
 
 ## Bundle과 상태 일관성
 

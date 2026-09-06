@@ -261,6 +261,19 @@ def test_device_pairing_pending_slowdown_and_one_time_exchange(platform) -> None
     assert replay.value.code == "invalid_grant"
 
 
+def test_service_refuses_password_for_inactive_enrollment(platform) -> None:
+    state, service, clock, _notifications, student = platform
+    state.upsert_enrollment(
+        student_id=student.id,
+        course_key=COURSE,
+        active=False,
+        at=clock.value + timedelta(seconds=1),
+    )
+
+    with pytest.raises(PlatformAccessDenied, match="active course enrollment"):
+        service.set_student_password(student_key=student.student_key, password="482731")
+
+
 def test_assignment_claim_atomically_approves_one_device_and_scopes_its_tokens(
     platform,
 ) -> None:

@@ -11,6 +11,8 @@
 
 - 학생이 입력하는 비밀번호는 학교 포털 비밀번호가 아니라 **ASCII 숫자 6자리 Autograde 전용
   비밀번호**다.
+- 교수자는 학생별로 서로 다른 비밀번호를 보호된 roster에 두고, 각 학생에게 자신의 값만
+  본인 확인된 개별 채널로 전달한다.
 - QR과 학생 브라우저, VS Code가 사용하는 공개 주소는 동일한 HTTPS origin이다.
 - QR에는 공개 과제 URL만 넣고 학생 식별자, 비밀번호, 수령 코드를 넣지 않는다.
 - 수령 코드는 과제·교과목·학생에 결합되고 10분 후 만료되며 한 번만 사용할 수 있다.
@@ -26,7 +28,7 @@
 ## 사용자 흐름
 
 ```text
-교수자: roster 등록 → 전용 비밀번호 설정 → 과제 공개 → Dashboard의 QR 제시
+교수자: 전용 비밀번호 포함 roster 등록 → 개별 전달 → 과제 공개 → Dashboard의 QR 제시
                                                         │
 학생 휴대폰: QR → HTTPS 페이지 → 학번 + 전용 비밀번호 → 10분짜리 수령 코드
                                                         │
@@ -79,22 +81,40 @@ Rate limit을 실제로 적용하지 않았거나 TLS 인증서 경고가 뜨면
 
 ## 2. 교과목과 학생 준비
 
-설치 후 모든 명령에서 같은 CSV를 지정합니다.
+설치 후 모든 명령에서 같은 config CSV를 지정합니다. Repository에 추적된
+`pilot/roster.csv`의 ID와 비밀번호는 로컬 자동 시험용 합성 값이므로 외부 파일럿이나 실제
+학생에게 사용하지 않습니다. 실제 roster는 repository 밖 또는 ignore된 local path에 처음부터
+새로 만들고 교수자만 읽을 수 있게 보호합니다. 공개된 합성 비밀번호를 실수로 살려 둔 채
+외부 계정을 열 수 있으므로 추적된 sample roster를 복사해 시작하지 않습니다. 편집기에서
+`pilot/roster.local`을 새 파일로 만들고 실제 학번과 새 무작위 비밀번호만 입력한 다음 실행합니다.
 
 ```bash
+chmod 600 pilot/roster.local
 .venv/bin/autograde-platform --pilot-config pilot/course.https.local init
-.venv/bin/autograde-platform --pilot-config pilot/course.https.local student import pilot/roster.csv
+.venv/bin/autograde-platform --pilot-config pilot/course.https.local student import pilot/roster.local
 ```
 
-학생별로 `000000`부터 `999999`까지의 ASCII 숫자 6자리 Autograde 전용 비밀번호를 등록합니다.
-순차 번호, 학번 일부와 생일은 피하고 무작위 값을 학생별 인증 채널로 개별 전달합니다. 명령행
-인자나 roster CSV로 비밀번호를 받지 않으며 화면에 두 번 입력합니다.
+Roster schema는 `student_key,active,password`입니다. Active 학생은 각각 서로 다른
+`000000`부터 `999999`까지의 ASCII 숫자 6자리 Autograde 전용 비밀번호를 가져야 하고,
+inactive 학생의 `password`는 비워야 합니다. 순차 번호, 학번 일부와 생일은 피합니다. 비밀번호
+원문이 든 roster 전체는 교수자 전용 credential이므로 학생에게 보내거나 terminal/log에
+출력하지 않습니다. 신원을 확인한 개별 채널로 각 학생에게 자신의 비밀번호 하나만 전달합니다.
+POSIX에서는 현재 교수자가 소유한 mode `0600` regular file만 import할 수 있고, Windows에서도
+공유 폴더를 피하고 교수자 계정만 읽도록 ACL을 제한합니다. WSL2에서 서버를 실행하면 roster도
+`/mnt/c`가 아닌 WSL Linux filesystem에 두고 `chmod 600`을 적용합니다.
+
+같은 roster를 다시 import하면 일치하는 비밀번호는 no-op입니다. 기존 DB의 credential과 다른
+값이 하나라도 있으면 기본 import는 적용 전에 실패합니다. 전체 일괄 회전을 의도하고 파일을
+재검토했을 때만 다음과 같이 `--replace-passwords`를 추가합니다. 교체된 학생의 기존 수령 코드와
+로그인 credential은 폐기됩니다.
 
 ```bash
-.venv/bin/autograde-platform --pilot-config pilot/course.https.local student password-set s001
+.venv/bin/autograde-platform --pilot-config pilot/course.https.local \
+  student import pilot/roster.local --replace-passwords
 ```
 
-비밀번호를 다시 설정하면 기존 수령 코드와 로그인 credential이 폐기됩니다. 학생 identity나
+한 학생의 분실 대응에는 `student password-set s001`을 사용합니다. 비밀번호를 다시 설정하면
+기존 수령 코드와 로그인 credential이 폐기됩니다. 학생 identity나
 수강 상태를 비활성화하면 비밀번호 hash도 삭제되므로 재활성화 뒤 새 비밀번호를 설정해야
 합니다. 초기 비밀번호 전달과 분실 복구는 신원이 확인된 별도 채널로 수행합니다. 학교 포털과
 같은 비밀번호를 재사용하도록 안내하지 않습니다. 이전 15자 passphrase의 `scrypt$v1` hash는
@@ -223,7 +243,9 @@ shasum -a 256 -c SHA256SUMS
 - HTTPS 인증서 경고, HTTP downgrade 또는 공개 주소와 다른 origin
 - 학교 포털 비밀번호를 입력하라는 문구나 운영 절차
 - 서로 다른 교과목·학생·과제 사이의 코드 또는 결과 접근
-- 비밀번호/수령 코드/token이 URL, CSV, log, Dashboard나 Extension 저장소에 남음
+- 비밀번호/수령 코드/token이 URL, log, Dashboard나 Extension 저장소에 남거나, 의도된
+  교수자 전용 roster 밖의 CSV에 기록됨
+- 실제 roster가 repository에 commit되거나 roster 전체가 학생에게 공유됨
 - 25명 시험에서 서버 중단, 제출 유실 또는 SQLite 일관성 오류
 - 검토되지 않은 학생 코드를 `pilot-local`로 실행하려는 경우
 

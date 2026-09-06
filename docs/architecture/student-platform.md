@@ -13,11 +13,14 @@
 ```text
 pilot config CSV + roster CSV ──> 교수자 CLI ── starter + assessment/data 등록 ──┐
                                                v
-학생 브라우저 ─ 매 로그인 새 코드 ─> Autograde API ─> SQLite + immutable bundle CAS
-                             ^   │                  │
-                             │   │ 최신 1-session   │ accepted receipt
-                             │   v                  v
-                   VS Code Extension ─ 제출 ─> 4-worker grading queue
+과제 QR ─> 학생 브라우저 ─ 학번 + 전용 비밀번호 ─> 10분·1회용 과제 수령 코드
+                                                    │
+                                                    v
+                   VS Code Extension ─ 코드 교환 ─> Autograde API ─> SQLite + bundle CAS
+                             │                      │
+                             │ 제출                 │ accepted receipt
+                             v                      v
+                                      4-worker grading queue
                    URL만 지속/token은 메모리 전용
                    Linux / macOS / WSL2                 │
                                                        v
@@ -151,9 +154,28 @@ WSL의 clone/push에는 학생의 SSH key, Git Credential Manager 또는 `gh` cr
 사용합니다. 이 credential은 Autograde access/refresh token과 backend GitHub App
 credential 어느 쪽으로도 교환하거나 복사하지 않습니다.
 
-## 웹 활성화와 device authorization
+## 과제 수령과 device authorization
 
-### 흐름
+### 권장 비밀번호·과제 수령 흐름
+
+```text
+교수자 Dashboard QR ─> Browser /assignment-claim/{assignment_id}
+                                  │ 학번 + 학생별 전용 비밀번호
+                                  v
+                         10분·1회용 수령 코드
+                                  │
+Extension ─ pending device 생성 ─┼─ 수령 코드 교환 ─> 원자적 device 승인
+                                  │
+                                  └───────────────> 과제-scoped token + starter 다운로드
+```
+
+Roster import는 학생별 6자리 비밀번호를 `scrypt$v2` hash로 저장합니다. 과제 페이지는 HTTPS
+또는 같은 장비의 loopback HTTP에서만 비밀번호를 받고, 계정 존재 여부와 무관한 공개 오류,
+enrollment별 실패 잠금과 bounded hash concurrency를 적용합니다. 발급한 수령 코드는
+학생·교과목·과제에 결합되고 keyed digest만 저장되며, Extension의 pending device와 함께 한
+transaction에서 한 번만 소비됩니다. 이 session은 수락한 과제에만 scope됩니다.
+
+### 호환 활성화 흐름
 
 ```text
 Operator                  Auth API              LMS/안전한 개별 채널
@@ -207,7 +229,7 @@ installation token을 회전하고 `GIT_ASKPASS`로 Git subprocess에만 전달�
 startup preflight는 App API의 numeric repository identity와 실제 allowed tree를 함께
 검증합니다.
 
-기본 활성화 코드와 device authorization 상태는 각각 다음과 같습니다.
+호환 활성화 코드와 device authorization 상태는 각각 다음과 같습니다.
 
 ```text
 activation: issued -> consumed
@@ -240,6 +262,7 @@ port를 열지 않습니다. token endpoint는 `authorization_pending`, `slow_do
   hard cap; session 목록은 active 우선 최신 50개
 - 폐기/만료 후 retention이 지난 unreferenced credential만 GC하며 submission audit FK는 보존
 - device user code: 기본 5분, 1회 사용
+- 과제 수령 코드: 기본 10분, 학생·교과목·과제 결합, keyed digest 저장, 1회 사용
 - 학생 활성화 코드: 기본 7일, 130-bit, enrollment별 미사용 1개,
   device별 기본 5회 입력 실패 상한
 - Extension token 저장: 없음. Access/refresh token과 audience는 Extension Host 메모리 전용;
@@ -260,10 +283,11 @@ repository assignment, device session 상태를 확인하여 수강 취소·차�
 
 파일럿의 기본 `http://127.0.0.1`/`localhost`는 신뢰된 동일 장비에서만 허용합니다.
 Loopback이라는 사실만으로 같은 OS profile의 다른 process를 인증하지는 않습니다. 같은 신뢰
-LAN에서 합성·사전 검토 코드의 기능만 잠깐 시험하는 경우에는 별도 config의
+LAN에서 합성·사전 검토 코드의 호환 로그인 기능만 잠깐 시험하는 경우에는 별도 config의
 `external_access_mode=insecure-http`, 일치하는 실제 RFC 1918 public/listen 주소와 Extension의
 `autograde.allowInsecureHttpPilot=true`를 모두 요구합니다. 이 mode는 매 로그인 전에 cleartext
 위험을 다시 확인하며 인터넷, 공용·개방 LAN, `0.0.0.0`과 port forwarding을 거부합니다.
+이 opt-in도 비밀번호 기반 과제 수령은 활성화하지 않습니다.
 [신뢰 LAN 외부 접속 파일럿](../operations/trusted-lan-pilot.md)을 따르지 않고 주소만 바꾸는
 구성은 허용하지 않습니다. 중앙 classroom server와 실제 운영은 HTTPS와 격리된 worker를
 사용하는 배포 검토 대상입니다.

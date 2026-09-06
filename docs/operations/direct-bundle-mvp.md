@@ -69,23 +69,33 @@ Config CSV에는 token, 활성화 코드 또는 학생 개인정보를 넣지 �
 
 ## 3. Roster CSV 준비
 
-Roster는 config와 별도인 UTF-8 CSV입니다. Direct-bundle 파일럿에 필요한 열은 다음 두 개뿐입니다.
+Roster는 config와 별도인 UTF-8 CSV입니다. 학생별 초기 전용 비밀번호까지 함께 등록하는
+파일럿 schema는 다음과 같습니다.
 
 ```csv
-student_key,active
-s001,true
-s002,true
-s003,true
+student_key,active,password
+s001,true,042731
+s002,true,816504
+s003,false,
 ```
 
 - `student_key`: 학교가 이미 검증한 수강생 식별자. 빈 값과 중복은 허용하지 않습니다.
 - `active`: `true` 또는 `false`. 비활성 학생은 로그인·다운로드·제출할 수 없습니다.
+- `password`: active 학생마다 필수인 서로 다른 ASCII 숫자 6자리. Inactive 행은 비웁니다.
 
-Repository의 `pilot/roster.csv`에는 위 schema로 `s001`부터 `s020`까지 20명이 들어 있습니다.
-파일럿에는 이름, 이메일, GitHub ID, 점수 같은 열을 추가하지 않습니다. GitHub 호환 모드를
-별도로 시험할 때만 `github_user_id`와 `github_login`을 한 쌍으로 추가합니다. Import는 전체
-파일을 먼저 검증하지만 현재 상태 저장은 학생별 transaction이므로 결과의 처리 건수를 확인하고,
-중단되었으면 같은 CSV를 멱등하게 다시 실행합니다.
+Repository의 `pilot/roster.csv`에는 위 schema로 `s001`부터 `s020`까지 20명과 로컬 자동
+시험용 합성 비밀번호가 들어 있습니다. 이 값은 외부 파일럿이나 실제 학생에게 사용하지 않습니다.
+실제 roster는 repository 밖 또는 ignore된 local path에 만들고 교수자만 읽을 수 있게
+보호합니다. POSIX에서는 현재 교수자가 소유한 mode `0600` regular file이어야 하고,
+Windows에서도 공유 폴더를 피하고 교수자 계정만 읽도록 ACL을 제한합니다.
+
+비밀번호 원문이 든 roster 전체를 학생에게 보내거나 terminal/log에 출력하지 않습니다. 신원을
+확인한 개별 채널로 각 학생에게 자신의 비밀번호 하나만 전달합니다. 파일럿에는 이름, 이메일,
+점수 같은 열을 추가하지 않습니다. GitHub 호환 모드를 별도로 시험할 때만
+`github_user_id`와 `github_login`을 한 쌍으로 추가합니다. Import는 전체 파일과 기존 credential
+상태를 먼저 검증한 뒤 학생·수강·비밀번호 변경을 하나의 database transaction으로 반영합니다.
+도중 오류나 동시 credential 변경은 전체 import를 rollback합니다. 동일 비밀번호는 no-op이고,
+기존 credential과 다른 값은 `--replace-passwords` 없이 적용 전에 거부됩니다.
 
 ## 4. 초기화와 roster 반영
 
@@ -94,8 +104,14 @@ Repository의 `pilot/roster.csv`에는 위 schema로 `s001`부터 `s020`까지 2
 
 ```bash
 .venv/bin/autograde-platform --pilot-config pilot/course.csv init
+chmod 600 pilot/roster.csv
 .venv/bin/autograde-platform --pilot-config pilot/course.csv student import pilot/roster.csv
 ```
+
+실제 학생 파일은 위 예제 경로 대신 보호된 local roster 경로를 지정합니다. 검토한 일괄
+비밀번호 회전에만 `student import ROSTER --replace-passwords`를 사용합니다. 한 학생의 분실
+대응은 대화형 `student password-set STUDENT_KEY`로 처리합니다. 비밀번호 교체는 해당 학생의
+기존 수령 코드와 로그인 credential을 폐기합니다.
 
 성공 JSON에서 course와 data root, roster 처리 건수를 확인합니다. `init`이 만든 다음 파일은
 학생에게 보내거나 repository에 commit하지 않습니다.

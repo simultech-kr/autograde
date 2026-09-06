@@ -10,13 +10,14 @@ Windows는 WSL2 workspace를 사용합니다.
 
 - pilot config CSV: course, data directory, service URL/listen/port, network 접근 mode,
   채점 방식과 worker 수
-- roster CSV: `student_key`와 수강 활성 상태
+- roster CSV: `student_key`, 수강 활성 상태와 학생별 숫자 6자리 전용 비밀번호
 
 권장 학생 인증은 active roster와 교과목별 **Autograde 전용 비밀번호**에 기반합니다. 학생은
 교수자가 제시한 과제 QR의 HTTPS 페이지에서 학번과 숫자 6자리 전용 비밀번호를 확인한 뒤,
-10분 동안 한 번만 쓸 수 있는 과제 수령 코드를 VS Code에 입력합니다. QR에는 공개 URL만 들어가며
-비밀번호와 수령 코드는 URL·CSV·log에 넣지 않습니다. 학교 포털 비밀번호를 이 서비스에
-입력해서는 안 됩니다.
+10분 동안 한 번만 쓸 수 있는 과제 수령 코드를 VS Code에 입력합니다. QR에는 공개 URL만 들어갑니다.
+파일럿 roster의 `password` 열만 초기 비밀번호 원문을 담는 의도된 예외이며, URL·log·명령
+출력에는 비밀번호나 수령 코드를 남기지 않습니다. 학교 포털 비밀번호를 이 서비스에 입력해서는
+안 됩니다.
 
 VS Code에는 서비스 주소만 유지하고 access/refresh token은 Extension Host 메모리에만 둡니다.
 따라서 창 종료, `Developer: Reload Window`, WSL 재연결 뒤에는 새 수령 코드로 다시 연결해야
@@ -33,7 +34,7 @@ VS Code에는 서비스 주소만 유지하고 access/refresh token은 Extension
 ## 파일럿 범위
 
 - local pilot config CSV 한 파일로 모든 운영 명령의 설정을 고정
-- UTF-8 roster CSV 사전 검증 및 `student_key` 수강 등록
+- 보호된 UTF-8 roster CSV 사전 검증 및 학생별 6자리 비밀번호와 `student_key` 수강 등록
 - 교과목별/학생별 집계 조회와 학생별 전용 비밀번호 설정·재설정
 - GitHub 없는 starter bundle 다운로드와 direct submission
 - 비밀 없는 과제 QR, 비밀번호 확인과 10분·1회용 과제 수령 코드
@@ -72,7 +73,10 @@ python3 -m venv .venv
 
 환경변수 대신 운영자가 만든 config CSV를 모든 명령에 명시합니다. Repository에는
 [`pilot/course.csv`](pilot/course.csv)와 20명
-[`pilot/roster.csv`](pilot/roster.csv)가 바로 실행 가능한 예제로 포함됩니다. 상대
+[`pilot/roster.csv`](pilot/roster.csv)가 바로 실행 가능한 예제로 포함됩니다. 이 파일의 학번과
+비밀번호는 로컬 자동 시험만을 위한 합성 값이므로 외부 파일럿이나 실제 학생에게 사용하지
+않습니다. 실제 roster는 repository 밖 또는 ignore된 local path에 두고 교수자만 읽을 수 있게
+보호합니다. 상대
 `data_root`는 config 파일 디렉터리의 전용 하위 경로여야 하므로 `.data`는
 `pilot/.data`가 됩니다. 전체 절차는
 [local CSV 파일럿 실행 가이드](docs/operations/direct-bundle-mvp.md)에 있습니다.
@@ -98,17 +102,22 @@ bundle_worker_count,4
 Roster는 별도 파일입니다.
 
 ```csv
-student_key,active
-s001,true
-s002,true
+student_key,active,password
+s001,true,042731
+s002,false,
 ```
+
+`password`는 active 학생마다 서로 다른 ASCII 숫자 6자리여야 하고, inactive 행은 비워야
+합니다. 비밀번호 원문이 들어 있는 roster 전체를 학생에게 배포하지 말고, 신원을 확인한 개별
+채널로 각 학생에게 자신의 비밀번호 하나만 전달합니다. POSIX에서는 파일 소유자가 현재
+교수자이고 mode가 정확히 `0600`이어야 import할 수 있습니다.
 
 명령 구조는 다음과 같습니다. 옵션의 최종 형태는 설치된 CLI의 `--help`를 기준으로 합니다.
 
 ```bash
 .venv/bin/autograde-platform --pilot-config pilot/course.csv init
+chmod 600 pilot/roster.csv
 .venv/bin/autograde-platform --pilot-config pilot/course.csv student import pilot/roster.csv
-.venv/bin/autograde-platform --pilot-config pilot/course.csv student password-set s001
 
 .venv/bin/autograde-platform --pilot-config pilot/course.csv assignment bundle-add lab01 \
   --release-id lab01-v1 \
@@ -124,6 +133,11 @@ chmod 700 pilot/activation-codes
   --output pilot/activation-codes/s001-login-01.txt
 .venv/bin/autograde-platform --pilot-config pilot/course.csv serve
 ```
+
+같은 roster를 다시 import하면 동일한 비밀번호는 변경하지 않습니다. 기존 DB와 CSV의 비밀번호가
+다르면 기본적으로 안전하게 실패하며, 의도적으로 전체 변경을 검토한 경우에만 import 명령에
+`--replace-passwords`를 추가합니다. 개별 분실 대응은 `student password-set STUDENT_KEY`를
+사용합니다.
 
 외부 HTTPS 파일럿의 각 학생은 다음 사용자 흐름만 수행합니다.
 

@@ -118,8 +118,15 @@ network를 허용하지 않습니다. Router의 port forwarding 또는 DMZ 기�
 
 ```bash
 .venv/bin/autograde-platform --pilot-config pilot/course.lan.local init
+chmod 600 pilot/roster.csv
 .venv/bin/autograde-platform --pilot-config pilot/course.lan.local student import pilot/roster.csv
 ```
+
+추적된 `pilot/roster.csv`는 합성 로컬 시험 계정만 담습니다. LAN 파일럿에 실제 학생을 참여시킬
+때는 이 파일을 사용하지 말고 repository 밖 또는 ignore된 local path에 별도 roster를 만들고
+동일하게 보호합니다. 이 `insecure-http` profile에서는 비밀번호 기반 과제 수령이 비활성화되므로
+학생에게 roster 비밀번호를 전달하거나 입력하게 하지 않고, 아래의 호환 활성화 코드만 개별
+전달합니다.
 
 두 명령이 config 오류 없이 성공하면 LAN opt-in, 주소와 port 조합의 설정 검증을 통과한
 것입니다. `init`과 roster import 출력에서 다음을 확인합니다.

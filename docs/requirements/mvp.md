@@ -10,7 +10,8 @@ reverse proxy를 사용합니다. 별도 신뢰 LAN HTTP profile은 비밀번호
 
 ## 전제
 
-- 학생의 학교 식별자인 `student_key`와 수강 활성 상태가 local roster CSV에 있습니다.
+- 학생의 학교 식별자인 `student_key`, 수강 활성 상태와 초기 숫자 6자리 전용 비밀번호가
+  local roster CSV에 있습니다.
 - 학교 계정과 분리한 ASCII 숫자 6자리 Autograde 전용 비밀번호를 교과목 enrollment에
   설정합니다.
 - 학교 SSO, GitHub 계정/OAuth/App, 학생별 repository는 사용하지 않습니다.
@@ -34,7 +35,10 @@ reverse proxy를 사용합니다. 별도 신뢰 LAN HTTP profile은 비밀번호
 2. 모든 instructor CLI 명령은 같은 config 파일을 명시적으로 선택할 수 있어야 합니다.
 3. Config는 알 수 없는 key, 중복 key, 빈 필수 값, 잘못된 URL/port/runtime을 상태 변경 전에
    거부해야 합니다.
-4. UTF-8 roster CSV를 전체 검증한 뒤 active course enrollment로 반영합니다.
+4. UTF-8 roster CSV를 전체 검증한 뒤 active course enrollment와 학생별 전용 비밀번호로
+   반영합니다. `password` 열이 있으면 active 행은 서로 다른 ASCII 숫자 6자리를 반드시
+   가지고 inactive 행은 비워야 합니다. POSIX에서는 현재 사용자 소유의 정확한 mode `0600`
+   regular file만 비밀번호 포함 roster로 허용합니다.
 5. 권장 학생 인증은 roster의 `student_key`, 교과목별 Autograde 전용 비밀번호와 과제별
    10분·1회용 수령 코드에 결합합니다. 기존 활성화 코드는 호환 login 경로입니다.
 6. Course-wide immutable release에 starter, assessment와 선택적 data digest를 고정합니다.
@@ -55,8 +59,10 @@ reverse proxy를 사용합니다. 별도 신뢰 LAN HTTP profile은 비밀번호
     수동으로 확인합니다.
 15. VS Code 창 종료, Window Reload 또는 WSL 재연결 후에는 이전 credential을 복구하지 않고
     새 수령 코드 또는 호환 `Autograde: Sign In`을 다시 요구해야 합니다.
-16. 교수자는 **로그인 시도마다** 새 학생 활성화 코드를 발급해야 하며, 승인에 사용한 코드는
-    소비되어 같은 학생의 다음 로그인에 재사용할 수 없어야 합니다.
+16. 호환 `Autograde: Sign In` 경로를 사용할 때에만 교수자는 **로그인 시도마다** 새 학생
+    활성화 코드를 발급해야 하며, 승인에 사용한 코드는 소비되어 같은 학생의 다음 로그인에
+    재사용할 수 없어야 합니다. 권장 경로에서는 학생이 HTTPS 과제 페이지에서 새 수령 코드를
+    직접 발급받습니다.
 17. 학생별 최신 로그인만 active session으로 남기고 이전 session은 새 로그인 token을
     발급하는 transaction에서 폐기해야 합니다. Session 절대 수명은 4시간을 넘지 않아야 합니다.
 18. 학생은 자리를 떠나기 전에 `Autograde: Sign Out`으로 server session까지 명시적으로
@@ -73,10 +79,13 @@ reverse proxy를 사용합니다. 별도 신뢰 LAN HTTP profile은 비밀번호
     `/healthz` 확인은 token 없이 수행할 수 있습니다.
 22. `insecure-http`에서 `/instructor`와 instructor API는 인증 prompt 대신 `404`로
     비활성화되어 Basic credential을 평문으로 받지 않아야 합니다.
-23. 교수자는 CLI에서 전체 교과목 요약과 선택 교과목의 학생·과제 상태를 조회하고, 학생별
-    상태와 전용 비밀번호를 설정·재설정할 수 있어야 합니다. 비밀번호는 argv/CSV로 받지 않습니다.
-    기존 `scrypt$v1` 비밀번호는 인증에 사용하지 않고 `password_reset_required`로 구분하며,
-    숫자 6자리 재설정 후에만 설정 완료로 표시해야 합니다.
+23. 교수자는 CLI에서 전체 교과목 요약과 선택 교과목의 학생·과제 상태를 조회하고, roster
+    import 또는 개별 명령으로 전용 비밀번호를 설정·재설정할 수 있어야 합니다. Import는
+    비밀번호를 출력하지 않고 즉시 hash로 저장합니다. 같은 비밀번호 재-import는 no-op이고,
+    기존 credential과 다른 값은 명시적 `--replace-passwords` 없이는 모든 행 적용 전에
+    거부해야 합니다. 비밀번호는 argv로 받지 않습니다. 기존 `scrypt$v1` 비밀번호는 인증에
+    사용하지 않고 `password_reset_required`로 구분하며, 숫자 6자리 재설정 후에만 설정 완료로
+    표시해야 합니다.
 24. 과제 QR에는 `HTTPS origin + /assignment-claim/{assignment_id}`만 포함하고 secret, 학번과
     query/fragment를 포함하지 않아야 합니다. QR은 server 안에서 생성합니다.
 25. 비밀번호 수령 page는 HTTPS 또는 loopback HTTP에서만 열리고 CSRF, 계정 열거 방지,
@@ -118,21 +127,27 @@ Extension도 별도 `autograde.allowInsecureHttpPilot=true`가 필요하며 기�
 경로·symlink를 거부합니다. LAN 예외 contract와 운영 통제는
 [신뢰 LAN 외부 접속 파일럿](../operations/trusted-lan-pilot.md)에 정의합니다.
 
-Roster 최소 contract는 다음과 같습니다.
+비밀번호를 함께 등록하는 파일럿 roster contract는 다음과 같습니다.
 
 ```csv
-student_key,active
-s001,true
-s002,true
+student_key,active,password
+s001,true,042731
+s002,false,
 ```
 
-두 CSV에 raw token, 활성화 코드, dashboard password, hidden assessment 내용 또는 성적을 넣지
-않습니다. Pilot config와 roster는 서로 다른 validation 및 lifecycle을 가집니다.
+Pilot config와 roster 모두에 raw token, 활성화 코드, dashboard password, hidden assessment
+내용 또는 성적을 넣지 않습니다. Roster의 `password` 열만 초기 비밀번호 원문을 담는 의도된
+예외입니다. 따라서 roster 전체를 교수자 전용 credential로 취급하고 repository 밖 또는
+ignore된 local path에 보관하며, 학생에게는 신원을 확인한 개별 채널로 자신의 비밀번호 하나만
+전달합니다. Repository에 추적된 `pilot/roster.csv`는 합성 로컬 시험 데이터이며 외부 파일럿과
+실제 학생에게 사용하지 않습니다. Pilot config와 roster는 서로 다른 validation 및 lifecycle을
+가집니다.
 
 ## 성공 기준
 
 - 환경변수가 비어 있는 새 shell에서도 config CSV만 지정해 같은 course/data root가 선택됩니다.
-- 같은 roster와 release를 다시 반영해도 학생·과제 identity가 중복 생성되지 않습니다.
+- 같은 roster와 release를 다시 반영해도 학생·과제 identity가 중복 생성되거나 비밀번호가
+  회전하지 않습니다. 다른 비밀번호는 명시적 `--replace-passwords` 없이는 반영되지 않습니다.
 - 비활성/미등록 학생은 활성화, 다운로드, 제출과 결과 API를 사용할 수 없습니다.
 - 만료·재사용·다른 학생/교과목/과제의 수령 코드는 거부되며 원문은 DB/log에 남지 않습니다.
 - 교수자 교과목/학생 집계와 Dashboard의 QR·수락 상태가 SQLite 원장과 일치합니다.
