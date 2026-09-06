@@ -53,6 +53,7 @@ import {
   mergeServerSubmissionIds,
   rememberSubmission,
 } from "./studentSessionState";
+import { ServiceAddressController } from "./serviceAddress";
 import { AssignmentTreeItem, AssignmentsTreeProvider } from "./tree";
 import type { Assignment, GradeResult, ResultDiagnostic, SubmissionSummary } from "./types";
 
@@ -80,10 +81,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const output = vscode.window.createOutputChannel("Autograde");
   const diagnostics = vscode.languages.createDiagnosticCollection("autograde");
   let studentState = new EphemeralStudentState();
+  let authenticationUiState = false;
   const extensionVersion = String(context.extension.packageJSON.version ?? "0.0.0");
 
   const updateAuthenticationUI = async (knownState?: boolean): Promise<boolean> => {
     const authenticated = knownState ?? await tokens.hasSession();
+    authenticationUiState = authenticated;
     await Promise.all([
       vscode.commands.executeCommand(
         "setContext",
@@ -170,10 +173,24 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     );
   });
 
+  const clearSessionUiForAddressChange = async (): Promise<void> => {
+    studentState = clearStudentSessionResidue(studentState, treeProvider, output, diagnostics);
+    await updateAuthenticationUI(false);
+  };
+  const serviceAddresses = new ServiceAddressController(
+    client,
+    () => auth.signOut(),
+    clearSessionUiForAddressChange,
+  );
+
   context.subscriptions.push(
     treeView,
     output,
     diagnostics,
+    vscode.commands.registerCommand(
+      "autograde.configureServiceAddress",
+      () => runCommand(() => serviceAddresses.configure()),
+    ),
     vscode.commands.registerCommand("autograde.signIn", () => runCommand(() => auth.signIn())),
     vscode.commands.registerCommand("autograde.signOut", () => runCommand(() => auth.signOut())),
     vscode.commands.registerCommand(
@@ -200,6 +217,24 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       (item?: AssignmentTreeItem) => runCommand(() => viewLatestResult(studentState, client, treeProvider, output, diagnostics, item)),
     ),
     vscode.workspace.onDidGrantWorkspaceTrust(() => treeProvider.setAssignments(treeProvider.getAssignments())),
+    vscode.workspace.onDidChangeConfiguration((event) => {
+      if (
+        !event.affectsConfiguration("autograde.serviceBaseUrl") &&
+        !event.affectsConfiguration("autograde.allowInsecureHttpPilot")
+      ) {
+        return;
+      }
+      const wasAuthenticated = authenticationUiState;
+      void runCommand(async () => {
+        await tokens.clear();
+        await clearSessionUiForAddressChange();
+        if (wasAuthenticated) {
+          void vscode.window.showWarningMessage(
+            "Autograde 연결 설정이 바뀌어 이 기기의 로그인을 지웠습니다. Settings에서 직접 주소를 바꾼 경우 기존 서버 세션은 만료될 때까지 남을 수 있습니다.",
+          );
+        }
+      });
+    }),
   );
 
   void updateAuthenticationUI(false);

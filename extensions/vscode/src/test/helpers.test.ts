@@ -12,6 +12,7 @@ import {
   normalizeGradeResult,
   normalizeClaimCode,
   normalizeRepositoryLocator,
+  normalizeServiceAddressInput,
   normalizeServiceBaseUrl,
   normalizeTargetRef,
   repositoryMatches,
@@ -43,14 +44,61 @@ test("service URL keeps external HTTP off unless the private-LAN pilot is explic
   assert.equal(normalizeServiceBaseUrl("http://10.20.30.40", true), "http://10.20.30.40");
   assert.equal(normalizeServiceBaseUrl("http://172.31.255.254", true), "http://172.31.255.254");
   assert.throws(() => normalizeServiceBaseUrl("http://grade.example.edu", true), /RFC1918/);
-  assert.throws(() => normalizeServiceBaseUrl("http://0.0.0.0:18080", true), /RFC1918/);
+  assert.throws(() => normalizeServiceBaseUrl("http://0.0.0.0:18080", true), /사용할 수 없습니다/);
   assert.throws(() => normalizeServiceBaseUrl("http://8.8.8.8", true), /RFC1918/);
   assert.throws(() => normalizeServiceBaseUrl("http://169.254.1.1", true), /RFC1918/);
-  assert.throws(() => normalizeServiceBaseUrl("http://0xc0a83222", true), /RFC1918/);
-  assert.throws(() => normalizeServiceBaseUrl("http://192.168.050.034", true), /RFC1918/);
+  assert.throws(() => normalizeServiceBaseUrl("http://0xc0a83222", true), /표준 점 표기/);
+  assert.throws(() => normalizeServiceBaseUrl("http://192.168.050.034", true), /표준 점 표기/);
   assert.throws(() => normalizeServiceBaseUrl("https://grade.example.edu/api"), /path/);
   assert.throws(() => normalizeServiceBaseUrl("http://192.168.50.34/api", true), /path/);
   assert.throws(() => normalizeServiceBaseUrl("https://user:pass@grade.example.edu"), /인증 정보/);
+});
+
+test("service address input normalizes IPv4, hostname and IPv6 shorthand safely", () => {
+  assert.equal(
+    normalizeServiceAddressInput("203.0.113.10:20000"),
+    "https://203.0.113.10:20000",
+  );
+  assert.equal(
+    normalizeServiceAddressInput("grade.example.edu:20000"),
+    "https://grade.example.edu:20000",
+  );
+  assert.equal(
+    normalizeServiceAddressInput("[2001:db8::10]:20000"),
+    "https://[2001:db8::10]:20000",
+  );
+  assert.equal(
+    normalizeServiceAddressInput("2001:db8::10"),
+    "https://[2001:db8::10]",
+  );
+  assert.equal(
+    normalizeServiceAddressInput("127.0.0.1:18080"),
+    "http://127.0.0.1:18080",
+  );
+  assert.equal(
+    normalizeServiceAddressInput("[::1]:18080"),
+    "http://[::1]:18080",
+  );
+});
+
+test("service address input rejects ambiguous and non-destination literals", () => {
+  assert.throws(() => normalizeServiceAddressInput("http://203.0.113.10:20000"), /기본적으로 차단/);
+  assert.throws(
+    () => normalizeServiceAddressInput("http://203.0.113.10:20000", true),
+    /RFC1918/,
+  );
+  assert.throws(() => normalizeServiceAddressInput("203.000.113.10:20000"), /표준 점 표기/);
+  assert.throws(() => normalizeServiceAddressInput("2001:db8::gg:20000"), /IPv6 주소에 port/);
+  assert.throws(() => normalizeServiceAddressInput("[2001:db8::10]:0"), /1부터 65535/);
+  assert.throws(() => normalizeServiceAddressInput("https://203.0.113.10:0"), /1부터 65535/);
+  assert.throws(() => normalizeServiceAddressInput("https://0xc0000201:20000"), /표준 점 표기/);
+  assert.throws(() => normalizeServiceAddressInput("https://0.1.2.3:20000"), /사용할 수 없습니다/);
+  assert.throws(() => normalizeServiceAddressInput("https://255.255.255.255:20000"), /사용할 수 없습니다/);
+  assert.throws(() => normalizeServiceAddressInput("https://224.0.0.1:20000"), /사용할 수 없습니다/);
+  assert.throws(() => normalizeServiceAddressInput("https://[::]:20000"), /사용할 수 없습니다/);
+  assert.throws(() => normalizeServiceAddressInput("https://[fe80::1]:20000"), /사용할 수 없습니다/);
+  assert.throws(() => normalizeServiceAddressInput("https://[ff02::1]:20000"), /사용할 수 없습니다/);
+  assert.throws(() => normalizeServiceAddressInput("https://user:pass@203.0.113.10"), /인증 정보/);
 });
 
 test("insecure pilot URL recognition is limited to canonical RFC1918 IPv4", () => {

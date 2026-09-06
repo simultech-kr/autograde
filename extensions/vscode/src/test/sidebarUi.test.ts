@@ -120,6 +120,31 @@ test("assignment claim code is directly reachable from every sidebar authenticat
   assert.match(welcome.find((item) => item.when?.includes("!autograde.authenticated"))?.contents ?? "", /과제 수령 코드\(과제 키\)/);
 });
 
+test("service address setup is directly reachable from every sidebar state", async () => {
+  const manifest = await readManifest();
+  const commandId = "autograde.configureServiceAddress";
+  assert.ok(manifest.activationEvents?.includes(`onCommand:${commandId}`));
+
+  const command = manifest.contributes?.commands?.find((item) => item.command === commandId);
+  assert.ok(command);
+  assert.match(command.shortTitle ?? "", /서버 주소/);
+
+  const titleMenu = manifest.contributes?.menus?.["view/title"]
+    ?.find((item) => item.command === commandId);
+  assert.ok(titleMenu);
+  assert.match(titleMenu.when ?? "", /view\s*==\s*autograde\.assignments/);
+  assert.doesNotMatch(titleMenu.when ?? "", /!?autograde\.authenticated/);
+
+  const welcome = (manifest.contributes?.viewsWelcome ?? [])
+    .filter((item) => item.view === "autograde.assignments");
+  for (const state of welcome) {
+    assert.match(
+      state.contents,
+      /\[[^\]]*서버 주소[^\]]*\]\(command:autograde\.configureServiceAddress\)/,
+    );
+  }
+});
+
 test("sidebar title exposes direct signed-out and signed-in actions", async () => {
   const manifest = await readManifest();
   const titleMenus = manifest.contributes?.menus?.["view/title"] ?? [];
@@ -200,6 +225,10 @@ test("extension keeps authentication and download availability contexts in sync"
     /"setContext",\s*"autograde\.hasDownloadableAssignments",\s*assignments\.some\(isAssignmentDownloadable\)/,
   );
   assert.match(source, /void updateAuthenticationUI\(false\)/);
+  assert.match(source, /onDidChangeConfiguration/);
+  assert.match(source, /affectsConfiguration\("autograde\.serviceBaseUrl"\)/);
+  assert.match(source, /await tokens\.clear\(\)/);
+  assert.match(source, /clearSessionUiForAddressChange/);
 });
 
 test("a redeemed claim refreshes the authenticated list and targets the returned assignment", async () => {

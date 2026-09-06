@@ -3,8 +3,7 @@ import { readFile } from "node:fs/promises";
 import * as path from "node:path";
 import test from "node:test";
 
-import { ApiError } from "../api";
-import type { AutogradeClient } from "../api";
+import { ApiError, type ApiTransport, type AutogradeClient, TokenManager } from "../api";
 import { OperationCancelledError } from "../deviceAuth";
 import type { DeviceTokenPollOptions } from "../deviceAuth";
 import type { AssignmentClaim, DeviceAuthorization, TokenResponse } from "../types";
@@ -88,37 +87,42 @@ test("claim code approves a pending device then bootstraps the existing in-memor
   resetUi();
   inputResponses = ["  ak1 2345-6789-abcd  "];
   const events: string[] = [];
-  const createCalls: Array<{ deviceName: string; extensionVersion: string; signal?: AbortSignal }> = [];
-  const redeemCalls: Array<{ claimCode: string; deviceCode: string; signal?: AbortSignal }> = [];
-  const exchangeCalls: string[] = [];
-  const stored: TokenResponse[] = [];
+  const createCalls: Array<{ deviceName: string; extensionVersion: string; signal?: AbortSignal; expectedBaseUrl?: string }> = [];
+  const redeemCalls: Array<{ claimCode: string; deviceCode: string; signal?: AbortSignal; expectedBaseUrl?: string }> = [];
+  const exchangeCalls: Array<{ deviceCode: string; expectedBaseUrl?: string }> = [];
+  const stored: Array<{ tokens: TokenResponse; expectedBaseUrl: string }> = [];
   const acceptedAssignments: Array<string | undefined> = [];
   const client = {
     transport: { getBaseUrl: () => "https://grade.example.edu" },
     tokens: {
-      storeSession: async (tokens: TokenResponse) => { events.push("store"); stored.push(tokens); },
+      storeSession: async (tokens: TokenResponse, expectedBaseUrl: string) => {
+        events.push("store");
+        stored.push({ tokens, expectedBaseUrl });
+      },
     },
     createDeviceAuthorization: async (
       deviceName: string,
       extensionVersion: string,
       signal?: AbortSignal,
+      expectedBaseUrl?: string,
     ) => {
       events.push("create");
-      createCalls.push({ deviceName, extensionVersion, signal });
+      createCalls.push({ deviceName, extensionVersion, signal, expectedBaseUrl });
       return DEVICE;
     },
     redeemAssignmentClaim: async (
       claimCode: string,
       deviceCode: string,
       signal?: AbortSignal,
+      expectedBaseUrl?: string,
     ) => {
       events.push("redeem");
-      redeemCalls.push({ claimCode, deviceCode, signal });
+      redeemCalls.push({ claimCode, deviceCode, signal, expectedBaseUrl });
       return CLAIM;
     },
-    exchangeDeviceCode: async (deviceCode: string) => {
+    exchangeDeviceCode: async (deviceCode: string, _signal?: AbortSignal, expectedBaseUrl?: string) => {
       events.push("exchange");
-      exchangeCalls.push(deviceCode);
+      exchangeCalls.push({ deviceCode, expectedBaseUrl });
       return TOKENS;
     },
   } as unknown as AutogradeClient;
@@ -141,8 +145,10 @@ test("claim code approves a pending device then bootstraps the existing in-memor
   assert.equal("value" in (inputCalls[0] ?? {}), false);
   assert.match(String(inputCalls[0]?.prompt ?? ""), /과제 수령 코드\(과제 키\)/);
   assert.match(String(inputCalls[0]?.prompt ?? ""), /저장되지 않습니다/);
+  assert.match(String(inputCalls[0]?.prompt ?? ""), /접속할 서버: https:\/\/grade\.example\.edu/);
   assert.equal(createCalls.length, 1);
   assert.equal(createCalls[0]?.extensionVersion, "0.2.0");
+  assert.equal(createCalls[0]?.expectedBaseUrl, "https://grade.example.edu");
   assert.match(createCalls[0]?.deviceName ?? "", /wsl/);
   assert.ok(createCalls[0]?.signal instanceof AbortSignal);
   assert.deepEqual(redeemCalls.map(({ claimCode, deviceCode }) => ({ claimCode, deviceCode })), [{
@@ -150,15 +156,61 @@ test("claim code approves a pending device then bootstraps the existing in-memor
     deviceCode: "device-code",
   }]);
   assert.ok(redeemCalls[0]?.signal instanceof AbortSignal);
+  assert.equal(redeemCalls[0]?.expectedBaseUrl, "https://grade.example.edu");
   assert.equal(pollCalls.length, 1);
   assert.equal(pollCalls[0]?.deviceCode, "device-code");
   assert.equal(pollCalls[0]?.expiresInSeconds, 300);
   assert.equal(pollCalls[0]?.initialIntervalSeconds, 2);
-  assert.deepEqual(exchangeCalls, ["device-code"]);
-  assert.deepEqual(stored, [TOKENS]);
+  assert.deepEqual(exchangeCalls, [{
+    deviceCode: "device-code",
+    expectedBaseUrl: "https://grade.example.edu",
+  }]);
+  assert.deepEqual(stored, [{
+    tokens: TOKENS,
+    expectedBaseUrl: "https://grade.example.edu",
+  }]);
   assert.deepEqual(acceptedAssignments, ["asn_observer_cpp"]);
   assert.deepEqual(events, ["create", "redeem", "exchange", "store", "callback"]);
   assert.equal(progressCalls.length, 2);
+});
+
+test("claim flow cannot install returned tokens if the origin flips at the store boundary", async () => {
+  resetUi();
+  inputResponses = ["AK1-2345-6789-ABCD"];
+  const originalOrigin = "https://grade.example.edu";
+  const changedOrigin = "https://other-grade.example.edu";
+  let originReads = 0;
+  const transport = {
+    getBaseUrl: () => {
+      originReads += 1;
+      return originReads <= 3 ? originalOrigin : changedOrigin;
+    },
+    request: async () => { throw new Error("unexpected request"); },
+    requestBytes: async () => { throw new Error("unexpected request"); },
+  } as unknown as ApiTransport;
+  const tokens = new TokenManager(transport);
+  let callbacks = 0;
+  const client = {
+    transport,
+    tokens,
+    createDeviceAuthorization: async () => DEVICE,
+    redeemAssignmentClaim: async () => CLAIM,
+  } as unknown as AutogradeClient;
+  const controller = new AssignmentClaimController(
+    client,
+    "0.2.1",
+    async () => { callbacks += 1; },
+    async () => TOKENS,
+  );
+
+  await assert.rejects(
+    controller.redeem(),
+    (error: unknown) => error instanceof ApiError && error.code === "login_required",
+  );
+
+  assert.equal(originReads, 4);
+  assert.equal(await tokens.hasSession(), false);
+  assert.equal(callbacks, 0);
 });
 
 test("closing or invalidating the prompt performs no device or redemption request", async () => {
@@ -311,7 +363,7 @@ test("assignment-claim controller has no persistence or clipboard path for the r
 
 interface ClientOverrides {
   readonly baseUrl?: string;
-  readonly storeSession?: (tokens: TokenResponse) => Promise<void>;
+  readonly storeSession?: (tokens: TokenResponse, expectedBaseUrl: string) => Promise<void>;
   readonly createDeviceAuthorization?: AutogradeClient["createDeviceAuthorization"];
   readonly redeemAssignmentClaim?: AutogradeClient["redeemAssignmentClaim"];
 }

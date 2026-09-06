@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { AutogradeClient } from "../api";
+import { ApiError, type ApiTransport, type AutogradeClient, TokenManager } from "../api";
+import type { TokenResponse } from "../types";
 
 interface ModuleLoader {
   _load(request: string, parent: unknown, isMain: boolean): unknown;
@@ -16,8 +17,14 @@ let informationCalls: unknown[][] = [];
 let copiedCodes: string[] = [];
 let openedUrls: string[] = [];
 
+const cancellationToken = {
+  isCancellationRequested: false,
+  onCancellationRequested: (_listener: () => void) => ({ dispose: () => undefined }),
+};
+
 const vscodeStub = {
   CancellationError: class CancellationError extends Error {},
+  ProgressLocation: { Notification: 15 },
   env: {
     remoteName: "wsl",
     clipboard: { writeText: async (value: string) => { copiedCodes.push(value); } },
@@ -36,6 +43,13 @@ const vscodeStub = {
       informationCalls.push(args);
       return informationResponses.shift();
     },
+    withProgress: async <T>(
+      _options: Record<string, unknown>,
+      task: (
+        progress: { report(value: unknown): void },
+        token: typeof cancellationToken,
+      ) => Promise<T>,
+    ): Promise<T> => task({ report: () => undefined }, cancellationToken),
   },
 };
 
@@ -155,15 +169,24 @@ test("sign-in confirmation prominently identifies the configured service origin"
   warningResponses = [];
   informationResponses = [undefined];
   informationCalls = [];
+  let expectedBaseUrl: string | undefined;
   const client = {
     transport: { getBaseUrl: () => "https://grade.example.edu" },
     tokens: { hasSession: async () => false },
-    createDeviceAuthorization: async () => ({
-      device_code: "device-code",
-      user_code: "USER-CODE",
-      verification_uri: "https://grade.example.edu/activate",
-      expires_in: 300,
-    }),
+    createDeviceAuthorization: async (
+      _deviceName: string,
+      _extensionVersion: string,
+      _signal?: AbortSignal,
+      expected?: string,
+    ) => {
+      expectedBaseUrl = expected;
+      return {
+        device_code: "device-code",
+        user_code: "USER-CODE",
+        verification_uri: "https://grade.example.edu/activate",
+        expires_in: 300,
+      };
+    },
   } as unknown as AutogradeClient;
   const controller = new AuthenticationController(client, "0.1.0", () => {});
 
@@ -173,6 +196,59 @@ test("sign-in confirmation prominently identifies the configured service origin"
   const options = informationCalls[0]?.[1] as { detail?: string } | undefined;
   assert.match(options?.detail ?? "", /접속할 서버: https:\/\/grade\.example\.edu/);
   assert.equal(informationCalls[0]?.[2], "grade.example.edu에서 로그인");
+  assert.equal(expectedBaseUrl, "https://grade.example.edu");
+});
+
+test("sign-in cannot install returned tokens if the origin flips at the store boundary", async () => {
+  warningResponses = [];
+  warningCalls = [];
+  informationResponses = ["grade.example.edu에서 로그인"];
+  informationCalls = [];
+  openedUrls = [];
+  const originalOrigin = "https://grade.example.edu";
+  const changedOrigin = "https://other-grade.example.edu";
+  let originReads = 0;
+  const transport = {
+    getBaseUrl: () => {
+      originReads += 1;
+      return originReads <= 3 ? originalOrigin : changedOrigin;
+    },
+    request: async () => { throw new Error("unexpected request"); },
+    requestBytes: async () => { throw new Error("unexpected request"); },
+  } as unknown as ApiTransport;
+  const tokens = new TokenManager(transport);
+  const returnedTokens: TokenResponse = {
+    access_token: "access-from-original-origin",
+    refresh_token: "refresh-from-original-origin",
+    expires_in: 300,
+  };
+  const authenticationChanges: boolean[] = [];
+  const client = {
+    transport,
+    tokens,
+    createDeviceAuthorization: async () => ({
+      device_code: "device-code",
+      user_code: "USER-CODE",
+      verification_uri: `${originalOrigin}/activate`,
+      expires_in: 300,
+    }),
+  } as unknown as AutogradeClient;
+  const controller = new AuthenticationController(
+    client,
+    "0.2.1",
+    (authenticated) => authenticationChanges.push(authenticated),
+    async () => returnedTokens,
+  );
+
+  await assert.rejects(
+    controller.signIn(),
+    (error: unknown) => error instanceof ApiError && error.code === "login_required",
+  );
+
+  assert.equal(originReads, 4);
+  assert.equal(await tokens.hasSession(), false);
+  assert.deepEqual(authenticationChanges, []);
+  assert.deepEqual(openedUrls, [`${originalOrigin}/activate`]);
 });
 
 test("private-LAN HTTP sign-in is cancelled before the first server request", async () => {

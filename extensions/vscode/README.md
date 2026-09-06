@@ -87,15 +87,21 @@ GitHub 과제에서는 제출 전에 다음 조건을 모두 확인합니다.
 
 - `Autograde: Sign In`
 - `Autograde: Sign Out`
+- `Autograde: Configure Service Address`
 - `Autograde: Enter Assignment Claim Code and Download`
 - `Autograde: Refresh Assignments`
 - `Autograde: Download or Clone Assignment`
 - `Autograde: Submit Assignment`
 - `Autograde: View Latest Result`
 
-기본 설정은 `autograde.serviceBaseUrl`이며 localhost 이외의 주소에는 HTTPS가
-필수입니다. 서버 주소는 machine-scoped 설정으로 유지되지만, 주소가 바뀌면 현재 메모리
-세션은 즉시 사용할 수 없게 되며 이전 서비스의 token은 새 주소로 전송되지 않습니다.
+기본 설정은 `autograde.serviceBaseUrl`입니다. 사이드바 제목의 **서버 주소 설정** 버튼에서
+`203.0.113.10:20000`, `[2001:db8::10]:20000` 또는 완전한 URL을 직접 입력할 수 있습니다.
+scheme을 생략하면 HTTPS로 정규화하며 loopback 주소만 로컬 개발용 HTTP로 정규화합니다.
+IPv6 주소에 port를 붙일 때는 대괄호가 필수입니다. localhost 이외의 주소에는 HTTPS가
+필수입니다. 서버 주소는 machine-scoped 설정으로 유지됩니다. 로그인 중 주소를 바꾸면 기존
+서버 세션을 먼저 폐기하고 로컬 token과 채점 화면을 지우므로 이전 서비스의 token이 새 주소로
+전송되지 않습니다. IP 주소를 HTTPS로 사용할 때에도 인증서가 그 IP 또는 접속 이름에 유효해야
+하며 인증서 검사를 우회하는 기능은 제공하지 않습니다.
 파일럿 기본 주소는 `http://127.0.0.1:18080`입니다. Sign In 확인창은 실제로 열 서버의
 origin을 표시하며, 서버가 다른 origin의 인증 페이지를 반환하면 브라우저를 열지 않습니다.
 
@@ -288,7 +294,7 @@ Node.js 22 이상이 설치된 환경에서 실행합니다.
 npm ci
 npm test
 shasum -a 256 -c SHA256SUMS
-code --install-extension autograde-vscode-0.2.0.vsix
+code --install-extension autograde-vscode-0.2.1.vsix
 ```
 
 이 저장소의 `SHA256SUMS`는 현재 배포 후보 VSIX의 SHA-256을 고정합니다. 배포자는
@@ -307,7 +313,7 @@ Windows 탐색기에서 `.vsix` 파일을 더블클릭하지 않습니다. 파�
 (대소문자는 무관) 비교합니다.
 
 ```powershell
-Get-FileHash .\autograde-vscode-0.2.0.vsix -Algorithm SHA256
+Get-FileHash .\autograde-vscode-0.2.1.vsix -Algorithm SHA256
 Get-Content .\SHA256SUMS
 ```
 
@@ -318,11 +324,11 @@ CLI로 설치를 재현해야 할 때는 설치 유형에 맞는 정확한 경�
 
 ```powershell
 & "$env:LOCALAPPDATA\Programs\Microsoft VS Code\bin\code.cmd" --version
-& "$env:LOCALAPPDATA\Programs\Microsoft VS Code\bin\code.cmd" --install-extension .\autograde-vscode-0.2.0.vsix --force
+& "$env:LOCALAPPDATA\Programs\Microsoft VS Code\bin\code.cmd" --install-extension .\autograde-vscode-0.2.1.vsix --force
 
 # 모든 사용자용으로 설치된 경우
 & "$env:ProgramFiles\Microsoft VS Code\bin\code.cmd" --version
-& "$env:ProgramFiles\Microsoft VS Code\bin\code.cmd" --install-extension .\autograde-vscode-0.2.0.vsix --force
+& "$env:ProgramFiles\Microsoft VS Code\bin\code.cmd" --install-extension .\autograde-vscode-0.2.1.vsix --force
 ```
 
 `--force`는 기존 설치 갱신과 확인 prompt 처리용이며, 패키지 서명 검증을 끄거나 우회하는

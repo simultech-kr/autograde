@@ -28,6 +28,8 @@ export interface RequestOptions {
   readonly signal?: AbortSignal;
   readonly maxResponseBytes?: number;
   readonly acceptedContentTypes?: readonly string[];
+  /** Bind an authenticated request to the origin for which its token was obtained. */
+  readonly expectedBaseUrl?: string;
 }
 
 export interface ApiTransport {
@@ -52,7 +54,7 @@ export interface LegacySecretStore {
 
 export interface SessionTokenStore {
   hasSession(): Promise<boolean>;
-  storeSession(tokens: TokenResponse): Promise<void>;
+  storeSession(tokens: TokenResponse, expectedBaseUrl: string): Promise<void>;
   getAccessToken(forceRefresh?: boolean): Promise<string>;
   clear(): Promise<void>;
 }
@@ -100,7 +102,11 @@ export class HttpTransport implements ApiTransport {
     if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
       throw new TypeError("request timeout must be a positive finite number");
     }
-    const requestUrl = `${this.getBaseUrl()}${endpoint}`;
+    const baseUrl = this.getBaseUrl();
+    if (options.expectedBaseUrl !== undefined && options.expectedBaseUrl !== baseUrl) {
+      throw new ApiError("Autograde 서비스 주소가 변경되었습니다. 다시 로그인하세요.", 401, "login_required");
+    }
+    const requestUrl = `${baseUrl}${endpoint}`;
     const controller = new AbortController();
     let timedOut = false;
     const timeout = setTimeout(() => {
@@ -219,7 +225,11 @@ export class HttpTransport implements ApiTransport {
     if (!Number.isSafeInteger(maxResponseBytes) || maxResponseBytes <= 0) {
       throw new TypeError("max response bytes must be a positive safe integer");
     }
-    const requestUrl = `${this.getBaseUrl()}${endpoint}`;
+    const baseUrl = this.getBaseUrl();
+    if (options.expectedBaseUrl !== undefined && options.expectedBaseUrl !== baseUrl) {
+      throw new ApiError("Autograde 서비스 주소가 변경되었습니다. 다시 로그인하세요.", 401, "login_required");
+    }
+    const requestUrl = `${baseUrl}${endpoint}`;
     const controller = new AbortController();
     let timedOut = false;
     const timeout = setTimeout(() => {
@@ -428,8 +438,19 @@ export class TokenManager {
     return this.refreshToken !== undefined;
   }
 
-  public async storeSession(tokens: TokenResponse): Promise<void> {
-    this.replaceSession(tokens, this.transport.getBaseUrl());
+  public async storeSession(tokens: TokenResponse, expectedBaseUrl: string): Promise<void> {
+    const currentBaseUrl = this.transport.getBaseUrl();
+    if (currentBaseUrl !== expectedBaseUrl) {
+      this.clearMemory();
+      throw new ApiError(
+        "Autograde 서비스 주소가 변경되었습니다. 다시 로그인하세요.",
+        401,
+        "login_required",
+      );
+    }
+    // The comparison and replacement are synchronous, so a configuration
+    // event cannot interleave and bind credentials from one origin to another.
+    this.replaceSession(tokens, expectedBaseUrl);
   }
 
   public async getAccessToken(forceRefresh = false): Promise<string> {
@@ -469,10 +490,14 @@ export class TokenManager {
       throw new ApiError("Autograde 로그인이 필요합니다.", 401, "login_required");
     }
     try {
+      if (audience !== this.transport.getBaseUrl()) {
+        this.clearMemory();
+        throw new ApiError("Autograde 로그인이 필요합니다.", 401, "login_required");
+      }
       const response = await this.transport.request<TokenResponse>("/v1/tokens/refresh", {
         method: "POST",
         body: JSON.stringify({ refresh_token: refreshToken }),
-      });
+      }, undefined, { expectedBaseUrl: audience });
       if (
         generation !== this.sessionGeneration ||
         refreshToken !== this.refreshToken ||
@@ -546,6 +571,7 @@ export class AutogradeClient {
     deviceName: string,
     extensionVersion: string,
     signal?: AbortSignal,
+    expectedBaseUrl?: string,
   ): Promise<DeviceAuthorization> {
     return this.transport.request<DeviceAuthorization>("/v1/device-authorizations", {
       method: "POST",
@@ -554,14 +580,18 @@ export class AutogradeClient {
         extension_version: extensionVersion,
         device_name: deviceName,
       }),
-    }, undefined, { signal });
+    }, undefined, { signal, expectedBaseUrl });
   }
 
-  public exchangeDeviceCode(deviceCode: string, signal?: AbortSignal): Promise<TokenResponse> {
+  public exchangeDeviceCode(
+    deviceCode: string,
+    signal?: AbortSignal,
+    expectedBaseUrl?: string,
+  ): Promise<TokenResponse> {
     return this.transport.request<TokenResponse>("/v1/device-authorizations/token", {
       method: "POST",
       body: JSON.stringify({ device_code: deviceCode }),
-    }, undefined, { signal });
+    }, undefined, { signal, expectedBaseUrl });
   }
 
   /**
@@ -576,8 +606,17 @@ export class AutogradeClient {
     claimCode: string,
     deviceCode: string,
     signal?: AbortSignal,
+    expectedBaseUrl?: string,
   ): Promise<AssignmentClaim> {
-    if (isInsecureHttpPilotUrl(this.transport.getBaseUrl())) {
+    const serviceBaseUrl = this.transport.getBaseUrl();
+    if (expectedBaseUrl !== undefined && expectedBaseUrl !== serviceBaseUrl) {
+      throw new ApiError(
+        "Autograde 서비스 주소가 변경되었습니다. 수령 코드를 다시 입력하세요.",
+        401,
+        "login_required",
+      );
+    }
+    if (isInsecureHttpPilotUrl(serviceBaseUrl)) {
       throw new ApiError(
         "과제 수령 코드는 HTTPS 서버에서만 사용할 수 있습니다.",
         0,
@@ -594,7 +633,7 @@ export class AutogradeClient {
         claim_code: normalizedClaimCode,
         device_code: deviceCode,
       }),
-    }, undefined, { signal });
+    }, undefined, { signal, expectedBaseUrl });
     return normalizeAssignmentClaim(payload);
   }
 
@@ -728,15 +767,25 @@ export class AutogradeClient {
     init: RequestInit,
     options?: RequestOptions,
   ): Promise<T> {
+    const expectedBaseUrl = this.transport.getBaseUrl();
     let accessToken = await this.tokens.getAccessToken();
     try {
-      return await this.transport.request<T>(endpoint, init, accessToken, options);
+      return await this.transport.request<T>(endpoint, init, accessToken, {
+        ...options,
+        expectedBaseUrl,
+      });
     } catch (error) {
       if (!(error instanceof ApiError) || error.status !== 401) {
         throw error;
       }
+      if (this.transport.getBaseUrl() !== expectedBaseUrl) {
+        throw new ApiError("Autograde 서비스 주소가 변경되었습니다. 다시 로그인하세요.", 401, "login_required");
+      }
       accessToken = await this.tokens.getAccessToken(true);
-      return this.transport.request<T>(endpoint, init, accessToken, options);
+      return this.transport.request<T>(endpoint, init, accessToken, {
+        ...options,
+        expectedBaseUrl,
+      });
     }
   }
 
@@ -745,15 +794,25 @@ export class AutogradeClient {
     init: RequestInit,
     options?: RequestOptions,
   ): Promise<Uint8Array> {
+    const expectedBaseUrl = this.transport.getBaseUrl();
     let accessToken = await this.tokens.getAccessToken();
     try {
-      return await this.transport.requestBytes(endpoint, init, accessToken, options);
+      return await this.transport.requestBytes(endpoint, init, accessToken, {
+        ...options,
+        expectedBaseUrl,
+      });
     } catch (error) {
       if (!(error instanceof ApiError) || error.status !== 401) {
         throw error;
       }
+      if (this.transport.getBaseUrl() !== expectedBaseUrl) {
+        throw new ApiError("Autograde 서비스 주소가 변경되었습니다. 다시 로그인하세요.", 401, "login_required");
+      }
       accessToken = await this.tokens.getAccessToken(true);
-      return this.transport.requestBytes(endpoint, init, accessToken, options);
+      return this.transport.requestBytes(endpoint, init, accessToken, {
+        ...options,
+        expectedBaseUrl,
+      });
     }
   }
 }

@@ -1,4 +1,5 @@
 import * as path from "node:path";
+import { isIP } from "node:net";
 
 import type {
   Assignment,
@@ -147,6 +148,13 @@ export function normalizeServiceBaseUrl(
   if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
     throw new Error("Autograde 서비스는 HTTPS를 사용해야 합니다.");
   }
+  validateOptionalPort(parsed.port || undefined);
+
+  const destinationHostname = parsed.hostname.replace(/^\[|]$/g, "");
+  if (isIP(destinationHostname) === 4 && canonicalIpv4Hostname(raw, parsed) === undefined) {
+    throw new Error("IPv4 주소는 203.0.113.10과 같은 표준 점 표기로 입력하세요.");
+  }
+  validateServiceDestination(parsed);
 
   if (parsed.protocol === "http:" && !LOOPBACK_HOSTS.has(parsed.hostname.toLowerCase())) {
     if (!allowInsecureHttpPilot) {
@@ -163,6 +171,113 @@ export function normalizeServiceBaseUrl(
 
   parsed.pathname = parsed.pathname.replace(/\/+$/, "");
   return parsed.toString().replace(/\/$/, "");
+}
+
+/**
+ * Normalize the address syntax accepted by the service-address input box.
+ *
+ * A missing scheme means HTTPS, except for an explicit loopback address where
+ * the local-development HTTP default remains convenient. IPv6 with a port must
+ * use the standard bracket form, for example `[2001:db8::10]:20000`.
+ */
+export function normalizeServiceAddressInput(
+  raw: string,
+  allowInsecureHttpPilot = false,
+): string {
+  const value = raw.trim();
+  if (!value) {
+    throw new Error("Autograde 서비스 주소를 입력하세요.");
+  }
+
+  if (/^[a-z][a-z\d+.-]*:\/\//i.test(value)) {
+    return normalizeServiceBaseUrl(value, allowInsecureHttpPilot);
+  }
+  if (/\s/.test(value)) {
+    throw new Error("Autograde 서비스 주소에는 공백을 넣을 수 없습니다.");
+  }
+
+  const authority = normalizeAddressAuthority(value);
+  const candidate = `https://${authority}`;
+  let parsed: URL;
+  try {
+    parsed = new URL(candidate);
+  } catch {
+    throw new Error("Autograde 서비스 주소가 올바르지 않습니다.");
+  }
+
+  if (LOOPBACK_HOSTS.has(parsed.hostname.toLowerCase())) {
+    parsed.protocol = "http:";
+  }
+  return normalizeServiceBaseUrl(parsed.toString(), allowInsecureHttpPilot);
+}
+
+function normalizeAddressAuthority(value: string): string {
+  if (isIP(value) === 6) {
+    return `[${value}]`;
+  }
+
+  if (value.startsWith("[")) {
+    const matched = /^\[([^\]]+)](?::(\d+))?$/.exec(value);
+    if (!matched?.[1] || isIP(matched[1]) !== 6) {
+      throw new Error("IPv6 주소와 port는 [2001:db8::10]:20000 형식으로 입력하세요.");
+    }
+    validateOptionalPort(matched[2]);
+    return value;
+  }
+
+  const colonCount = [...value].filter((character) => character === ":").length;
+  if (colonCount > 1) {
+    throw new Error("IPv6 주소에 port를 붙일 때는 [2001:db8::10]:20000 형식을 사용하세요.");
+  }
+
+  const [hostname = "", port] = value.split(":", 2);
+  if (!hostname || hostname.includes("/") || hostname.includes("?") || hostname.includes("#") || hostname.includes("@")) {
+    throw new Error("서비스 주소에는 host 또는 IP와 선택적인 port만 입력하세요.");
+  }
+  if (/^[\d.]+$/.test(hostname) && isIP(hostname) !== 4) {
+    throw new Error("IPv4 주소는 203.0.113.10과 같은 표준 점 표기로 입력하세요.");
+  }
+  validateOptionalPort(port);
+  return value;
+}
+
+function validateOptionalPort(port: string | undefined): void {
+  if (port === undefined) {
+    return;
+  }
+  if (!/^\d+$/.test(port)) {
+    throw new Error("port는 1부터 65535 사이의 숫자로 입력하세요.");
+  }
+  const numericPort = Number(port);
+  if (!Number.isSafeInteger(numericPort) || numericPort < 1 || numericPort > 65_535) {
+    throw new Error("port는 1부터 65535 사이의 숫자로 입력하세요.");
+  }
+}
+
+function validateServiceDestination(parsed: URL): void {
+  const hostname = parsed.hostname.replace(/^\[|]$/g, "").toLowerCase();
+  if (hostname.includes("%")) {
+    throw new Error("IPv6 zone 식별자가 포함된 서비스 주소는 사용할 수 없습니다.");
+  }
+
+  if (isIP(hostname) === 4) {
+    const octets = hostname.split(".").map(Number);
+    const first = octets[0] as number;
+    if (first === 0 || hostname === "255.255.255.255" || first >= 224) {
+      throw new Error("미지정, broadcast 또는 multicast IP는 서비스 주소로 사용할 수 없습니다.");
+    }
+    return;
+  }
+
+  if (isIP(hostname) === 6) {
+    if (
+      hostname === "::" ||
+      /^ff/i.test(hostname) ||
+      /^fe[89ab]/i.test(hostname)
+    ) {
+      throw new Error("미지정, link-local 또는 multicast IPv6 주소는 사용할 수 없습니다.");
+    }
+  }
 }
 
 /** Returns a credential-free host/path identity suitable for preflight comparison. */

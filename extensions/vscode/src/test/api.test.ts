@@ -22,7 +22,7 @@ class FakeTokens implements SessionTokenStore {
     return !this.cleared;
   }
 
-  public async storeSession(_tokens: TokenResponse): Promise<void> {}
+  public async storeSession(_tokens: TokenResponse, _expectedBaseUrl: string): Promise<void> {}
 
   public async getAccessToken(_forceRefresh = false): Promise<string> {
     return "access-token";
@@ -98,7 +98,7 @@ test("session credentials live only in one TokenManager instance", async () => {
     access_token: "access-current-host",
     refresh_token: "refresh-current-host",
     expires_in: 300,
-  });
+  }, transport.getBaseUrl());
 
   assert.equal(await currentHost.hasSession(), true);
   assert.equal(await currentHost.getAccessToken(), "access-current-host");
@@ -122,7 +122,7 @@ test("refresh token rotation remains available within the current host session",
     access_token: "access-original",
     refresh_token: "refresh-original",
     expires_in: 300,
-  });
+  }, transport.getBaseUrl());
 
   assert.equal(await tokens.getAccessToken(true), "access-rotated");
   assert.equal(await tokens.getAccessToken(), "access-rotated");
@@ -140,7 +140,7 @@ test("changing the configured service address discards the in-memory session", a
     access_token: "access",
     refresh_token: "refresh",
     expires_in: 300,
-  });
+  }, transport.getBaseUrl());
 
   transport.baseUrl = "https://other-grade.example.edu";
 
@@ -148,6 +148,115 @@ test("changing the configured service address discards the in-memory session", a
   await assert.rejects(
     tokens.getAccessToken(),
     (error: unknown) => error instanceof ApiError && error.code === "login_required",
+  );
+});
+
+test("returned tokens cannot be installed for a different service origin", async () => {
+  const transport = new FakeTransport([], "https://other-grade.example.edu");
+  const tokens = new TokenManager(transport);
+
+  await assert.rejects(
+    tokens.storeSession({
+      access_token: "access-from-original-origin",
+      refresh_token: "refresh-from-original-origin",
+      expires_in: 300,
+    }, "https://grade.example.edu"),
+    (error: unknown) => error instanceof ApiError && error.code === "login_required",
+  );
+
+  assert.equal(await tokens.hasSession(), false);
+  await assert.rejects(
+    tokens.getAccessToken(),
+    (error: unknown) => error instanceof ApiError && error.code === "login_required",
+  );
+  assert.equal(transport.calls.length, 0);
+});
+
+test("refresh token is not sent when the service origin changes during refresh startup", async () => {
+  const transport = new FakeTransport([]);
+  const tokens = new TokenManager(transport);
+  await tokens.storeSession({
+    access_token: "access",
+    refresh_token: "refresh-secret",
+    expires_in: 1,
+  }, transport.getBaseUrl());
+
+  let reads = 0;
+  transport.getBaseUrl = () => {
+    reads += 1;
+    return reads === 1
+      ? "https://grade.example.edu"
+      : "https://other-grade.example.edu";
+  };
+
+  await assert.rejects(
+    tokens.getAccessToken(true),
+    (error: unknown) => error instanceof ApiError && error.code === "login_required",
+  );
+  assert.equal(transport.calls.length, 0);
+});
+
+test("authorized bearer token is bound to the origin selected before token lookup", async () => {
+  let configuredBaseUrl = "https://grade.example.edu";
+  let fetchCalls = 0;
+  const transport = new HttpTransport(
+    () => configuredBaseUrl,
+    async () => {
+      fetchCalls += 1;
+      return new Response(JSON.stringify([]), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    },
+  );
+  const tokens: SessionTokenStore = {
+    hasSession: async () => true,
+    storeSession: async () => undefined,
+    getAccessToken: async () => {
+      configuredBaseUrl = "https://other-grade.example.edu";
+      return "old-origin-token";
+    },
+    clear: async () => undefined,
+  };
+  const client = new AutogradeClient(transport, tokens);
+
+  await assert.rejects(
+    client.getAssignments(),
+    (error: unknown) => error instanceof ApiError && error.code === "login_required",
+  );
+  assert.equal(fetchCalls, 0);
+});
+
+test("claim and device secrets carry an expected-origin transport binding", async () => {
+  const transport = new FakeTransport([
+    {
+      device_code: "device",
+      user_code: "USER",
+      verification_uri: "https://grade.example.edu/activate",
+      expires_in: 300,
+    },
+    {
+      assignment_id: "asn_1",
+      course_key: "course",
+      delivery_mode: "bundle",
+      acceptance_id: "acceptance",
+    },
+    {
+      access_token: "access",
+      refresh_token: "refresh",
+      expires_in: 300,
+    },
+  ]);
+  const client = new AutogradeClient(transport, new FakeTokens());
+  const origin = "https://grade.example.edu";
+
+  await client.createDeviceAuthorization("device", "0.2.1", undefined, origin);
+  await client.redeemAssignmentClaim("AK1-2345-6789-ABCD", "device", undefined, origin);
+  await client.exchangeDeviceCode("device", undefined, origin);
+
+  assert.deepEqual(
+    transport.calls.map((call) => call.options?.expectedBaseUrl),
+    [origin, origin, origin],
   );
 });
 

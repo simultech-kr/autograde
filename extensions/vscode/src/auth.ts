@@ -3,17 +3,23 @@ import * as os from "node:os";
 import * as vscode from "vscode";
 
 import { AutogradeClient } from "./api";
-import { OperationCancelledError, pollForDeviceToken } from "./deviceAuth";
+import {
+  type DeviceTokenPollOptions,
+  OperationCancelledError,
+  pollForDeviceToken,
+} from "./deviceAuth";
 import { isInsecureHttpPilotUrl } from "./helpers";
 import type { TokenResponse } from "./types";
 
 const INSECURE_HTTP_CONTINUE_ACTION = "위험을 이해하고 계속";
+type DeviceTokenPoller = (options: DeviceTokenPollOptions) => Promise<TokenResponse>;
 
 export class AuthenticationController {
   public constructor(
     private readonly client: AutogradeClient,
     private readonly extensionVersion: string,
     private readonly onAuthenticationChanged: (authenticated: boolean) => void,
+    private readonly tokenPoller: DeviceTokenPoller = pollForDeviceToken,
   ) {}
 
   public async signIn(): Promise<void> {
@@ -56,7 +62,12 @@ export class AuthenticationController {
     const deviceName = [os.hostname(), vscode.env.remoteName ?? process.platform]
       .filter(Boolean)
       .join(" / ");
-    const authorization = await this.client.createDeviceAuthorization(deviceName, this.extensionVersion);
+    const authorization = await this.client.createDeviceAuthorization(
+      deviceName,
+      this.extensionVersion,
+      undefined,
+      serviceBaseUrl,
+    );
     validateDeviceAuthorization(authorization);
     if (this.client.transport.getBaseUrl() !== serviceBaseUrl) {
       throw new Error("로그인 중 Autograde 서비스 주소가 변경되었습니다. 다시 시도하세요.");
@@ -110,12 +121,16 @@ export class AuthenticationController {
           title: `Autograde 연결 코드 ${authorization.user_code}`,
           cancellable: true,
         },
-        async (progress, cancellationToken) => pollForDeviceToken({
+        async (progress, cancellationToken) => this.tokenPoller({
           deviceCode: authorization.device_code,
           expiresInSeconds: authorization.expires_in,
           initialIntervalSeconds: authorization.poll_interval ?? authorization.interval ?? 5,
           cancellationToken,
-          exchange: (deviceCode, signal) => this.client.exchangeDeviceCode(deviceCode, signal),
+          exchange: (deviceCode, signal) => this.client.exchangeDeviceCode(
+            deviceCode,
+            signal,
+            serviceBaseUrl,
+          ),
           onProgress: (remainingSeconds) => {
             progress.report({ message: `승인 대기 중 (${remainingSeconds}초)` });
           },
@@ -128,18 +143,21 @@ export class AuthenticationController {
       throw error;
     }
 
-    await this.client.tokens.storeSession(tokens);
+    if (this.client.transport.getBaseUrl() !== serviceBaseUrl) {
+      throw new Error("로그인 중 Autograde 서비스 주소가 변경되었습니다. 다시 시도하세요.");
+    }
+    await this.client.tokens.storeSession(tokens, serviceBaseUrl);
     this.onAuthenticationChanged(true);
     void vscode.window.showInformationMessage("Autograde에 연결되었습니다.");
   }
 
-  public async signOut(): Promise<void> {
+  public async signOut(): Promise<boolean> {
     if (!(await this.client.tokens.hasSession())) {
       this.onAuthenticationChanged(false);
       void vscode.window.showInformationMessage(
         "현재 Autograde 로그인 세션이 없습니다. 남아 있던 채점 화면을 지웠습니다.",
       );
-      return;
+      return true;
     }
     try {
       await this.client.revokeCurrentSession();
@@ -153,19 +171,20 @@ export class AuthenticationController {
         "이 기기에서만 로그아웃",
       );
       if (localOnly !== "이 기기에서만 로그아웃") {
-        return;
+        return false;
       }
       await this.client.tokens.clear();
       this.onAuthenticationChanged(false);
       void vscode.window.showWarningMessage(
         "이 기기의 로그인 정보와 채점 화면은 지웠지만 서버 세션 폐기는 확인하지 못했습니다. 공용 PC의 작업 파일은 자동 삭제되지 않습니다.",
       );
-      return;
+      return true;
     }
     this.onAuthenticationChanged(false);
     void vscode.window.showInformationMessage(
       "Autograde에서 로그아웃하고 채점 화면을 지웠습니다. 공용 PC의 작업 파일은 자동 삭제되지 않습니다.",
     );
+    return true;
   }
 
   private async endExistingSessionForReplacement(): Promise<boolean> {

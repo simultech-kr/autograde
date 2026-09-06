@@ -48,7 +48,9 @@ export class AssignmentClaimController {
 
     let entered: string | undefined = await vscode.window.showInputBox({
       title: "수령 코드로 과제 받기",
-      prompt: "Autograde 웹사이트에서 받은 과제 수령 코드(과제 키)를 입력하세요. 수령 코드는 이 기기에 저장되지 않습니다.",
+      prompt:
+        `접속할 서버: ${new URL(serviceBaseUrl).origin}\n` +
+        "Autograde 웹사이트에서 받은 과제 수령 코드(과제 키)를 입력하세요. 수령 코드는 이 기기에 저장되지 않습니다.",
       placeHolder: "AK1-XXXX-XXXX-XXXX",
       password: true,
       ignoreFocusOut: true,
@@ -86,6 +88,7 @@ export class AssignmentClaimController {
               deviceName,
               this.extensionVersion,
               controller.signal,
+              serviceBaseUrl,
             );
             validatePendingDeviceAuthorization(authorization);
             if (this.client.transport.getBaseUrl() !== serviceBaseUrl) {
@@ -96,6 +99,7 @@ export class AssignmentClaimController {
                 ephemeralClaimCode as string,
                 authorization.device_code,
                 controller.signal,
+                serviceBaseUrl,
               );
               return { authorization, claim, recoveringFromLostResponse: false };
             } catch (error) {
@@ -135,7 +139,11 @@ export class AssignmentClaimController {
             initialIntervalSeconds:
               prepared.authorization.poll_interval ?? prepared.authorization.interval ?? 1,
             cancellationToken,
-            exchange: (deviceCode, signal) => this.client.exchangeDeviceCode(deviceCode, signal),
+            exchange: (deviceCode, signal) => this.client.exchangeDeviceCode(
+              deviceCode,
+              signal,
+              serviceBaseUrl,
+            ),
             onProgress: (remainingSeconds) => {
               progress.report({
                 message: prepared.recoveringFromLostResponse
@@ -158,7 +166,10 @@ export class AssignmentClaimController {
       },
     );
 
-    await this.client.tokens.storeSession(tokens);
+    if (this.client.transport.getBaseUrl() !== serviceBaseUrl) {
+      throw new Error("수령 코드 확인 중 Autograde 서비스 주소가 변경되었습니다. 다시 시도하세요.");
+    }
+    await this.client.tokens.storeSession(tokens, serviceBaseUrl);
     if (prepared.recoveringFromLostResponse) {
       void vscode.window.showInformationMessage(
         "서버 응답이 끊겼지만 과제 승인과 로그인을 복구했습니다. 다운로드할 과제를 선택하세요.",
