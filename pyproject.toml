@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "school-autograde"
+version = "0.1.0"
+description = "Local CSV assignment delivery and pilot grading with optional future container and Git adapters"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "pyjevsim==2.1.1",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8,<9",
+]
+
+[project.scripts]
+autograde = "autograde.cli:main"
+autograde-platform = "autograde.platform_cli:main"
+autograde-git-askpass = "autograde.platform_github_app:askpass_main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+testpaths = ["tests"]
+markers = [
+  "integration: exercises Git repositories and filesystem boundaries",
+]

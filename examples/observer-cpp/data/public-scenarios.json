@@ -1,0 +1,18 @@
+{
+  "language": "C++17",
+  "max_score": 10,
+  "case_order": [
+    "basic",
+    "multiple",
+    "duplicate",
+    "detach",
+    "snapshot"
+  ],
+  "public_scenarios": [
+    "state is updated before observers are notified",
+    "observers are notified once in registration order",
+    "null and duplicate registrations are ignored",
+    "detached observers are no longer notified",
+    "subscription changes during notification apply to the next notification"
+  ]
+}

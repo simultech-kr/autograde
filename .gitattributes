@@ -1,0 +1,8 @@
+# Keep source and operational configuration consistent between macOS, Windows,
+# and WSL2 checkouts. Packaged artifacts remain byte-for-byte binary files.
+* text=auto eol=lf
+*.vsix -text
+*.png -text
+*.jpg -text
+*.jpeg -text
+*.gif -text

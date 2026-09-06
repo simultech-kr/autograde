@@ -1,0 +1,195 @@
+{
+  "name": "autograde-vscode",
+  "displayName": "Autograde",
+  "description": "Download, submit, and review Autograde assignments from Linux, macOS, or WSL2.",
+  "version": "0.1.2",
+  "private": true,
+  "publisher": "autograde",
+  "license": "UNLICENSED",
+  "engines": {
+    "vscode": "^1.92.0"
+  },
+  "categories": [
+    "Education",
+    "Other"
+  ],
+  "extensionKind": [
+    "workspace"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "과제와 결과 조회는 가능하지만 로컬 파일 검사, 다운로드 및 제출은 비활성화됩니다.",
+      "restrictedConfigurations": [
+        "autograde.serviceBaseUrl",
+        "autograde.allowInsecureHttpPilot"
+      ]
+    },
+    "virtualWorkspaces": false
+  },
+  "main": "./out/extension.js",
+  "activationEvents": [
+    "onView:autograde.assignments",
+    "onCommand:autograde.signIn",
+    "onCommand:autograde.signOut",
+    "onCommand:autograde.refreshAssignments",
+    "onCommand:autograde.cloneAssignment",
+    "onCommand:autograde.submitCurrentCommit",
+    "onCommand:autograde.viewLatestResult"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "autograde.signIn",
+        "title": "Autograde: Sign In",
+        "shortTitle": "로그인",
+        "enablement": "!autograde.authenticated",
+        "icon": "$(sign-in)"
+      },
+      {
+        "command": "autograde.signOut",
+        "title": "Autograde: Sign Out",
+        "shortTitle": "로그아웃",
+        "enablement": "autograde.authenticated",
+        "icon": "$(sign-out)"
+      },
+      {
+        "command": "autograde.refreshAssignments",
+        "title": "Autograde: Refresh Assignments",
+        "shortTitle": "과제 새로고침",
+        "enablement": "autograde.authenticated",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "autograde.cloneAssignment",
+        "title": "Autograde: Download or Clone Assignment",
+        "shortTitle": "과제 파일 다운로드",
+        "enablement": "autograde.authenticated && isWorkspaceTrusted",
+        "icon": "$(cloud-download)"
+      },
+      {
+        "command": "autograde.submitCurrentCommit",
+        "title": "Autograde: Submit Assignment",
+        "shortTitle": "과제 제출",
+        "enablement": "autograde.authenticated && isWorkspaceTrusted",
+        "icon": "$(cloud-upload)"
+      },
+      {
+        "command": "autograde.viewLatestResult",
+        "title": "Autograde: View Latest Result",
+        "shortTitle": "채점 결과 보기",
+        "enablement": "autograde.authenticated",
+        "icon": "$(output)"
+      }
+    ],
+    "configuration": {
+      "title": "Autograde",
+      "properties": {
+        "autograde.serviceBaseUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:18080",
+          "scope": "machine",
+          "markdownDescription": "Autograde 서비스의 기본 URL입니다. 주소만 이 컴퓨터에 저장되며 로그인 token은 저장되지 않습니다. 기본적으로 로컬 개발 주소가 아니면 HTTPS만 허용됩니다."
+        },
+        "autograde.allowInsecureHttpPilot": {
+          "type": "boolean",
+          "default": false,
+          "scope": "machine",
+          "markdownDescription": "**위험:** 암호화되지 않은 HTTP 접속을 RFC1918 사설 IPv4 주소에 한해 허용합니다. 신뢰된 같은 LAN에서 짧게 진행하는 파일럿에서만 켜고, 인터넷 공개나 공유 네트워크에서는 사용하지 마세요."
+        }
+      }
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "autograde",
+          "title": "Autograde",
+          "icon": "media/autograde.svg"
+        }
+      ]
+    },
+    "views": {
+      "autograde": [
+        {
+          "id": "autograde.assignments",
+          "name": "Assignments"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "autograde.assignments",
+        "when": "!autograde.authenticated",
+        "contents": "Autograde에 로그인하면 과제를 바로 받을 수 있습니다.\n[지금 로그인](command:autograde.signIn)"
+      },
+      {
+        "view": "autograde.assignments",
+        "when": "autograde.authenticated",
+        "contents": "현재 표시할 과제가 없습니다.\n[과제 새로고침](command:autograde.refreshAssignments)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "autograde.signIn",
+          "when": "view == autograde.assignments && !autograde.authenticated",
+          "group": "navigation@1"
+        },
+        {
+          "command": "autograde.signOut",
+          "when": "view == autograde.assignments && autograde.authenticated",
+          "group": "navigation@1"
+        },
+        {
+          "command": "autograde.refreshAssignments",
+          "when": "view == autograde.assignments && autograde.authenticated",
+          "group": "navigation@2"
+        },
+        {
+          "command": "autograde.cloneAssignment",
+          "when": "view == autograde.assignments && autograde.authenticated && autograde.hasDownloadableAssignments && isWorkspaceTrusted",
+          "group": "navigation@3"
+        },
+        {
+          "command": "autograde.submitCurrentCommit",
+          "when": "view == autograde.assignments && autograde.authenticated && isWorkspaceTrusted",
+          "group": "navigation@4"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "autograde.cloneAssignment",
+          "when": "view == autograde.assignments && autograde.authenticated && (viewItem == autograde.assignment || viewItem == autograde.assignmentWithSubmission) && isWorkspaceTrusted",
+          "group": "inline@0"
+        },
+        {
+          "command": "autograde.submitCurrentCommit",
+          "when": "view == autograde.assignments && autograde.authenticated && (viewItem == autograde.assignment || viewItem == autograde.assignmentWithSubmission) && isWorkspaceTrusted",
+          "group": "inline@1"
+        },
+        {
+          "command": "autograde.viewLatestResult",
+          "when": "view == autograde.assignments && autograde.authenticated && viewItem == autograde.assignmentWithSubmission",
+          "group": "inline@2"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "clean": "node -e \"require('fs').rmSync('out',{recursive:true,force:true})\"",
+    "compile": "tsc -p ./",
+    "test": "npm run clean && npm run compile && node --test out/test/*.test.js",
+    "package:vsix": "vsce package --dependencies",
+    "vscode:prepublish": "npm run clean && npm run compile"
+  },
+  "dependencies": {
+    "tar-stream": "3.1.7"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/tar-stream": "3.1.4",
+    "@types/vscode": "^1.92.0",
+    "@vscode/vsce": "3.9.2",
+    "typescript": "^5.7.2"
+  }
+}

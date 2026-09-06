@@ -1,0 +1,9 @@
+key,value
+course_key,cse101-lan-pilot
+data_root,.data-lan
+public_base_url,http://192.168.1.20:18081
+listen,192.168.1.20
+port,18081
+grading_runtime,pilot-local
+bundle_worker_count,4
+external_access_mode,insecure-http

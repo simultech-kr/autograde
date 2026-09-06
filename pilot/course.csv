@@ -1,0 +1,8 @@
+key,value
+course_key,cse101-pilot
+data_root,.data
+public_base_url,http://127.0.0.1:18080
+listen,127.0.0.1
+port,18080
+grading_runtime,pilot-local
+bundle_worker_count,4

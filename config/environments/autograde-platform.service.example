@@ -1,0 +1,31 @@
+[Unit]
+# PRODUCTION DESIGN REFERENCE ONLY; not used by the local CSV pilot.
+Description=Autograde student platform API and grading worker (future deployment)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=autograde
+Group=autograde
+WorkingDirectory=/opt/autograde
+Environment=AUTOGRADE_COURSE_KEY=cse101-2026f
+Environment=AUTOGRADE_DATA_ROOT=/var/lib/autograde-cse101
+Environment=AUTOGRADE_PUBLIC_BASE_URL=https://grade.example.edu
+# Optional GitHub App/OAuth compatibility settings may live here. Direct-bundle
+# delivery and student activation need no GitHub secret; their HMAC key and the
+# instructor dashboard token live under AUTOGRADE_DATA_ROOT.
+EnvironmentFile=-/etc/autograde/cse101-platform.secret
+ExecStart=/opt/autograde/.venv/bin/autograde-platform serve --listen 127.0.0.1 --port 8000 --grading-runtime docker --runner-image-inspect-timeout 15 --git-timeout 60 --repository-preflight-jobs 4 --max-snapshot-files 10000 --max-snapshot-bytes 1073741824 --max-total-snapshot-bytes 53687091200 --worker-queue-size 256 --bundle-worker-count 4 --max-bundle-compressed-bytes 26214400 --max-bundle-expanded-bytes 104857600 --max-bundle-files 5000 --max-outstanding-per-student 3 --max-daily-submissions-per-student 50 --max-active-sessions-per-student 5 --max-daily-session-issuances-per-student 20 --max-retained-sessions-per-student 1000 --max-refresh-rotations-per-session 2048 --max-activation-attempts 5 --session-list-limit 50 --auth-history-retention-seconds 2592000
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=45
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/autograde-cse101
+
+[Install]
+WantedBy=multi-user.target

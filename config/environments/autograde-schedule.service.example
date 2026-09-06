@@ -1,0 +1,23 @@
+[Unit]
+Description=Autograde PyJevSim schedule runner
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=autograde
+Group=autograde
+WorkingDirectory=/opt/autograde
+ExecStart=/opt/autograde/.venv/bin/autograde --data-root /var/lib/autograde schedule run a01-every-15m
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=45
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/autograde
+
+[Install]
+WantedBy=multi-user.target

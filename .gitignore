@@ -1,0 +1,52 @@
+# Operating systems and editors
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+!extensions/vscode/.vscode/
+!extensions/vscode/.vscode/*.json
+*.swp
+
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+*.local
+*-github-app.pem
+github-app*.pem
+app.private-key.pem
+
+# Logs and runtime files
+*.log
+logs/
+tmp/
+temp/
+*.pid
+
+# Dependencies and virtual environments
+node_modules/
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+
+# Build, test, and cache output
+build/
+dist/
+*.vsix
+*.egg-info/
+coverage/
+.coverage
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.cache/
+
+# Local grading artifacts and untrusted submissions
+artifacts/
+workspace/
+submissions/
+.autograde-data/
+.platform-data/
+!examples/submissions/
+!examples/submissions/**

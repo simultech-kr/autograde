@@ -1,0 +1,8 @@
+.gitignore
+.vscode/**
+src/**
+tsconfig.json
+out/test/**
+**/*.map
+**/*.log
+SHA256SUMS
