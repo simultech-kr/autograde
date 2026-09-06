@@ -221,7 +221,7 @@ LAN HTTP에서 교수자 Basic password를 전송하지 않도록 `insecure-http
 `/v1/instructor/dashboard`를 `404`로 비활성화합니다. 시작 출력의
 `instructor_dashboard.enabled=false`도 확인합니다. 파일럿 결과는 교수자 terminal의
 `submission list`와 `submission show`로만 확인합니다. 학생 인증 endpoint에는 production
-reverse proxy의 IP/account rate limit이 없고 device별 입력 실패 상한만 있으므로, dashboard가
+reverse proxy의 IP rate limit이 없고 device별 입력 실패 상한만 있으므로, dashboard가
 꺼져 있어도 이 mode의 접속 시간을 짧게 유지해야 합니다.
 
 ```bash

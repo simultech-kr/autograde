@@ -54,7 +54,13 @@ filesystem, network, process/UID와 kernel 격리를 제공하지 않습니다.
 - [ ] Data root가 다른 수업·개발 작업과 공유되지 않는다.
 - [ ] Data root directory는 owner만 접근할 수 있다.
 - [ ] SQLite, server secret과 instructor token은 owner만 읽을 수 있다.
-- [ ] 학생 전용 비밀번호는 15자 이상이고 학교 포털과 재사용하지 않으며 hash만 SQLite에 둔다.
+- [ ] 학생 전용 비밀번호는 ASCII 숫자 6자리이고 학교 포털과 재사용하지 않으며 hash만
+      SQLite에 둔다.
+- [ ] 학생별 무작위 비밀번호를 사용하고 server의 5회 실패 시 5분 잠금과 reverse proxy IP
+      rate limit을 확인했다.
+- [ ] Dashboard의 `재설정 필요` 학생에게 숫자 6자리 비밀번호를 다시 설정해 legacy
+      `scrypt$v1` hash가 없다.
+- [ ] 숫자 6자리 단일 인증을 감독되는 20~25명 단기 파일럿 밖에서 사용하지 않는다.
 - [ ] 초기 전용 비밀번호 전달과 분실 시 본인 확인·재설정 절차가 있다.
 - [ ] 활성화 코드는 **매 Sign In마다** 학생별 새 mode `0600` 파일과 새 경로로 발급하고
       덮어쓰지 않는다.
@@ -111,7 +117,7 @@ filesystem, network, process/UID와 kernel 격리를 제공하지 않습니다.
 - [ ] LAN profile에서는 `autograde.allowInsecureHttpPilot=false`일 때 외부 HTTP origin이
       거부되고, `true`일 때마다 cleartext 위험 확인을 거쳐야 한다.
 - [ ] LAN profile에서는 `/instructor`와 instructor API가 `404`로 비활성화되고 시작 출력도
-      dashboard disabled를 표시하며, built-in server에 production용 IP/account rate limit이
+      dashboard disabled를 표시하며, built-in server에 production용 proxy IP rate limit이
       없다는 잔여 위험을 기록했다.
 
 ## 5. Bundle과 제출 원장

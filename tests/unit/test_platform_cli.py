@@ -708,15 +708,23 @@ def test_course_and_student_management_set_password_without_plaintext_output(
     data_root = tmp_path / "private"
     assert invoke(data_root, "student", "add", "000123") == 0
     output(capsys)
-    password = "correct horse battery staple"
+    password = "482731"
     answers = iter((password, password))
+    prompts: list[str] = []
+
+    def answer(prompt: str) -> str:
+        prompts.append(prompt)
+        return next(answers)
+
     monkeypatch.setattr(
         platform_cli.getpass,
         "getpass",
-        lambda _prompt: next(answers),
+        answer,
     )
 
     assert invoke(data_root, "student", "password-set", "000123") == 0
+    assert len(prompts) == 2
+    assert all("숫자 6자리" in prompt for prompt in prompts)
     configured_output = capsys.readouterr().out
     configured = json.loads(configured_output)["result"]
     assert configured["password_configured"] is True
@@ -726,7 +734,7 @@ def test_course_and_student_management_set_password_without_plaintext_output(
         stored = connection.execute(
             "SELECT password_hash FROM platform_student_passwords"
         ).fetchone()[0]
-    assert stored.startswith("scrypt$v1$")
+    assert stored.startswith("scrypt$v2$")
     assert password not in stored
 
     assert invoke(data_root, "student", "list") == 0
@@ -750,16 +758,24 @@ def test_course_and_student_management_set_password_without_plaintext_output(
 
 def test_password_file_must_be_exactly_mode_0600(tmp_path) -> None:
     password_file = tmp_path / "password.txt"
-    password_file.write_text("correct horse battery staple\n", encoding="utf-8")
+    password_file.write_text("482731\n", encoding="utf-8")
     password_file.chmod(0o644)
 
     with pytest.raises(ValueError, match="0600"):
         platform_cli._read_student_password(password_file)
 
     password_file.chmod(0o600)
-    assert platform_cli._read_student_password(password_file) == (
-        "correct horse battery staple"
-    )
+    assert platform_cli._read_student_password(password_file) == "482731"
+
+
+@pytest.mark.parametrize("value", ("12345", "1234567", "12345a"))
+def test_password_file_requires_exactly_six_digits(tmp_path, value: str) -> None:
+    password_file = tmp_path / "password.txt"
+    password_file.write_text(value + "\n", encoding="utf-8")
+    password_file.chmod(0o600)
+
+    with pytest.raises(ValueError, match="숫자 6자리"):
+        platform_cli._read_student_password(password_file)
 
 
 def test_platform_cli_refuses_activation_file_overwrite_before_reissuing(

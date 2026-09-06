@@ -25,6 +25,7 @@ from .platform_auth import (
     create_or_load_auth_secret,
     create_or_load_instructor_token,
     new_public_id,
+    validate_student_password,
 )
 from .platform_bundle import BundleError, BundleStore
 from .platform_bundle_worker import (
@@ -253,13 +254,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     show_student.add_argument("student_key")
     password_set = student_commands.add_parser(
-        "password-set", help="set a course-scoped dedicated Autograde password"
+        "password-set", help="set a course-scoped six-digit Autograde password"
     )
     password_set.add_argument("student_key")
     password_set.add_argument(
         "--password-file",
         type=Path,
-        help="read the password from a private mode-0600 UTF-8 file",
+        help="read one six-digit password from a private mode-0600 UTF-8 file",
     )
 
     assignment = commands.add_parser("assignment", help="manage student assignments")
@@ -2160,11 +2161,13 @@ def _read_student_password(path: Optional[Path]) -> str:
     """Read a password without accepting it in argv or roster CSV."""
 
     if path is None:
-        password = getpass.getpass("Autograde 전용 비밀번호: ")
-        confirmation = getpass.getpass("Autograde 전용 비밀번호 확인: ")
+        password = getpass.getpass("Autograde 전용 비밀번호(숫자 6자리): ")
+        confirmation = getpass.getpass(
+            "Autograde 전용 비밀번호 확인(숫자 6자리): "
+        )
         if password != confirmation:
             raise ValueError("Autograde 전용 비밀번호 확인이 일치하지 않습니다")
-        return password
+        return validate_student_password(password)
 
     source = path.expanduser().absolute()
     flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
@@ -2188,7 +2191,7 @@ def _read_student_password(path: Optional[Path]) -> str:
         password = password[:-2]
     elif password.endswith("\n"):
         password = password[:-1]
-    return password
+    return validate_student_password(password)
 
 
 def _issue_student_activation_to_file(

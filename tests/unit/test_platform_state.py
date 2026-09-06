@@ -844,7 +844,7 @@ def test_course_deactivation_requires_a_new_student_password_after_reactivation(
     store.set_student_password_hash(
         student_id=fixture.student.id,
         course_key=COURSE,
-        password_hash=hash_student_password("dedicated password 2026"),
+        password_hash=hash_student_password("482731"),
         at=NOW,
     )
 
@@ -874,13 +874,13 @@ def test_password_rotation_revokes_sessions_without_deleting_the_replacement(
     store.set_student_password_hash(
         student_id=fixture.student.id,
         course_key=COURSE,
-        password_hash=hash_student_password("first dedicated password"),
+        password_hash=hash_student_password("123456"),
         at=NOW,
     )
     replacement = store.set_student_password_hash(
         student_id=fixture.student.id,
         course_key=COURSE,
-        password_hash=hash_student_password("second dedicated password"),
+        password_hash=hash_student_password("654321"),
         at=NOW + timedelta(seconds=1),
     )
 
@@ -888,6 +888,38 @@ def test_password_rotation_revokes_sessions_without_deleting_the_replacement(
         student_key="s001", course_key=COURSE
     )
     assert current.password_hash == replacement.password_hash
+
+
+def test_legacy_password_hash_is_reported_as_requiring_a_reset(
+    store: PlatformStateStore,
+) -> None:
+    fixture = PlatformFixture(store)
+    current_hash = hash_student_password("123456")
+    legacy_hash = current_hash.replace("scrypt$v2$", "scrypt$v1$", 1)
+    store.set_student_password_hash(
+        student_id=fixture.student.id,
+        course_key=COURSE,
+        password_hash=legacy_hash,
+        at=NOW,
+    )
+
+    legacy_summary = store.get_course_student_summary(
+        course_key=COURSE, student_key="s001"
+    )
+    assert legacy_summary["password_configured"] is False
+    assert legacy_summary["password_reset_required"] is True
+
+    store.set_student_password_hash(
+        student_id=fixture.student.id,
+        course_key=COURSE,
+        password_hash=current_hash,
+        at=NOW + timedelta(seconds=1),
+    )
+    current_summary = store.get_course_student_summary(
+        course_key=COURSE, student_key="s001"
+    )
+    assert current_summary["password_configured"] is True
+    assert current_summary["password_reset_required"] is False
 
 
 def test_device_authorization_is_one_time_and_creates_a_session(
@@ -1317,7 +1349,7 @@ def test_identity_change_deletes_every_course_password(
     store.set_student_password_hash(
         student_id=fixture.student.id,
         course_key=COURSE,
-        password_hash=hash_student_password("dedicated password 2026"),
+        password_hash=hash_student_password("482731"),
         at=NOW,
     )
 

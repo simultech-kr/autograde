@@ -7,6 +7,7 @@ import re
 
 import pytest
 
+from autograde.platform_auth import hash_student_password
 from autograde.platform_bundle import BundleStore
 from autograde.platform_service import PlatformAPIError, StudentPlatformService
 from autograde.platform_state import PlatformStateStore
@@ -178,6 +179,7 @@ def test_dashboard_requires_basic_auth_and_escapes_content(bundle_platform) -> N
     }
     assert dashboard["students"][0]["student_key"] == "s001"
     assert dashboard["students"][0]["password_configured"] is False
+    assert dashboard["students"][0]["password_reset_required"] is False
     assert dashboard["students"][0]["acceptances"] == 0
     assert dashboard["students"][0]["downloads"] == 0
     assert dashboard["students"][0]["submissions"] == 0
@@ -203,11 +205,35 @@ def test_dashboard_requires_basic_auth_and_escapes_content(bundle_platform) -> N
     assert "<One>" not in str(page.body)
 
 
+def test_dashboard_marks_a_legacy_password_as_requiring_reset(
+    bundle_platform,
+) -> None:
+    state, _store, service, _token, _notifications, _starter, _payload = bundle_platform
+    student = state.get_student_by_key("s001")
+    legacy_hash = hash_student_password("123456").replace(
+        "scrypt$v2$", "scrypt$v1$", 1
+    )
+    state.set_student_password_hash(
+        student_id=student.id,
+        course_key=COURSE,
+        password_hash=legacy_hash,
+        at=NOW,
+    )
+    encoded = base64.b64encode(b"instructor:dashboard-secret").decode("ascii")
+    authorization = f"Basic {encoded}"
+
+    dashboard = service.instructor_dashboard(authorization)
+    assert dashboard["students"][0]["password_configured"] is False
+    assert dashboard["students"][0]["password_reset_required"] is True
+    page = service.instructor_dashboard_page(authorization)
+    assert "재설정 필요 (숫자 6자리)" in str(page.body)
+
+
 def test_dashboard_counts_assignment_claim_acceptance(bundle_platform) -> None:
     _state, _store, service, _token, _notifications, _starter, _payload = (
         bundle_platform
     )
-    password = "correct horse battery staple"
+    password = "482731"
     service.set_student_password(student_key="s001", password=password)
     claim_page = service.assignment_claim_page({"assignment_id": "basn_lab01"})
     assert "Lab &lt;One&gt; (lab01)" in claim_page.body
@@ -357,7 +383,7 @@ def test_assignment_claim_session_is_restricted_to_its_accepted_bundle_assignmen
         other_submission_id, at=NOW + timedelta(minutes=2)
     )
 
-    password = "correct horse battery staple"
+    password = "482731"
     service.set_student_password(student_key="s001", password=password)
     claim_page = service.assignment_claim_page({"assignment_id": "basn_lab01"})
     csrf = re.search(r'name="csrf" value="([^"]+)"', claim_page.body).group(1)

@@ -1424,7 +1424,9 @@ def _verifier(value: str, field: str) -> str:
 
 def _password_hash(value: str) -> str:
     normalized = _required_text(value, "password_hash")
-    if len(normalized) > 512 or not normalized.startswith("scrypt$v1$"):
+    if len(normalized) > 512 or not normalized.startswith(
+        ("scrypt$v1$", "scrypt$v2$")
+    ):
         raise ValueError("password_hash must use the supported scrypt format")
     return normalized
 
@@ -2586,7 +2588,10 @@ class PlatformStateStore:
             """
             SELECT p.student_key, p.identity_kind, p.github_login,
                    p.active AS student_active, e.active AS enrollment_active,
-                   CASE WHEN pw.enrollment_id IS NULL THEN 0 ELSE 1 END AS password_configured,
+                   CASE WHEN pw.password_hash LIKE 'scrypt$v2$%' THEN 1 ELSE 0 END
+                     AS password_configured,
+                   CASE WHEN pw.password_hash LIKE 'scrypt$v1$%' THEN 1 ELSE 0 END
+                     AS password_reset_required,
                    pw.locked_until,
                    ((SELECT COUNT(*) FROM platform_assignments AS a
                        WHERE a.course_key = e.course_key AND a.student_id = p.id)
@@ -2624,6 +2629,7 @@ class PlatformStateStore:
             ),
             "active": bool(row["student_active"] and row["enrollment_active"]),
             "password_configured": bool(row["password_configured"]),
+            "password_reset_required": bool(row["password_reset_required"]),
             "password_locked_until": row["locked_until"],
             "assignments": int(row["assignments"]),
             "acceptances": int(row["acceptances"]),

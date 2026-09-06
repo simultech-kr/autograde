@@ -147,7 +147,7 @@ def test_twenty_five_students_claim_and_download_one_scoped_assignment_over_http
         )
         state.upsert_enrollment(student_id=student.id, course_key=COURSE, at=NOW)
         students.append(student_key)
-        passwords.append(f"Autograde pilot passphrase {index + 1:02d}")
+        passwords.append(f"{index + 1:06d}")
 
     bundle_store = BundleStore(
         tmp_path / "bundles",

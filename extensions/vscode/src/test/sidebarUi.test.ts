@@ -145,6 +145,38 @@ test("service address setup is directly reachable from every sidebar state", asy
   }
 });
 
+test("server reachability monitoring starts with VS Code and is manually reachable", async () => {
+  const manifest = await readManifest();
+  const commandId = "autograde.checkServerConnection";
+  assert.ok(manifest.activationEvents?.includes("onStartupFinished"));
+  assert.ok(manifest.activationEvents?.includes(`onCommand:${commandId}`));
+
+  const command = manifest.contributes?.commands?.find((item) => item.command === commandId);
+  assert.ok(command);
+  assert.match(command.shortTitle ?? "", /서버 연결 확인/);
+  assert.equal(command.enablement, undefined, "reachability checks must not require authentication");
+
+  const titleMenu = manifest.contributes?.menus?.["view/title"]
+    ?.find((item) => item.command === commandId);
+  assert.ok(titleMenu);
+  assert.match(titleMenu.when ?? "", /view\s*==\s*autograde\.assignments/);
+  assert.doesNotMatch(titleMenu.when ?? "", /authenticated/);
+
+  const welcome = (manifest.contributes?.viewsWelcome ?? [])
+    .filter((item) => item.view === "autograde.assignments");
+  for (const state of welcome) {
+    assert.match(
+      state.contents,
+      /\[[^\]]*서버 연결 확인[^\]]*\]\(command:autograde\.checkServerConnection\)/,
+    );
+  }
+
+  const source = await readFile(path.resolve(__dirname, "../../src/extension.ts"), "utf8");
+  assert.match(source, /connectionMonitor\.start\(\)/);
+  assert.match(source, /CHECK_SERVER_CONNECTION_COMMAND/);
+  assert.match(source, /connectionMonitor\.handleAddressChange\(\)/);
+});
+
 test("sidebar title exposes direct signed-out and signed-in actions", async () => {
   const manifest = await readManifest();
   const titleMenus = manifest.contributes?.menus?.["view/title"] ?? [];

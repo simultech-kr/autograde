@@ -44,6 +44,7 @@ _PASSWORD_SCRYPT_N = 1 << 14
 _PASSWORD_SCRYPT_R = 8
 _PASSWORD_SCRYPT_P = 1
 _PASSWORD_SCRYPT_MAXMEM = 64 * 1024 * 1024
+_STUDENT_PASSWORD_DIGITS = 6
 
 
 def create_or_load_auth_secret(path: str | Path) -> bytes:
@@ -218,7 +219,7 @@ def hash_student_password(password: str, *, salt: bytes | None = None) -> str:
     return "$".join(
         (
             "scrypt",
-            "v1",
+            "v2",
             str(_PASSWORD_SCRYPT_N),
             str(_PASSWORD_SCRYPT_R),
             str(_PASSWORD_SCRYPT_P),
@@ -228,31 +229,47 @@ def hash_student_password(password: str, *, salt: bytes | None = None) -> str:
     )
 
 
+def validate_student_password(password: str) -> str:
+    """Validate and return one course-scoped six-digit student password."""
+
+    password_bytes = _student_password_bytes(password, enforce_policy=True)
+    return password_bytes.decode("ascii")
+
+
 def verify_student_password(password: str, encoded_hash: str) -> bool:
     """Verify a password without returning early on malformed stored values."""
 
     valid_format = True
     try:
         parts = encoded_hash.split("$")
-        if len(parts) != 7 or parts[:5] != [
-            "scrypt",
-            "v1",
-            str(_PASSWORD_SCRYPT_N),
-            str(_PASSWORD_SCRYPT_R),
-            str(_PASSWORD_SCRYPT_P),
-        ]:
+        if (
+            len(parts) != 7
+            or parts[0] != "scrypt"
+            or parts[1] not in {"v1", "v2"}
+            or parts[2:5]
+            != [
+                str(_PASSWORD_SCRYPT_N),
+                str(_PASSWORD_SCRYPT_R),
+                str(_PASSWORD_SCRYPT_P),
+            ]
+        ):
             raise ValueError("unsupported password hash")
+        current_policy_hash = parts[1] == "v2"
         salt = _b64url_decode(parts[5])
         expected = _b64url_decode(parts[6])
         if len(salt) != _PASSWORD_SALT_BYTES or len(expected) != _PASSWORD_HASH_BYTES:
             raise ValueError("invalid password hash size")
     except (AttributeError, ValueError, binascii.Error):
         valid_format = False
+        current_policy_hash = False
         salt = b"\0" * _PASSWORD_SALT_BYTES
         expected = b"\0" * _PASSWORD_HASH_BYTES
 
+    policy_matches = False
     try:
         password_bytes = _student_password_bytes(password, enforce_policy=False)
+        normalized = password_bytes.decode("utf-8")
+        policy_matches = _is_six_digit_student_password(normalized)
     except (TypeError, ValueError, UnicodeError):
         valid_format = False
         password_bytes = b"invalid-password"
@@ -266,7 +283,15 @@ def verify_student_password(password: str, encoded_hash: str) -> bool:
         dklen=_PASSWORD_HASH_BYTES,
     )
     matched = hmac.compare_digest(actual, expected)
-    return bool(valid_format and matched)
+    return bool(
+        valid_format and current_policy_hash and policy_matches and matched
+    )
+
+
+def _is_six_digit_student_password(value: str) -> bool:
+    return len(value) == _STUDENT_PASSWORD_DIGITS and all(
+        character in string.digits for character in value
+    )
 
 
 def _student_password_bytes(password: str, *, enforce_policy: bool) -> bytes:
@@ -278,8 +303,8 @@ def _student_password_bytes(password: str, *, enforce_policy: bool) -> bytes:
     encoded = normalized.encode("utf-8", "strict")
     if not encoded or len(encoded) > 256:
         raise ValueError("password must contain between 1 and 256 UTF-8 bytes")
-    if enforce_policy and len(normalized) < 15:
-        raise ValueError("Autograde 전용 비밀번호는 15자 이상이어야 합니다")
+    if enforce_policy and not _is_six_digit_student_password(normalized):
+        raise ValueError("Autograde 전용 비밀번호는 숫자 6자리여야 합니다")
     return encoded
 
 

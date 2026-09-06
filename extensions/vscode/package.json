@@ -2,7 +2,7 @@
   "name": "autograde-vscode",
   "displayName": "Autograde",
   "description": "Download, submit, and review Autograde assignments from Linux, macOS, or WSL2.",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "private": true,
   "publisher": "autograde",
   "license": "UNLICENSED",
@@ -29,8 +29,10 @@
   },
   "main": "./out/extension.js",
   "activationEvents": [
+    "onStartupFinished",
     "onView:autograde.assignments",
     "onCommand:autograde.configureServiceAddress",
+    "onCommand:autograde.checkServerConnection",
     "onCommand:autograde.signIn",
     "onCommand:autograde.signOut",
     "onCommand:autograde.redeemAssignmentClaim",
@@ -46,6 +48,12 @@
         "title": "Autograde: Configure Service Address",
         "shortTitle": "서버 주소 설정",
         "icon": "$(server-environment)"
+      },
+      {
+        "command": "autograde.checkServerConnection",
+        "title": "Autograde: Check Server Connection",
+        "shortTitle": "서버 연결 확인",
+        "icon": "$(pulse)"
       },
       {
         "command": "autograde.signIn",
@@ -135,12 +143,12 @@
       {
         "view": "autograde.assignments",
         "when": "!autograde.authenticated",
-        "contents": "먼저 Autograde 서버 주소를 확인한 뒤 로그인하거나 과제 수령 코드(과제 키)로 시작하세요.\n[서버 주소 설정](command:autograde.configureServiceAddress)\n[지금 로그인](command:autograde.signIn)\n[수령 코드 입력 및 다운로드](command:autograde.redeemAssignmentClaim)"
+        "contents": "먼저 Autograde 서버 주소를 확인한 뒤 로그인하거나 과제 수령 코드(과제 키)로 시작하세요.\n[서버 주소 설정](command:autograde.configureServiceAddress)\n[서버 연결 확인](command:autograde.checkServerConnection)\n[지금 로그인](command:autograde.signIn)\n[수령 코드 입력 및 다운로드](command:autograde.redeemAssignmentClaim)"
       },
       {
         "view": "autograde.assignments",
         "when": "autograde.authenticated",
-        "contents": "현재 표시할 과제가 없습니다.\n[서버 주소 설정](command:autograde.configureServiceAddress)\n[수령 코드 입력 및 다운로드](command:autograde.redeemAssignmentClaim)\n[과제 새로고침](command:autograde.refreshAssignments)"
+        "contents": "현재 표시할 과제가 없습니다.\n[서버 주소 설정](command:autograde.configureServiceAddress)\n[서버 연결 확인](command:autograde.checkServerConnection)\n[수령 코드 입력 및 다운로드](command:autograde.redeemAssignmentClaim)\n[과제 새로고침](command:autograde.refreshAssignments)"
       }
     ],
     "menus": {
@@ -149,6 +157,11 @@
           "command": "autograde.configureServiceAddress",
           "when": "view == autograde.assignments",
           "group": "navigation@0"
+        },
+        {
+          "command": "autograde.checkServerConnection",
+          "when": "view == autograde.assignments",
+          "group": "navigation@0.5"
         },
         {
           "command": "autograde.signIn",

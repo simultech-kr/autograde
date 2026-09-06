@@ -13,8 +13,8 @@ Windows는 WSL2 workspace를 사용합니다.
 - roster CSV: `student_key`와 수강 활성 상태
 
 권장 학생 인증은 active roster와 교과목별 **Autograde 전용 비밀번호**에 기반합니다. 학생은
-교수자가 제시한 과제 QR의 HTTPS 페이지에서 학번과 전용 비밀번호를 확인한 뒤, 10분 동안
-한 번만 쓸 수 있는 과제 수령 코드를 VS Code에 입력합니다. QR에는 공개 URL만 들어가며
+교수자가 제시한 과제 QR의 HTTPS 페이지에서 학번과 숫자 6자리 전용 비밀번호를 확인한 뒤,
+10분 동안 한 번만 쓸 수 있는 과제 수령 코드를 VS Code에 입력합니다. QR에는 공개 URL만 들어가며
 비밀번호와 수령 코드는 URL·CSV·log에 넣지 않습니다. 학교 포털 비밀번호를 이 서비스에
 입력해서는 안 됩니다.
 
@@ -39,6 +39,7 @@ VS Code에는 서비스 주소만 유지하고 access/refresh token은 Extension
 - 비밀 없는 과제 QR, 비밀번호 확인과 10분·1회용 과제 수령 코드
 - 공용 좌석을 위한 메모리 전용 Extension token과 최신 로그인 1-session 정책
 - Linux/macOS native 및 Windows WSL2 VS Code Extension
+- VS Code 시작부터 약 30초마다 갱신되는 서버 도달 가능 상태 표시
 - SQLite 제출 원장, 비동기 채점 worker, 결과 조회
 - 교수자용 roster × assignment read-only dashboard
 - 20명 이상을 가정한 동시 제출 regression test
@@ -127,13 +128,14 @@ chmod 700 pilot/activation-codes
 외부 HTTPS 파일럿의 각 학생은 다음 사용자 흐름만 수행합니다.
 
 1. 휴대폰으로 과제 QR을 스캔하고 HTTPS domain·교과목·과제를 확인
-2. 학번과 Autograde 전용 비밀번호를 입력해 10분·1회용 수령 코드 발급
+2. 학번과 숫자 6자리 Autograde 전용 비밀번호를 입력해 10분·1회용 수령 코드 발급
 3. 전용 수업 폴더를 VS Code workspace로 열고 신뢰
 4. 설정의 서비스 origin이 교수자가 안내한 값과 같은지 확인
-5. 왼쪽 **Autograde** 아이콘에서 **수령 코드 입력 및 다운로드**를 눌러 코드 입력
-6. 현재 창에 생성된 과제 하위 폴더에서 문제 해결
-7. 과제 행에서 **제출** 후 **채점 결과 보기**
-8. 자리를 떠나기 전에 **로그아웃** 실행
+5. 하단의 **Autograde 서버: 연결됨** 표시를 확인
+6. 왼쪽 **Autograde** 아이콘에서 **수령 코드 입력 및 다운로드**를 눌러 코드 입력
+7. 현재 창에 생성된 과제 하위 폴더에서 문제 해결
+8. 과제 행에서 **제출** 후 **채점 결과 보기**
+9. 자리를 떠나기 전에 **로그아웃** 실행
 
 수령과 다운로드에는 Command Palette가 필요하지 않습니다. 사이드바 버튼이 보이지 않거나
 키보드로 실행해야 할 때만 `Autograde: Enter Assignment Claim Code and Download` 명령을

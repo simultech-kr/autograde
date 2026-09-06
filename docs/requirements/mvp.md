@@ -11,7 +11,8 @@ reverse proxy를 사용합니다. 별도 신뢰 LAN HTTP profile은 비밀번호
 ## 전제
 
 - 학생의 학교 식별자인 `student_key`와 수강 활성 상태가 local roster CSV에 있습니다.
-- 학교 계정과 분리한 15자 이상의 Autograde 전용 비밀번호를 교과목 enrollment에 설정합니다.
+- 학교 계정과 분리한 ASCII 숫자 6자리 Autograde 전용 비밀번호를 교과목 enrollment에
+  설정합니다.
 - 학교 SSO, GitHub 계정/OAuth/App, 학생별 repository는 사용하지 않습니다.
 - 설정은 shell 환경변수가 아니라 명시적으로 선택한 local pilot config CSV에서 읽습니다.
 - Built-in server는 loopback에만 bind합니다. 외부 학생은 HTTPS reverse proxy를 통해
@@ -22,6 +23,8 @@ reverse proxy를 사용합니다. 별도 신뢰 LAN HTTP profile은 비밀번호
 - Linux/macOS는 native workspace, Windows는 WSL2 workspace를 사용합니다.
 - Starter와 제출 source는 deterministic bundle로 전달합니다.
 - `pilot-local` 채점에 합성 또는 사전 검토한 신뢰된 코드만 사용합니다.
+- 숫자 6자리 단일 인증은 감독되는 20~25명 단기 HTTPS 파일럿에만 사용합니다. 무인·장기 운영,
+  중요한 개인정보나 공식 성적에는 더 강한 인증 요소 없이 사용하지 않습니다.
 - Docker/Podman, image registry, microVM과 외부 배포는 이번 MVP 범위가 아닙니다.
 
 ## 기능 요구사항
@@ -66,15 +69,20 @@ reverse proxy를 사용합니다. 별도 신뢰 LAN HTTP profile은 비밀번호
     Extension은 외부 HTTP origin을 기본 거부해야 합니다.
 21. `insecure-http`는 동일한 실제 RFC 1918 public/listen IPv4와 port를 강제하고,
     `0.0.0.0`, hostname, 공인 IP와 인터넷 공개를 거부해야 합니다. Extension의 별도 opt-in과
-    로그인별 위험 확인 전에는 첫 network 요청을 보내지 않아야 합니다.
+    로그인별 위험 확인 전에는 인증 정보나 제출물을 보내지 않아야 합니다. 상태 표시용 공개
+    `/healthz` 확인은 token 없이 수행할 수 있습니다.
 22. `insecure-http`에서 `/instructor`와 instructor API는 인증 prompt 대신 `404`로
     비활성화되어 Basic credential을 평문으로 받지 않아야 합니다.
 23. 교수자는 CLI에서 전체 교과목 요약과 선택 교과목의 학생·과제 상태를 조회하고, 학생별
     상태와 전용 비밀번호를 설정·재설정할 수 있어야 합니다. 비밀번호는 argv/CSV로 받지 않습니다.
+    기존 `scrypt$v1` 비밀번호는 인증에 사용하지 않고 `password_reset_required`로 구분하며,
+    숫자 6자리 재설정 후에만 설정 완료로 표시해야 합니다.
 24. 과제 QR에는 `HTTPS origin + /assignment-claim/{assignment_id}`만 포함하고 secret, 학번과
     query/fragment를 포함하지 않아야 합니다. QR은 server 안에서 생성합니다.
 25. 비밀번호 수령 page는 HTTPS 또는 loopback HTTP에서만 열리고 CSRF, 계정 열거 방지,
-    비밀번호 실패 잠금과 제한된 동시 password hashing을 적용해야 합니다.
+    비밀번호 실패 5회당 5분 잠금과 제한된 동시 password hashing을 적용해야 합니다. 서버와
+    브라우저 form은 정확히 ASCII 숫자 6자리만 받아야 하며 reverse proxy IP rate limit도
+    유지합니다.
 26. 수령 코드는 원문을 저장하지 않고 HMAC만 저장하며 학생·교과목·과제·device authorization에
     원자적으로 결합해 소비합니다. 만료·재사용·다른 과제 접근을 거부해야 합니다.
 27. VS Code는 수령 코드를 저장하지 않고 device authorization을 만든 뒤 코드를 소비하며,

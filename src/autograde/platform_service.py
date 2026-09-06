@@ -229,7 +229,7 @@ _MAX_DEVICE_POLL_TRACKERS = 2_000
 _DEFAULT_ACTIVATION_LIFETIME_SECONDS = 7 * 24 * 60 * 60
 _MAX_ACTIVATION_LIFETIME_SECONDS = 30 * 24 * 60 * 60
 _DUMMY_PASSWORD_HASH = (
-    "scrypt$v1$16384$8$1$AAAAAAAAAAAAAAAAAAAAAA$"
+    "scrypt$v2$16384$8$1$AAAAAAAAAAAAAAAAAAAAAA$"
     "KtFLbYYMHawcT6bz3UL3EQWOYqrGjouUFpkpVOI3qcI"
 )
 
@@ -1353,7 +1353,9 @@ class StudentPlatformService:
         student_management_rows = []
         for student in dashboard["students"]:
             password_state = "미설정"
-            if student["password_configured"]:
+            if student["password_reset_required"]:
+                password_state = "재설정 필요 (숫자 6자리)"
+            elif student["password_configured"]:
                 locked_until = student["password_locked_until"]
                 password_state = (
                     f"잠김 ({locked_until})"
@@ -1525,6 +1527,7 @@ class StudentPlatformService:
             "student_key": credential.student_key,
             "course_key": credential.course_key,
             "password_configured": True,
+            "password_reset_required": False,
             "updated_at": credential.updated_at,
         }
 
@@ -1574,9 +1577,10 @@ class StudentPlatformService:
             "maxlength=\"255\" required></label>"
             "<label>Autograde 전용 비밀번호 <input type=\"password\" "
             "name=\"password\" autocomplete=\"current-password\" "
-            "minlength=\"15\" maxlength=\"256\" required></label>"
-            "<p><small>Autograde 전용 비밀번호는 15자 이상이어야 합니다. "
-            "붙여넣기와 비밀번호 관리자를 사용할 수 있습니다.</small></p>"
+            "inputmode=\"numeric\" pattern=\"[0-9]{6}\" "
+            "minlength=\"6\" maxlength=\"6\" required></label>"
+            "<p><small>Autograde 전용 비밀번호는 숫자 6자리입니다. "
+            "학교 포털 비밀번호를 입력하지 마세요.</small></p>"
             "<button type=\"submit\">수령 코드 발급</button></form>",
         )
         return PlatformResponse(

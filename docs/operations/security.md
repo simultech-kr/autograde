@@ -45,12 +45,20 @@ production-safe하게 만들지는 않습니다.
 - 권장 흐름은 active course enrollment별 **Autograde 전용 비밀번호**로 HTTPS 과제 page에서
   10분·1회용 수령 코드를 발급하는 방식입니다. 학교 포털 비밀번호를 수집·재사용하지 않습니다.
   GitHub numeric user ID/login은 repository 배정·표시 metadata이며 인증 근거가 아닙니다.
-- 전용 비밀번호는 15자 이상, UTF-8 256 bytes 이하로 받아 NFC normalize 후 random salt를
-  사용하는 versioned scrypt hash로만 저장합니다. CLI는 terminal에서 두 번 입력하거나
-  owner-only mode `0600` 파일만 읽으며 argv와 roster CSV로 받지 않습니다.
+- 전용 비밀번호는 `000000`부터 `999999`까지의 **ASCII 숫자 6자리**만 허용하고, random salt를
+  사용하는 `scrypt$v2` hash로만 저장합니다. 순차 번호, 학번 일부와 생일은 피하고 학생마다
+  무작위 값을 개별 전달합니다. CLI는 terminal에서 두 번 입력하거나 owner-only mode `0600`
+  파일만 읽으며 argv와 roster CSV로 받지 않습니다.
 - 비밀번호 확인은 계정 존재 여부와 무관하게 같은 scrypt 경로를 실행하고 공개 오류를
-  통일합니다. Enrollment별 5회 실패 잠금과 process별 4개 password-hash 동시성 상한을
-  적용하며, reverse proxy의 IP/account rate limit도 별도로 둡니다.
+  통일합니다. 6자리 값의 제한된 경우의 수를 보완하기 위해 enrollment별 5회 실패 시 5분 잠금,
+  process별 4개 password-hash 동시성 상한과 reverse proxy의 IP rate limit을 모두
+  유지합니다.
+- 숫자 6자리 비밀번호는 단일 인증 요소이므로 감독되는 20~25명 단기 HTTPS 파일럿에만
+  Conditional Go입니다. 무인·장기 운영, 중요한 개인정보나 공식 성적을 다루는 서비스는 SSO,
+  WebAuthn 또는 별도 2차 인증 없이 No-Go입니다.
+- 기존 15자 정책의 `scrypt$v1` hash는 DB 호환성을 위해 읽을 수 있지만 인증에는 사용할 수
+  없습니다. Dashboard와 학생 조회는 이를 `password_reset_required=true`로 표시하며, 교수자가
+  숫자 6자리 비밀번호를 다시 설정하면 `scrypt$v2`로 교체됩니다.
 - QR은 HTTPS origin의 `/assignment-claim/{assignment_id}` 공개 path만 포함합니다. Server가
   local에서 생성하며 query/fragment, 학생 정보와 secret을 포함하지 않습니다.
 - 수령 코드는 약 60-bit entropy의 `AK1-XXXX-XXXX-XXXX` 형식으로 원문을 한 번만 표시합니다.
@@ -96,8 +104,8 @@ production-safe하게 만들지는 않습니다.
 - 기본값은 device code 5분, access token 15분, session 절대 수명 4시간입니다. Refresh token은
   사용할 때마다 rotation하지만 최초 session 발급 시 정한 절대 만료를 연장하지 않습니다.
 - device code는 1회 사용 후 즉시 폐기하고 만료·거부·소비 상태를 영속화합니다. 짧은
-  user code와 activation endpoint에는 HTTPS reverse proxy의 IP/account rate limit을
-  반드시 적용합니다. device별 activation 오류는 기본 5회, 설정 가능한 최대
+  user code와 activation endpoint에는 HTTPS reverse proxy의 IP rate limit을
+  반드시 적용합니다. device별 activation 오류는 server에서 기본 5회, 설정 가능한 최대
   20회로 제한하며 내장 server의 body/concurrency 상한은 인증 rate limit을 대신하지 않습니다.
 - high-entropy device/refresh secret은 원문을 저장하지 않고, user code와 활성화
   코드는 서로 다른 용도의 server-secret keyed HMAC으로만 lookup·검증합니다.
@@ -185,7 +193,7 @@ Loopback HTTP는 신뢰된 같은 장비의 Autograde server와 Extension 사이
 IPv4를 지정한 경우에만 사용합니다. 이 mode의 HTTP에서는 활성화 코드, bearer token, 제출물과
 결과를 같은 LAN의 공격자가 관찰·변조할 수 있습니다. Instructor Basic credential의 평문 전송을
 막기 위해 `/instructor`와 instructor API는 이 mode에서 `404`로 비활성화합니다. Built-in
-server에는 production용 proxy IP/account rate limit이 없고 device별 입력 실패 상한만 있으므로,
+server에는 production용 proxy IP rate limit이 없고 device별 입력 실패 상한만 있으므로,
 개인 hotspot/격리망, source-subnet firewall, 합성·사전 검토 코드와 짧은 실행 시간으로 범위를
 제한합니다. 종료 전에 학생 Sign Out, 종료 후 session과 미사용 활성화 코드 폐기 및 firewall
 회수를 수행합니다. 전체 절차는

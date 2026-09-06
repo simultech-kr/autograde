@@ -114,36 +114,57 @@ def test_assignment_claim_codes_have_the_versioned_human_transcribable_shape() -
     )
 
 
-def test_student_password_hash_round_trip_uses_nfc_and_a_versioned_scrypt_format() -> None:
-    decomposed = "e\u0301" + ("a" * 14)
-    composed = "\u00e9" + ("a" * 14)
+def test_student_password_hash_round_trip_uses_a_versioned_scrypt_format() -> None:
+    password = "012345"
+    encoded = hash_student_password(password, salt=b"s" * 16)
 
-    encoded = hash_student_password(decomposed, salt=b"s" * 16)
+    assert encoded.startswith("scrypt$v2$16384$8$1$")
+    assert password not in encoded
+    assert verify_student_password(password, encoded)
+    assert not verify_student_password("012346", encoded)
+    assert not verify_student_password(password, "not-a-supported-hash")
 
-    assert encoded.startswith("scrypt$v1$16384$8$1$")
-    assert decomposed not in encoded
-    assert composed not in encoded
-    assert verify_student_password(composed, encoded)
-    assert not verify_student_password(composed + "wrong", encoded)
-    assert not verify_student_password(composed, "not-a-supported-hash")
+    all_zero_hash = hash_student_password("000000", salt=b"z" * 16)
+    assert verify_student_password("000000", all_zero_hash)
 
 
-def test_student_password_policy_counts_nfc_characters_and_caps_utf8_bytes() -> None:
-    with pytest.raises(ValueError, match="15"):
-        hash_student_password("a" * 14)
+def test_legacy_v1_password_hash_requires_reset_even_when_the_digest_matches() -> None:
+    current_hash = hash_student_password("123456", salt=b"l" * 16)
+    legacy_hash = current_hash.replace("scrypt$v2$", "scrypt$v1$", 1)
 
-    assert verify_student_password(
-        "a" * 15,
-        hash_student_password("a" * 15, salt=b"m" * 16),
-    )
-    assert verify_student_password(
-        "a" * 256,
-        hash_student_password("a" * 256, salt=b"x" * 16),
-    )
-    with pytest.raises(ValueError, match="256 UTF-8 bytes"):
-        hash_student_password("a" * 257)
-    with pytest.raises(ValueError, match="256 UTF-8 bytes"):
-        hash_student_password(("\uac00" * 85) + "ab")
+    assert not verify_student_password("123456", legacy_hash)
+
+
+@pytest.mark.parametrize(
+    "invalid_password",
+    (
+        "12345",
+        "1234567",
+        "12345a",
+        "１２３４５６",
+        "١٢٣٤٥٦",
+        "\ufeff12345",
+        " 12345",
+    ),
+)
+def test_student_password_policy_requires_exactly_six_ascii_digits(
+    invalid_password: str,
+) -> None:
+    with pytest.raises(ValueError, match="숫자 6자리"):
+        hash_student_password(invalid_password)
+
+
+def test_student_password_policy_rejects_control_characters() -> None:
+    with pytest.raises(ValueError, match="control characters"):
+        hash_student_password("12345\n")
+
+
+def test_student_password_verification_rejects_non_six_digit_candidates() -> None:
+    encoded = hash_student_password("123456", salt=b"m" * 16)
+
+    assert not verify_student_password("12345", encoded)
+    assert not verify_student_password("1234567", encoded)
+    assert not verify_student_password("１２３４５６", encoded)
 
 
 def test_signed_browser_value_round_trip_and_expiry() -> None:

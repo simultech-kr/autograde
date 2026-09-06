@@ -82,12 +82,21 @@ GitHub 과제에서는 제출 전에 다음 조건을 모두 확인합니다.
 버튼도 같은 기능을 제공합니다. 목록이 비어 있으면 **과제 새로고침**을 누릅니다. 수령 코드
 입력과 모든 다운로드 동작은 신뢰한 workspace에서만 표시되거나 활성화됩니다.
 
+VS Code가 시작되면 하단 상태 표시줄에 **Autograde 서버: 확인 중/연결됨/연결 끊김**이
+표시됩니다. Extension은 로그인 token 없이 `/healthz`를 5초 timeout으로 즉시 확인하고 이후
+약 30초(27~33초 무작위 간격)마다 다시 확인합니다. 표시를 가리키면 정확한 서버 origin과
+최근 확인 시각이 나오며, 클릭하거나 사이드바의 **서버 연결 확인** 버튼을 누르면 즉시 다시
+확인합니다. 이 표시는 서버 접속 가능 여부의 최근 확인 결과일 뿐 지속 연결이나 학생 로그인
+여부를 뜻하지 않습니다. Remote WSL2 창에서는 Windows 브라우저가 아니라 WSL2 Extension
+Host의 network와 인증서 신뢰 저장소를 기준으로 확인합니다.
+
 사이드바 버튼이 보이지 않거나 키보드로 실행해야 할 때에는 Command Palette에서 아래 명령을
 대체 경로로 사용할 수 있습니다.
 
 - `Autograde: Sign In`
 - `Autograde: Sign Out`
 - `Autograde: Configure Service Address`
+- `Autograde: Check Server Connection`
 - `Autograde: Enter Assignment Claim Code and Download`
 - `Autograde: Refresh Assignments`
 - `Autograde: Download or Clone Assignment`
@@ -109,8 +118,9 @@ origin을 표시하며, 서버가 다른 origin의 인증 페이지를 반환하
 `autograde.allowInsecureHttpPilot=true`를 별도로 설정해야 하며 표준 점 표기의 RFC 1918
 사설 IPv4 주소만 허용됩니다. Hostname, 공인 IP, `0.0.0.0`과 legacy numeric IP 표기는
 거부합니다. Extension은 로그인할 때마다 token과 제출물이 노출·변조될 수 있음을 modal로
-다시 알리고, 사용자가 명시적으로 계속하기 전에는 첫 server 요청도 보내지 않습니다. 이
-opt-in은 암호화를 제공하지 않으므로 인터넷, 공용 Wi-Fi, 실제 성적에는 사용할 수 없습니다.
+다시 알리고, 사용자가 명시적으로 계속하기 전에는 인증 정보나 제출물을 보내지 않습니다.
+상태 표시줄의 공개 `/healthz` 확인만 token 없이 수행됩니다. 이 opt-in은 암호화를 제공하지
+않으므로 인터넷, 공용 Wi-Fi, 실제 성적에는 사용할 수 없습니다.
 서버 설정과 전체 절차는 repository의
 `docs/operations/trusted-lan-pilot.md`를 따릅니다.
 
@@ -150,6 +160,7 @@ endpoint도 server contract에 포함되지만 현재 Extension UI는 current-se
 호출하며 다른 device 관리는 후속 UI 범위입니다.
 
 ```text
+GET    /healthz
 POST   /v1/device-authorizations
 POST   /v1/assignment-claims/redeem
 POST   /v1/device-authorizations/token
@@ -294,7 +305,7 @@ Node.js 22 이상이 설치된 환경에서 실행합니다.
 npm ci
 npm test
 shasum -a 256 -c SHA256SUMS
-code --install-extension autograde-vscode-0.2.1.vsix
+code --install-extension autograde-vscode-0.2.2.vsix
 ```
 
 이 저장소의 `SHA256SUMS`는 현재 배포 후보 VSIX의 SHA-256을 고정합니다. 배포자는
@@ -313,7 +324,7 @@ Windows 탐색기에서 `.vsix` 파일을 더블클릭하지 않습니다. 파�
 (대소문자는 무관) 비교합니다.
 
 ```powershell
-Get-FileHash .\autograde-vscode-0.2.1.vsix -Algorithm SHA256
+Get-FileHash .\autograde-vscode-0.2.2.vsix -Algorithm SHA256
 Get-Content .\SHA256SUMS
 ```
 
@@ -324,11 +335,11 @@ CLI로 설치를 재현해야 할 때는 설치 유형에 맞는 정확한 경�
 
 ```powershell
 & "$env:LOCALAPPDATA\Programs\Microsoft VS Code\bin\code.cmd" --version
-& "$env:LOCALAPPDATA\Programs\Microsoft VS Code\bin\code.cmd" --install-extension .\autograde-vscode-0.2.1.vsix --force
+& "$env:LOCALAPPDATA\Programs\Microsoft VS Code\bin\code.cmd" --install-extension .\autograde-vscode-0.2.2.vsix --force
 
 # 모든 사용자용으로 설치된 경우
 & "$env:ProgramFiles\Microsoft VS Code\bin\code.cmd" --version
-& "$env:ProgramFiles\Microsoft VS Code\bin\code.cmd" --install-extension .\autograde-vscode-0.2.1.vsix --force
+& "$env:ProgramFiles\Microsoft VS Code\bin\code.cmd" --install-extension .\autograde-vscode-0.2.2.vsix --force
 ```
 
 `--force`는 기존 설치 갱신과 확인 prompt 처리용이며, 패키지 서명 검증을 끄거나 우회하는

@@ -27,6 +27,10 @@ import {
 } from "./bundleWorkspace";
 import { GitPreflightError, cloneRepository, inspectRepository } from "./git";
 import {
+  CHECK_SERVER_CONNECTION_COMMAND,
+  ServerConnectionMonitor,
+} from "./connectionMonitor";
+import {
   isAssignmentDownloadable,
   isAssignedRepositoryReady,
   isBundleAssignment,
@@ -80,6 +84,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const treeView = vscode.window.createTreeView("autograde.assignments", { treeDataProvider: treeProvider });
   const output = vscode.window.createOutputChannel("Autograde");
   const diagnostics = vscode.languages.createDiagnosticCollection("autograde");
+  const connectionMonitor = new ServerConnectionMonitor(
+    transport,
+    vscode.window.createStatusBarItem(
+      "autograde.serverConnection",
+      vscode.StatusBarAlignment.Left,
+      100,
+    ),
+  );
   let studentState = new EphemeralStudentState();
   let authenticationUiState = false;
   const extensionVersion = String(context.extension.packageJSON.version ?? "0.0.0");
@@ -184,12 +196,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   );
 
   context.subscriptions.push(
+    connectionMonitor,
     treeView,
     output,
     diagnostics,
     vscode.commands.registerCommand(
       "autograde.configureServiceAddress",
       () => runCommand(() => serviceAddresses.configure()),
+    ),
+    vscode.commands.registerCommand(
+      CHECK_SERVER_CONNECTION_COMMAND,
+      () => runCommand(() => connectionMonitor.checkNow()),
     ),
     vscode.commands.registerCommand("autograde.signIn", () => runCommand(() => auth.signIn())),
     vscode.commands.registerCommand("autograde.signOut", () => runCommand(() => auth.signOut())),
@@ -224,6 +241,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       ) {
         return;
       }
+      void connectionMonitor.handleAddressChange();
       const wasAuthenticated = authenticationUiState;
       void runCommand(async () => {
         await tokens.clear();
@@ -237,6 +255,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }),
   );
 
+  connectionMonitor.start();
   void updateAuthenticationUI(false);
   void tokens.hasSession().then((hasSession) => {
     void updateAuthenticationUI(hasSession);

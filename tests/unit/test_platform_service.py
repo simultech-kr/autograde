@@ -289,13 +289,16 @@ def test_assignment_claim_atomically_approves_one_device_and_scopes_its_tokens(
         ready=True,
         at=NOW,
     )
-    password = "dedicated password 2026"
+    password = "482731"
     service.set_student_password(student_key="20260001", password=password)
     claim_page, claim_form, claim_cookies = assignment_claim_entry(
         service, "asn_lab01"
     )
     assert "학교 SSO 비밀번호가 아니라" in claim_page.body
-    assert "Autograde 전용 비밀번호는 15자 이상이어야 합니다" in claim_page.body
+    assert "Autograde 전용 비밀번호는 숫자 6자리입니다" in claim_page.body
+    assert 'inputmode="numeric"' in claim_page.body
+    assert 'pattern="[0-9]{6}"' in claim_page.body
+    assert 'minlength="6" maxlength="6"' in claim_page.body
     issued = service.issue_assignment_claim(
         {
             **claim_form,
@@ -366,7 +369,7 @@ def test_wrong_code_with_the_same_public_tag_cannot_revoke_a_live_claim(
 ) -> None:
     state, service, _clock, _notifications, student = platform
     register_assignment(state, student)
-    password = "dedicated password 2026"
+    password = "482731"
     service.set_student_password(student_key="20260001", password=password)
     _page, form, cookies = assignment_claim_entry(service, "asn_lab01")
     issued = service.issue_assignment_claim(
@@ -416,7 +419,7 @@ def test_concurrent_redemption_of_one_claim_has_exactly_one_winner(
 ) -> None:
     state, service, _clock, _notifications, student = platform
     register_assignment(state, student)
-    password = "dedicated password 2026"
+    password = "482731"
     service.set_student_password(student_key="20260001", password=password)
     _page, form, cookies = assignment_claim_entry(service, "asn_lab01")
     issued = service.issue_assignment_claim(
@@ -470,7 +473,7 @@ def test_assignment_claim_password_hashing_has_a_bounded_concurrency_pool(
         now=clock.now,
         monotonic=clock.monotonic,
     )
-    password = "dedicated password 2026"
+    password = "482731"
     service.set_student_password(student_key="20260001", password=password)
     entries = [assignment_claim_entry(service, "asn_lab01") for _ in range(6)]
     lock = threading.Lock()
@@ -529,7 +532,7 @@ def test_assignment_claim_reissue_revokes_old_code_and_password_failures_lock(
 ) -> None:
     state, service, clock, _notifications, student = platform
     register_assignment(state, student)
-    password = "dedicated password 2026"
+    password = "482731"
     service.set_student_password(student_key="20260001", password=password)
 
     def issue(student_key: str, candidate: str) -> str:
@@ -569,20 +572,27 @@ def test_assignment_claim_reissue_revokes_old_code_and_password_failures_lock(
             {
                 **unknown_form,
                 "student_key": "not-enrolled",
-                "password": "wrong password value",
+                "password": "999999",
             },
             unknown_cookies,
         )
     unknown_error = (unknown.value.status, unknown.value.code, unknown.value.safe_message)
 
-    for _attempt in range(5):
+    invalid_candidates = (
+        "12345",
+        "12345a",
+        "１２３４５６",
+        "999999",
+        "111111",
+    )
+    for candidate in invalid_candidates:
         _page, form, cookies = assignment_claim_entry(service, "asn_lab01")
         with pytest.raises(PlatformAPIError) as wrong:
             service.issue_assignment_claim(
                 {
                     **form,
                     "student_key": "20260001",
-                    "password": "wrong password value",
+                    "password": candidate,
                 },
                 cookies,
             )

@@ -291,7 +291,7 @@ def test_password_claim_approves_device_and_scopes_assignment_over_http(
             ready=True,
             at=NOW,
         )
-    password = "correct horse battery staple"
+    password = "482731"
     service = StudentPlatformService(
         state=state,
         server_secret=b"s" * 32,
