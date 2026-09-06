@@ -50,3 +50,5 @@ submissions/
 .platform-data/
 !examples/submissions/
 !examples/submissions/**
+
+.data-https
