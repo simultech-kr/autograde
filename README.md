@@ -12,14 +12,16 @@ Windows는 WSL2 workspace를 사용합니다.
   채점 방식과 worker 수
 - roster CSV: `student_key`와 수강 활성 상태
 
-학생 인증은 active roster와 **로그인할 때마다 새로 발급하는** 학생별 1회용 활성화 코드에
-기반합니다. VS Code에는 서비스 주소만 유지하고 access/refresh token은 Extension Host
-메모리에만 둡니다. 따라서 창 종료, `Developer: Reload Window`, WSL 재연결 뒤에는 새 코드로
-다시 로그인해야 합니다. Starter와 제출물은 결정적 bundle로 전달하므로 학생별 Git
-repository도 필요하지 않습니다.
+권장 학생 인증은 active roster와 교과목별 **Autograde 전용 비밀번호**에 기반합니다. 학생은
+교수자가 제시한 과제 QR의 HTTPS 페이지에서 학번과 전용 비밀번호를 확인한 뒤, 10분 동안
+한 번만 쓸 수 있는 과제 수령 코드를 VS Code에 입력합니다. QR에는 공개 URL만 들어가며
+비밀번호와 수령 코드는 URL·CSV·log에 넣지 않습니다. 학교 포털 비밀번호를 이 서비스에
+입력해서는 안 됩니다.
 
-학생이 매번 입력하는 값은 access/refresh token 문자열이 아니라 교수자가 새로 발급한 1회용
-활성화 코드입니다. Service token은 browser/device 승인 뒤 내부적으로 발급·회전합니다.
+VS Code에는 서비스 주소만 유지하고 access/refresh token은 Extension Host 메모리에만 둡니다.
+따라서 창 종료, `Developer: Reload Window`, WSL 재연결 뒤에는 새 수령 코드로 다시 연결해야
+합니다. Starter와 제출물은 결정적 bundle로 전달하므로 학생별 Git repository도 필요하지
+않습니다. 기존 교수자 발급 1회용 활성화 코드 login은 장애 대응용 호환 경로로 남아 있습니다.
 
 > **안전 경계:** `pilot-local` 채점은 assessment가 학생 프로그램을 host process로 실행하는
 > 기능 검증용 경로입니다. Container, VM, 별도 host, network 차단 같은 강한 격리를 제공하지
@@ -32,20 +34,21 @@ repository도 필요하지 않습니다.
 
 - local pilot config CSV 한 파일로 모든 운영 명령의 설정을 고정
 - UTF-8 roster CSV 사전 검증 및 `student_key` 수강 등록
+- 교과목별/학생별 집계 조회와 학생별 전용 비밀번호 설정·재설정
 - GitHub 없는 starter bundle 다운로드와 direct submission
-- 로그인마다 새로 발급·소비하는 학생별 1회용 활성화 코드와 browser/device authorization
+- 비밀 없는 과제 QR, 비밀번호 확인과 10분·1회용 과제 수령 코드
 - 공용 좌석을 위한 메모리 전용 Extension token과 최신 로그인 1-session 정책
 - Linux/macOS native 및 Windows WSL2 VS Code Extension
 - SQLite 제출 원장, 비동기 채점 worker, 결과 조회
 - 교수자용 roster × assignment read-only dashboard
 - 20명 이상을 가정한 동시 제출 regression test
-- 기본 loopback HTTP와 명시적 이중 opt-in을 적용한 신뢰 LAN 단기 HTTP 기능 시험
+- 기본 loopback HTTP, 외부 HTTPS reverse proxy와 명시적 이중 opt-in의 신뢰 LAN HTTP 시험
 
 다음은 파일럿 실행 범위가 아닙니다.
 
 - Docker/Podman, image registry, Kubernetes 또는 microVM 배포
 - 실제 학생의 신뢰할 수 없는 코드 실행과 confidential hidden test
-- 인터넷 공개, 공용·개방 LAN 운영, TLS reverse proxy, 다중 서버와 고가용성
+- 격리 없는 production 인터넷 운영, 공용·개방 LAN, 다중 서버와 고가용성
 - GitHub repository 생성·권한 조정·PR 기반 제출
 - LMS 성적 반영과 이의 신청 workflow
 
@@ -77,6 +80,8 @@ Java와 C++로 같은 설계 개념을 출제하고 채점 결과까지 확인�
 같은 신뢰 LAN의 다른 컴퓨터에서 HTTP로 짧게 기능을 시험할 때만
 [신뢰 LAN 외부 접속 파일럿](docs/operations/trusted-lan-pilot.md)의 별도 config와 위험 수락
 절차를 따릅니다.
+QR과 전용 비밀번호를 사용하는 권장 외부 HTTPS 흐름은
+[QR 과제 수령 파일럿 가이드](docs/operations/qr-assignment-claim-pilot.md)를 따릅니다.
 
 ```csv
 key,value
@@ -102,6 +107,7 @@ s002,true
 ```bash
 .venv/bin/autograde-platform --pilot-config pilot/course.csv init
 .venv/bin/autograde-platform --pilot-config pilot/course.csv student import pilot/roster.csv
+.venv/bin/autograde-platform --pilot-config pilot/course.csv student password-set s001
 
 .venv/bin/autograde-platform --pilot-config pilot/course.csv assignment bundle-add lab01 \
   --release-id lab01-v1 \
@@ -118,22 +124,20 @@ chmod 700 pilot/activation-codes
 .venv/bin/autograde-platform --pilot-config pilot/course.csv serve
 ```
 
-각 학생은 다음 사용자 흐름만 수행합니다.
+외부 HTTPS 파일럿의 각 학생은 다음 사용자 흐름만 수행합니다.
 
-1. 전용 수업 폴더를 VS Code workspace로 열고 신뢰
-2. 왼쪽 Activity Bar에서 **Autograde** 아이콘을 열고 **Assignments** 영역의
-   **지금 로그인** 또는 제목 표시줄의 **로그인** 클릭
-3. 설정에 표시된 서비스 origin이 교수자가 안내한 값과 같은지 확인
-4. 이번 로그인용으로 새로 전달받은 활성화 코드로 브라우저 연결 승인
-5. 자동으로 나타난 과제를 펼쳐 **과제 파일 다운로드** 선택
+1. 휴대폰으로 과제 QR을 스캔하고 HTTPS domain·교과목·과제를 확인
+2. 학번과 Autograde 전용 비밀번호를 입력해 10분·1회용 수령 코드 발급
+3. 전용 수업 폴더를 VS Code workspace로 열고 신뢰
+4. 설정의 서비스 origin이 교수자가 안내한 값과 같은지 확인
+5. 왼쪽 **Autograde** 아이콘에서 **수령 코드 입력 및 다운로드**를 눌러 코드 입력
 6. 현재 창에 생성된 과제 하위 폴더에서 문제 해결
-7. `Autograde: Submit Assignment`
-8. `Autograde: View Latest Result`
-9. 자리를 떠나기 전에 `Autograde: Sign Out` 실행
+7. 과제 행에서 **제출** 후 **채점 결과 보기**
+8. 자리를 떠나기 전에 **로그아웃** 실행
 
-로그인과 과제 다운로드에는 Command Palette가 필요하지 않습니다. 사이드바 버튼이 보이지
-않거나 키보드로 실행해야 할 때만 각각 `Autograde: Sign In`과
-`Autograde: Download or Clone Assignment` 명령을 대체 경로로 사용합니다.
+수령과 다운로드에는 Command Palette가 필요하지 않습니다. 사이드바 버튼이 보이지 않거나
+키보드로 실행해야 할 때만 `Autograde: Enter Assignment Claim Code and Download` 명령을
+대체 경로로 사용합니다. 기존 `Autograde: Sign In`은 호환 login 경로입니다.
 과제 행 오른쪽의 다운로드 아이콘과 **Assignments** 제목 표시줄의 **과제 파일 다운로드**
 버튼도 같은 동작을 실행합니다.
 
@@ -162,6 +166,7 @@ credential을 평문으로 받지 않도록 dashboard endpoint가 비활성화�
 ```bash
 .venv/bin/python -m pytest -q
 .venv/bin/python -m pytest -q tests/integration/test_bundle_platform_25_load.py
+.venv/bin/python -m pytest -q tests/integration/test_assignment_claim_25_load.py
 
 cd extensions/vscode
 npm test

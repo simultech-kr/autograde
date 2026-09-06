@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import fcntl
 import hashlib
+import hmac
 import json
 import math
 import os
@@ -95,6 +96,13 @@ class DeviceAuthorizationState(_StringEnum):
 
 
 class StudentActivationState(_StringEnum):
+    ISSUED = "issued"
+    CONSUMED = "consumed"
+    REVOKED = "revoked"
+    EXPIRED = "expired"
+
+
+class AssignmentClaimState(_StringEnum):
     ISSUED = "issued"
     CONSUMED = "consumed"
     REVOKED = "revoked"
@@ -199,6 +207,50 @@ class StudentActivation:
     consumed_at: Optional[str] = None
     revoked_at: Optional[str] = None
     device_authorization_id: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class StudentPasswordCredential:
+    enrollment_id: int
+    student_id: int
+    student_key: str
+    course_key: str
+    password_hash: str
+    failed_attempts: int
+    updated_at: str
+    locked_until: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class AssignmentGrant:
+    assignment_grant_id: str
+    enrollment_id: int
+    student_id: int
+    course_key: str
+    assignment_id: str
+    delivery_mode: str
+    claim_tag: str
+    state: AssignmentClaimState
+    failed_attempts: int
+    expires_at: str
+    created_at: str
+    updated_at: str
+    consumed_at: Optional[str] = None
+    revoked_at: Optional[str] = None
+    device_authorization_id: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class AssignmentAcceptance:
+    acceptance_id: str
+    assignment_grant_id: str
+    enrollment_id: int
+    student_id: int
+    course_key: str
+    assignment_id: str
+    delivery_mode: str
+    device_authorization_id: str
+    accepted_at: str
 
 
 @dataclass(frozen=True)
@@ -464,6 +516,8 @@ class BundleDashboardRow:
     download_count: int
     first_downloaded_at: Optional[str]
     last_downloaded_at: Optional[str]
+    acceptance_count: int
+    latest_claim_accepted_at: Optional[str]
     submission_count: int
     latest_submission_id: Optional[str]
     latest_state: Optional[BundleSubmissionState]
@@ -1186,6 +1240,146 @@ CREATE INDEX idx_bundle_submission_result_student
 """
 
 
+_MIGRATION_7 = """
+CREATE TABLE platform_student_passwords (
+    enrollment_id INTEGER PRIMARY KEY
+        REFERENCES platform_enrollments(id) ON DELETE RESTRICT,
+    password_hash TEXT NOT NULL,
+    failed_attempts INTEGER NOT NULL DEFAULT 0 CHECK (failed_attempts >= 0),
+    locked_until TEXT,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE platform_assignment_grants (
+    assignment_grant_id TEXT PRIMARY KEY,
+    enrollment_id INTEGER NOT NULL
+        REFERENCES platform_enrollments(id) ON DELETE RESTRICT,
+    assignment_id TEXT NOT NULL,
+    delivery_mode TEXT NOT NULL CHECK (delivery_mode IN ('bundle', 'git')),
+    claim_tag TEXT NOT NULL UNIQUE CHECK (length(claim_tag) = 4),
+    claim_code_hmac TEXT NOT NULL UNIQUE,
+    state TEXT NOT NULL CHECK (
+        state IN ('issued', 'consumed', 'revoked', 'expired')
+    ),
+    failed_attempts INTEGER NOT NULL DEFAULT 0 CHECK (failed_attempts >= 0),
+    expires_at TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    consumed_at TEXT,
+    revoked_at TEXT,
+    device_authorization_id TEXT UNIQUE
+        REFERENCES device_authorizations(authorization_id) ON DELETE RESTRICT,
+    CHECK (
+        (state = 'issued' AND consumed_at IS NULL AND revoked_at IS NULL
+            AND device_authorization_id IS NULL)
+        OR (state = 'consumed' AND consumed_at IS NOT NULL AND revoked_at IS NULL
+            AND device_authorization_id IS NOT NULL)
+        OR (state = 'revoked' AND consumed_at IS NULL AND revoked_at IS NOT NULL
+            AND device_authorization_id IS NULL)
+        OR (state = 'expired' AND consumed_at IS NULL AND revoked_at IS NULL
+            AND device_authorization_id IS NULL)
+    )
+);
+CREATE UNIQUE INDEX idx_platform_assignment_grant_one_issued
+    ON platform_assignment_grants (enrollment_id, delivery_mode, assignment_id)
+    WHERE state = 'issued';
+CREATE INDEX idx_platform_assignment_grant_history
+    ON platform_assignment_grants (
+        enrollment_id, delivery_mode, assignment_id, updated_at
+    );
+
+CREATE TRIGGER trg_platform_assignment_grant_scope_insert
+BEFORE INSERT ON platform_assignment_grants
+WHEN (
+    NEW.delivery_mode = 'bundle' AND NOT EXISTS (
+        SELECT 1
+        FROM platform_enrollments AS e
+        JOIN bundle_assignment_releases AS a
+          ON a.assignment_id = NEW.assignment_id
+         AND a.course_key = e.course_key
+        WHERE e.id = NEW.enrollment_id
+    )
+) OR (
+    NEW.delivery_mode = 'git' AND NOT EXISTS (
+        SELECT 1
+        FROM platform_enrollments AS e
+        JOIN platform_assignments AS a
+          ON a.assignment_id = NEW.assignment_id
+         AND a.enrollment_id = e.id
+         AND a.student_id = e.student_id
+         AND a.course_key = e.course_key
+        WHERE e.id = NEW.enrollment_id
+    )
+)
+BEGIN
+    SELECT RAISE(ABORT, 'assignment grant scope is inconsistent');
+END;
+
+CREATE TRIGGER trg_platform_assignment_grant_identity_immutable
+BEFORE UPDATE OF enrollment_id, assignment_id, delivery_mode, claim_tag, claim_code_hmac
+ON platform_assignment_grants
+WHEN NEW.enrollment_id != OLD.enrollment_id
+  OR NEW.assignment_id != OLD.assignment_id
+  OR NEW.delivery_mode != OLD.delivery_mode
+  OR NEW.claim_tag != OLD.claim_tag
+  OR NEW.claim_code_hmac != OLD.claim_code_hmac
+BEGIN
+    SELECT RAISE(ABORT, 'assignment grant identity is immutable');
+END;
+
+CREATE TABLE platform_assignment_acceptances (
+    acceptance_id TEXT PRIMARY KEY,
+    assignment_grant_id TEXT NOT NULL UNIQUE
+        REFERENCES platform_assignment_grants(assignment_grant_id) ON DELETE RESTRICT,
+    enrollment_id INTEGER NOT NULL
+        REFERENCES platform_enrollments(id) ON DELETE RESTRICT,
+    assignment_id TEXT NOT NULL,
+    delivery_mode TEXT NOT NULL CHECK (delivery_mode IN ('bundle', 'git')),
+    device_authorization_id TEXT NOT NULL UNIQUE
+        REFERENCES device_authorizations(authorization_id) ON DELETE RESTRICT,
+    accepted_at TEXT NOT NULL
+);
+CREATE INDEX idx_platform_assignment_acceptance_owner
+    ON platform_assignment_acceptances (
+        enrollment_id, delivery_mode, assignment_id, accepted_at
+    );
+
+CREATE TRIGGER trg_platform_assignment_acceptance_binding
+BEFORE INSERT ON platform_assignment_acceptances
+WHEN NOT EXISTS (
+    SELECT 1
+    FROM platform_assignment_grants AS k
+    JOIN platform_enrollments AS e ON e.id = k.enrollment_id
+    JOIN device_authorizations AS d
+      ON d.authorization_id = k.device_authorization_id
+    WHERE k.assignment_grant_id = NEW.assignment_grant_id
+      AND k.state = 'consumed'
+      AND k.enrollment_id = NEW.enrollment_id
+      AND k.assignment_id = NEW.assignment_id
+      AND k.delivery_mode = NEW.delivery_mode
+      AND k.device_authorization_id = NEW.device_authorization_id
+      AND d.student_id = e.student_id
+      AND d.course_key = e.course_key
+      AND d.state = 'approved'
+)
+BEGIN
+    SELECT RAISE(ABORT, 'assignment acceptance binding is inconsistent');
+END;
+
+CREATE TRIGGER trg_platform_assignment_acceptance_immutable_update
+BEFORE UPDATE ON platform_assignment_acceptances
+BEGIN
+    SELECT RAISE(ABORT, 'assignment acceptance is immutable');
+END;
+
+CREATE TRIGGER trg_platform_assignment_acceptance_immutable_delete
+BEFORE DELETE ON platform_assignment_acceptances
+BEGIN
+    SELECT RAISE(ABORT, 'assignment acceptance is immutable');
+END;
+"""
+
+
 _MIGRATIONS = {
     1: _MIGRATION_1,
     2: _MIGRATION_2,
@@ -1193,6 +1387,7 @@ _MIGRATIONS = {
     4: _MIGRATION_4,
     5: _MIGRATION_5,
     6: _MIGRATION_6,
+    7: _MIGRATION_7,
 }
 _LATEST_SCHEMA_VERSION = max(_MIGRATIONS)
 
@@ -1224,6 +1419,21 @@ def _verifier(value: str, field: str) -> str:
         normalized = normalized[7:]
     if len(normalized) != 64 or any(c not in "0123456789abcdef" for c in normalized):
         raise ValueError(f"{field} must be a full SHA-256/HMAC hexadecimal verifier")
+    return normalized
+
+
+def _password_hash(value: str) -> str:
+    normalized = _required_text(value, "password_hash")
+    if len(normalized) > 512 or not normalized.startswith("scrypt$v1$"):
+        raise ValueError("password_hash must use the supported scrypt format")
+    return normalized
+
+
+def _claim_tag(value: str) -> str:
+    normalized = _required_text(value, "claim_tag").upper()
+    alphabet = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"
+    if len(normalized) != 4 or any(character not in alphabet for character in normalized):
+        raise ValueError("claim_tag must contain four assignment-claim characters")
     return normalized
 
 
@@ -1586,7 +1796,7 @@ class PlatformStateStore:
     def _revoke_student_credentials(
         connection: sqlite3.Connection, student_id: int, now: str
     ) -> None:
-        """Atomically invalidate sessions and approved device grants on identity change."""
+        """Invalidate every credential, including passwords, on identity change."""
 
         connection.execute(
             "UPDATE platform_sessions SET revoked_at = COALESCE(revoked_at, ?), "
@@ -1615,6 +1825,18 @@ class PlatformStateStore:
             "WHERE state = 'issued' AND enrollment_id IN ("
             "SELECT id FROM platform_enrollments WHERE student_id = ?)",
             (now, now, student_id),
+        )
+        connection.execute(
+            "UPDATE platform_assignment_grants "
+            "SET state = 'revoked', revoked_at = ?, updated_at = ? "
+            "WHERE state = 'issued' AND enrollment_id IN ("
+            "SELECT id FROM platform_enrollments WHERE student_id = ?)",
+            (now, now, student_id),
+        )
+        connection.execute(
+            "DELETE FROM platform_student_passwords WHERE enrollment_id IN ("
+            "SELECT id FROM platform_enrollments WHERE student_id = ?)",
+            (student_id,),
         )
 
     def get_student_by_subject(self, auth_subject: str) -> PlatformStudent:
@@ -1688,6 +1910,7 @@ class PlatformStateStore:
         student_id: int,
         course_key: str,
         now: str,
+        delete_password: bool = True,
     ) -> None:
         """Prevent credentials from reviving if one course is reactivated later."""
 
@@ -1723,6 +1946,21 @@ class PlatformStateStore:
             "WHERE student_id = ? AND course_key = ?)",
             (now, now, student_id, course_key),
         )
+        connection.execute(
+            "UPDATE platform_assignment_grants "
+            "SET state = 'revoked', revoked_at = ?, updated_at = ? "
+            "WHERE state = 'issued' AND enrollment_id IN ("
+            "SELECT id FROM platform_enrollments "
+            "WHERE student_id = ? AND course_key = ?)",
+            (now, now, student_id, course_key),
+        )
+        if delete_password:
+            connection.execute(
+                "DELETE FROM platform_student_passwords WHERE enrollment_id IN ("
+                "SELECT id FROM platform_enrollments "
+                "WHERE student_id = ? AND course_key = ?)",
+                (student_id, course_key),
+            )
 
     def require_active_enrollment(
         self, *, student_id: int, course_key: str
@@ -1732,6 +1970,666 @@ class PlatformStateStore:
         if row is None:
             raise PlatformAccessDenied("student does not have an active course enrollment")
         return self._enrollment(row)
+
+    # Dedicated student passwords and assignment claims --------------
+
+    def set_student_password_hash(
+        self,
+        *,
+        student_id: int,
+        course_key: str,
+        password_hash: str,
+        at: Optional[DatetimeValue] = None,
+    ) -> StudentPasswordCredential:
+        """Set a course password verifier without ever accepting the raw secret."""
+
+        student_id = _positive_int(student_id, "student_id")
+        course_key = _required_text(course_key, "course_key")
+        password_hash = _password_hash(password_hash)
+        now = utc_iso(at)
+        with self._write() as connection:
+            enrollment = connection.execute(
+                "SELECT * FROM platform_enrollments "
+                "WHERE student_id = ? AND course_key = ?",
+                (student_id, course_key),
+            ).fetchone()
+            if enrollment is None:
+                raise PlatformNotFound("course enrollment was not found")
+            previous = connection.execute(
+                "SELECT password_hash FROM platform_student_passwords "
+                "WHERE enrollment_id = ?",
+                (enrollment["id"],),
+            ).fetchone()
+            connection.execute(
+                """
+                INSERT INTO platform_student_passwords (
+                    enrollment_id, password_hash, failed_attempts,
+                    locked_until, updated_at
+                ) VALUES (?, ?, 0, NULL, ?)
+                ON CONFLICT(enrollment_id) DO UPDATE SET
+                    password_hash = excluded.password_hash,
+                    failed_attempts = 0,
+                    locked_until = NULL,
+                    updated_at = excluded.updated_at
+                """,
+                (enrollment["id"], password_hash, now),
+            )
+            if previous is not None and not hmac.compare_digest(
+                str(previous["password_hash"]), password_hash
+            ):
+                self._revoke_course_credentials(
+                    connection,
+                    student_id=student_id,
+                    course_key=course_key,
+                    now=now,
+                    delete_password=False,
+                )
+            row = self._student_password_row(
+                connection,
+                enrollment_id=int(enrollment["id"]),
+            )
+        return self._student_password(row)
+
+    def get_student_password_credential(
+        self, *, student_key: str, course_key: str
+    ) -> StudentPasswordCredential:
+        """Return an active enrollment's verifier for service-side checking."""
+
+        student_key = _required_text(student_key, "student_key")
+        course_key = _required_text(course_key, "course_key")
+        with self._connection() as connection:
+            row = connection.execute(
+                """
+                SELECT c.*, e.student_id, e.course_key, p.student_key
+                FROM platform_student_passwords AS c
+                JOIN platform_enrollments AS e ON e.id = c.enrollment_id
+                JOIN platform_students AS p ON p.id = e.student_id
+                WHERE p.student_key = ? AND e.course_key = ?
+                  AND p.active = 1 AND e.active = 1
+                """,
+                (student_key, course_key),
+            ).fetchone()
+        if row is None:
+            raise PlatformNotFound("student password credential was not found")
+        return self._student_password(row)
+
+    def record_student_password_failure(
+        self,
+        *,
+        enrollment_id: int,
+        expected_password_hash: str,
+        max_failed_attempts: int,
+        lockout_seconds: int,
+        at: Optional[DatetimeValue] = None,
+    ) -> StudentPasswordCredential:
+        """Count one failed check and apply a bounded enrollment lockout."""
+
+        enrollment_id = _positive_int(enrollment_id, "enrollment_id")
+        expected_password_hash = _password_hash(expected_password_hash)
+        max_failed_attempts = _positive_int(max_failed_attempts, "max_failed_attempts")
+        lockout_seconds = _positive_int(lockout_seconds, "lockout_seconds")
+        now = utc_iso(at)
+        with self._write() as connection:
+            row = self._student_password_row(
+                connection,
+                enrollment_id=enrollment_id,
+                required=False,
+            )
+            if row is None or not hmac.compare_digest(
+                str(row["password_hash"]), expected_password_hash
+            ):
+                raise PlatformAccessDenied("student password credential changed")
+            locked_until = row["locked_until"]
+            if locked_until is None or str(locked_until) <= now:
+                attempts = (
+                    1
+                    if locked_until is not None
+                    else int(row["failed_attempts"]) + 1
+                )
+                replacement_lock = None
+                if attempts >= max_failed_attempts:
+                    replacement_lock = utc_iso(
+                        datetime.fromisoformat(now.replace("Z", "+00:00"))
+                        + timedelta(seconds=lockout_seconds)
+                    )
+                connection.execute(
+                    "UPDATE platform_student_passwords "
+                    "SET failed_attempts = ?, locked_until = ?, updated_at = ? "
+                    "WHERE enrollment_id = ? AND password_hash = ?",
+                    (
+                        min(attempts, max_failed_attempts),
+                        replacement_lock,
+                        now,
+                        enrollment_id,
+                        expected_password_hash,
+                    ),
+                )
+            result = self._student_password_row(
+                connection,
+                enrollment_id=enrollment_id,
+            )
+        return self._student_password(result)
+
+    def issue_assignment_grant(
+        self,
+        *,
+        assignment_grant_id: str,
+        student_id: int,
+        course_key: str,
+        expected_password_hash: str,
+        assignment_id: str,
+        claim_tag: str,
+        claim_code_hmac: str,
+        expires_at: DatetimeValue,
+        at: Optional[DatetimeValue] = None,
+    ) -> AssignmentGrant:
+        """Issue one claim after rechecking the verified password and scope."""
+
+        assignment_grant_id = _required_text(
+            assignment_grant_id, "assignment_grant_id"
+        )
+        student_id = _positive_int(student_id, "student_id")
+        course_key = _required_text(course_key, "course_key")
+        expected_password_hash = _password_hash(expected_password_hash)
+        assignment_id = _required_text(assignment_id, "assignment_id")
+        claim_tag = _claim_tag(claim_tag)
+        claim_code_hmac = _verifier(claim_code_hmac, "claim_code_hmac")
+        now, expiry = utc_iso(at), utc_iso(expires_at)
+        if expiry <= now:
+            raise ValueError("expires_at must be later than issuance time")
+
+        with self._write() as connection:
+            credential = connection.execute(
+                """
+                SELECT c.*, e.student_id, e.course_key, e.active AS enrollment_active,
+                       p.active AS student_active
+                FROM platform_student_passwords AS c
+                JOIN platform_enrollments AS e ON e.id = c.enrollment_id
+                JOIN platform_students AS p ON p.id = e.student_id
+                WHERE e.student_id = ? AND e.course_key = ?
+                """,
+                (student_id, course_key),
+            ).fetchone()
+            if (
+                credential is None
+                or not bool(credential["student_active"])
+                or not bool(credential["enrollment_active"])
+                or not hmac.compare_digest(
+                    str(credential["password_hash"]), expected_password_hash
+                )
+                or (
+                    credential["locked_until"] is not None
+                    and str(credential["locked_until"]) > now
+                )
+            ):
+                raise PlatformAccessDenied("student password claim is not allowed")
+            enrollment_id = int(credential["enrollment_id"])
+            delivery_mode = self._available_assignment_delivery_mode(
+                connection,
+                enrollment_id=enrollment_id,
+                student_id=student_id,
+                course_key=course_key,
+                assignment_id=assignment_id,
+                now=now,
+            )
+            connection.execute(
+                "UPDATE platform_student_passwords "
+                "SET failed_attempts = 0, locked_until = NULL, updated_at = ? "
+                "WHERE enrollment_id = ? AND password_hash = ?",
+                (now, enrollment_id, expected_password_hash),
+            )
+            connection.execute(
+                "UPDATE platform_assignment_grants "
+                "SET state = 'expired', updated_at = ? "
+                "WHERE enrollment_id = ? AND delivery_mode = ? "
+                "AND assignment_id = ? AND state = 'issued' AND expires_at <= ?",
+                (now, enrollment_id, delivery_mode, assignment_id, now),
+            )
+            connection.execute(
+                "UPDATE platform_assignment_grants "
+                "SET state = 'revoked', revoked_at = ?, updated_at = ? "
+                "WHERE enrollment_id = ? AND delivery_mode = ? "
+                "AND assignment_id = ? AND state = 'issued'",
+                (now, now, enrollment_id, delivery_mode, assignment_id),
+            )
+            try:
+                connection.execute(
+                    """
+                    INSERT INTO platform_assignment_grants (
+                        assignment_grant_id, enrollment_id, assignment_id,
+                        delivery_mode, claim_tag, claim_code_hmac, state,
+                        expires_at, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, 'issued', ?, ?, ?)
+                    """,
+                    (
+                        assignment_grant_id,
+                        enrollment_id,
+                        assignment_id,
+                        delivery_mode,
+                        claim_tag,
+                        claim_code_hmac,
+                        expiry,
+                        now,
+                        now,
+                    ),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise PlatformConflict(
+                    "assignment grant identifier, tag, or verifier is already in use"
+                ) from exc
+            row = self._assignment_grant_row(
+                connection, assignment_grant_id=assignment_grant_id
+            )
+        return self._assignment_grant(row)
+
+    def redeem_assignment_claim(
+        self,
+        *,
+        claim_tag: str,
+        claim_code_hmac: str,
+        course_key: str,
+        device_code_hash: str,
+        acceptance_id: str,
+        at: Optional[DatetimeValue] = None,
+    ) -> Tuple[AssignmentGrant, DeviceAuthorization, AssignmentAcceptance]:
+        """Consume one claim and atomically approve an existing pending device."""
+
+        claim_tag = _claim_tag(claim_tag)
+        claim_code_hmac = _verifier(claim_code_hmac, "claim_code_hmac")
+        course_key = _required_text(course_key, "course_key")
+        device_code_hash = _verifier(device_code_hash, "device_code_hash")
+        acceptance_id = _required_text(acceptance_id, "acceptance_id")
+        now = utc_iso(at)
+
+        denied = False
+        with self._write() as connection:
+            device = connection.execute(
+                "SELECT * FROM device_authorizations "
+                "WHERE device_code_hash = ? AND course_key = ?",
+                (device_code_hash, course_key),
+            ).fetchone()
+            if device is None or device["state"] != DeviceAuthorizationState.PENDING.value:
+                denied = True
+            elif device["expires_at"] <= now:
+                connection.execute(
+                    "UPDATE device_authorizations "
+                    "SET state = 'expired', updated_at = ? "
+                    "WHERE authorization_id = ? AND state = 'pending'",
+                    (now, device["authorization_id"]),
+                )
+                denied = True
+
+            # The short tag is only an index hint.  Requiring the full HMAC in
+            # the lookup prevents someone who saw one four-character group
+            # from exhausting or revoking another student's live grant.
+            row = connection.execute(
+                """
+                SELECT g.*, e.student_id, e.course_key,
+                       e.active AS enrollment_active, p.active AS student_active
+                FROM platform_assignment_grants AS g
+                JOIN platform_enrollments AS e ON e.id = g.enrollment_id
+                JOIN platform_students AS p ON p.id = e.student_id
+                WHERE g.claim_tag = ? AND g.claim_code_hmac = ?
+                  AND e.course_key = ?
+                """,
+                (claim_tag, claim_code_hmac, course_key),
+            ).fetchone()
+            if row is None:
+                denied = True
+            elif row["state"] != AssignmentClaimState.ISSUED.value:
+                denied = True
+            elif row["expires_at"] <= now:
+                connection.execute(
+                    "UPDATE platform_assignment_grants "
+                    "SET state = 'expired', updated_at = ? "
+                    "WHERE assignment_grant_id = ? AND state = 'issued'",
+                    (now, row["assignment_grant_id"]),
+                )
+                denied = True
+            elif (
+                not bool(row["student_active"])
+                or not bool(row["enrollment_active"])
+            ):
+                connection.execute(
+                    "UPDATE platform_assignment_grants "
+                    "SET state = 'revoked', revoked_at = ?, updated_at = ? "
+                    "WHERE assignment_grant_id = ? AND state = 'issued'",
+                    (now, now, row["assignment_grant_id"]),
+                )
+                denied = True
+            else:
+                try:
+                    current_mode = self._available_assignment_delivery_mode(
+                        connection,
+                        enrollment_id=int(row["enrollment_id"]),
+                        student_id=int(row["student_id"]),
+                        course_key=course_key,
+                        assignment_id=str(row["assignment_id"]),
+                        now=now,
+                    )
+                except PlatformAccessDenied:
+                    current_mode = ""
+                if current_mode != row["delivery_mode"]:
+                    connection.execute(
+                        "UPDATE platform_assignment_grants "
+                        "SET state = 'revoked', revoked_at = ?, updated_at = ? "
+                        "WHERE assignment_grant_id = ? AND state = 'issued'",
+                        (now, now, row["assignment_grant_id"]),
+                    )
+                    denied = True
+                elif device is None or denied:
+                    denied = True
+                else:
+                    try:
+                        approved = connection.execute(
+                            "UPDATE device_authorizations "
+                            "SET state = 'approved', student_id = ?, "
+                            "approved_at = ?, updated_at = ? "
+                            "WHERE authorization_id = ? AND course_key = ? "
+                            "AND state = 'pending' AND expires_at > ?",
+                            (
+                                row["student_id"],
+                                now,
+                                now,
+                                device["authorization_id"],
+                                course_key,
+                                now,
+                            ),
+                        ).rowcount
+                        consumed = connection.execute(
+                            "UPDATE platform_assignment_grants "
+                            "SET state = 'consumed', consumed_at = ?, updated_at = ?, "
+                            "device_authorization_id = ? "
+                            "WHERE assignment_grant_id = ? AND state = 'issued' "
+                            "AND expires_at > ?",
+                            (
+                                now,
+                                now,
+                                device["authorization_id"],
+                                row["assignment_grant_id"],
+                                now,
+                            ),
+                        ).rowcount
+                        if consumed != 1 or approved != 1:
+                            raise PlatformConflict(
+                                "assignment claim could not be consumed atomically"
+                            )
+                        connection.execute(
+                            """
+                            INSERT INTO platform_assignment_acceptances (
+                                acceptance_id, assignment_grant_id, enrollment_id,
+                                assignment_id, delivery_mode,
+                                device_authorization_id, accepted_at
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            (
+                                acceptance_id,
+                                row["assignment_grant_id"],
+                                row["enrollment_id"],
+                                row["assignment_id"],
+                                row["delivery_mode"],
+                                device["authorization_id"],
+                                now,
+                            ),
+                        )
+                    except sqlite3.IntegrityError as exc:
+                        raise PlatformConflict(
+                            "assignment acceptance identifiers are already in use"
+                        ) from exc
+                    grant_result = self._assignment_grant_row(
+                        connection,
+                        assignment_grant_id=str(row["assignment_grant_id"]),
+                    )
+                    device_result = connection.execute(
+                        "SELECT * FROM device_authorizations "
+                        "WHERE authorization_id = ?",
+                        (device["authorization_id"],),
+                    ).fetchone()
+                    acceptance_result = self._assignment_acceptance_row(
+                        connection, acceptance_id=acceptance_id
+                    )
+        if denied:
+            raise PlatformAccessDenied("assignment claim could not be completed")
+        return (
+            self._assignment_grant(grant_result),
+            self._device_authorization(device_result),
+            self._assignment_acceptance(acceptance_result),
+        )
+
+    def get_assignment_acceptance(
+        self, acceptance_id: str, *, course_key: str
+    ) -> AssignmentAcceptance:
+        acceptance_id = _required_text(acceptance_id, "acceptance_id")
+        course_key = _required_text(course_key, "course_key")
+        with self._connection() as connection:
+            row = connection.execute(
+                """
+                SELECT a.*, e.student_id, e.course_key
+                FROM platform_assignment_acceptances AS a
+                JOIN platform_enrollments AS e ON e.id = a.enrollment_id
+                WHERE a.acceptance_id = ? AND e.course_key = ?
+                """,
+                (acceptance_id, course_key),
+            ).fetchone()
+        if row is None:
+            raise PlatformNotFound("assignment acceptance was not found")
+        return self._assignment_acceptance(row)
+
+    def get_session_assignment_scope(
+        self, *, session_id: str, course_key: str
+    ) -> Optional[Tuple[str, str]]:
+        """Return the assignment scope attached to a claim-created session.
+
+        Ordinary OAuth/device sessions have no acceptance row and therefore
+        remain course-scoped for backwards compatibility.  A device approved
+        by an assignment claim has exactly one immutable acceptance and is
+        restricted to that delivery mode and assignment identifier.
+        """
+
+        session_id = _required_text(session_id, "session_id")
+        course_key = _required_text(course_key, "course_key")
+        with self._connection() as connection:
+            session = connection.execute(
+                "SELECT device_authorization_id FROM platform_sessions "
+                "WHERE session_id = ? AND course_key = ?",
+                (session_id, course_key),
+            ).fetchone()
+            if session is None:
+                raise PlatformNotFound("session was not found")
+            row = connection.execute(
+                "SELECT delivery_mode, assignment_id "
+                "FROM platform_assignment_acceptances "
+                "WHERE device_authorization_id = ?",
+                (session["device_authorization_id"],),
+            ).fetchone()
+        if row is None:
+            return None
+        return str(row["delivery_mode"]), str(row["assignment_id"])
+
+    def list_course_summaries(self, *, limit: int = 1_000) -> List[Mapping[str, Any]]:
+        """Return credential-free operational counts for every known course."""
+
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 10_000:
+            raise ValueError("limit must be an integer between 1 and 10000")
+        with self._connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT course_key FROM platform_enrollments
+                UNION SELECT course_key FROM platform_assignments
+                UNION SELECT course_key FROM bundle_assignment_releases
+                ORDER BY course_key LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+            return [
+                self._course_management_summary(connection, str(row["course_key"]))
+                for row in rows
+            ]
+
+    def get_course_summary(self, *, course_key: str) -> Mapping[str, Any]:
+        course_key = _required_text(course_key, "course_key")
+        with self._connection() as connection:
+            exists = connection.execute(
+                """
+                SELECT 1 FROM platform_enrollments WHERE course_key = ?
+                UNION SELECT 1 FROM platform_assignments WHERE course_key = ?
+                UNION SELECT 1 FROM bundle_assignment_releases WHERE course_key = ?
+                LIMIT 1
+                """,
+                (course_key, course_key, course_key),
+            ).fetchone()
+            if exists is None:
+                raise PlatformNotFound("course was not found")
+            return self._course_management_summary(connection, course_key)
+
+    def list_course_student_summaries(
+        self, *, course_key: str, limit: int = 10_000
+    ) -> List[Mapping[str, Any]]:
+        """List students in one course without returning credential material."""
+
+        course_key = _required_text(course_key, "course_key")
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 50_000:
+            raise ValueError("limit must be an integer between 1 and 50000")
+        with self._connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT p.id
+                FROM platform_enrollments AS e
+                JOIN platform_students AS p ON p.id = e.student_id
+                WHERE e.course_key = ?
+                ORDER BY p.student_key, p.id LIMIT ?
+                """,
+                (course_key, limit),
+            ).fetchall()
+            return [
+                self._student_management_summary(
+                    connection, course_key=course_key, student_id=int(row["id"])
+                )
+                for row in rows
+            ]
+
+    def get_course_student_summary(
+        self, *, course_key: str, student_key: str
+    ) -> Mapping[str, Any]:
+        course_key = _required_text(course_key, "course_key")
+        student_key = _required_text(student_key, "student_key")
+        with self._connection() as connection:
+            row = connection.execute(
+                """
+                SELECT p.id
+                FROM platform_enrollments AS e
+                JOIN platform_students AS p ON p.id = e.student_id
+                WHERE e.course_key = ? AND p.student_key = ?
+                """,
+                (course_key, student_key),
+            ).fetchone()
+            if row is None:
+                raise PlatformNotFound("student is not enrolled in this course")
+            return self._student_management_summary(
+                connection, course_key=course_key, student_id=int(row["id"])
+            )
+
+    def list_course_assignment_summaries(
+        self, *, course_key: str, limit: int = 10_000
+    ) -> List[Mapping[str, Any]]:
+        course_key = _required_text(course_key, "course_key")
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 50_000:
+            raise ValueError("limit must be an integer between 1 and 50000")
+        with self._connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT assignment_id, assignment_key, release_id, 'git' AS delivery_mode,
+                       active, ready
+                FROM platform_assignments WHERE course_key = ?
+                UNION ALL
+                SELECT assignment_id, assignment_key, release_id, 'bundle' AS delivery_mode,
+                       active, ready
+                FROM bundle_assignment_releases WHERE course_key = ?
+                ORDER BY assignment_key, release_id, assignment_id LIMIT ?
+                """,
+                (course_key, course_key, limit),
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+    @staticmethod
+    def _course_management_summary(
+        connection: sqlite3.Connection, course_key: str
+    ) -> Mapping[str, Any]:
+        counts = connection.execute(
+            """
+            SELECT
+              (SELECT COUNT(*) FROM platform_enrollments WHERE course_key = ?) AS enrolled_students,
+              (SELECT COUNT(*) FROM platform_enrollments AS e
+                 JOIN platform_students AS p ON p.id = e.student_id
+                 WHERE e.course_key = ? AND e.active = 1 AND p.active = 1) AS active_students,
+              ((SELECT COUNT(*) FROM platform_assignments WHERE course_key = ?)
+               + (SELECT COUNT(*) FROM bundle_assignment_releases WHERE course_key = ?)) AS assignments,
+              (SELECT COUNT(*) FROM platform_assignment_acceptances AS a
+                 JOIN platform_enrollments AS e ON e.id = a.enrollment_id
+                 WHERE e.course_key = ?) AS acceptances,
+              ((SELECT COUNT(*) FROM submission_requests AS r
+                  JOIN platform_assignments AS a ON a.assignment_id = r.assignment_id
+                  WHERE a.course_key = ?)
+               + (SELECT COUNT(*) FROM bundle_submission_requests AS r
+                  JOIN bundle_assignment_releases AS a ON a.assignment_id = r.assignment_id
+                  WHERE a.course_key = ?)) AS submissions
+            """,
+            (course_key,) * 7,
+        ).fetchone()
+        return {"course_key": course_key, **dict(counts)}
+
+    @staticmethod
+    def _student_management_summary(
+        connection: sqlite3.Connection, *, course_key: str, student_id: int
+    ) -> Mapping[str, Any]:
+        row = connection.execute(
+            """
+            SELECT p.student_key, p.identity_kind, p.github_login,
+                   p.active AS student_active, e.active AS enrollment_active,
+                   CASE WHEN pw.enrollment_id IS NULL THEN 0 ELSE 1 END AS password_configured,
+                   pw.locked_until,
+                   ((SELECT COUNT(*) FROM platform_assignments AS a
+                       WHERE a.course_key = e.course_key AND a.student_id = p.id)
+                    + (SELECT COUNT(*) FROM bundle_assignment_releases AS a
+                       WHERE a.course_key = e.course_key)) AS assignments,
+                   (SELECT COUNT(*) FROM platform_assignment_acceptances AS a
+                       WHERE a.enrollment_id = e.id) AS acceptances,
+                   (SELECT COUNT(*) FROM bundle_download_events AS d
+                       JOIN bundle_assignment_releases AS a
+                         ON a.assignment_id = d.assignment_id
+                       WHERE d.student_id = p.id AND a.course_key = e.course_key) AS downloads,
+                   ((SELECT COUNT(*) FROM submission_requests AS r
+                       JOIN platform_assignments AS a ON a.assignment_id = r.assignment_id
+                       WHERE r.student_id = p.id AND a.course_key = e.course_key)
+                    + (SELECT COUNT(*) FROM bundle_submission_requests AS r
+                       JOIN bundle_assignment_releases AS a ON a.assignment_id = r.assignment_id
+                       WHERE r.student_id = p.id AND a.course_key = e.course_key)) AS submissions
+            FROM platform_enrollments AS e
+            JOIN platform_students AS p ON p.id = e.student_id
+            LEFT JOIN platform_student_passwords AS pw ON pw.enrollment_id = e.id
+            WHERE e.course_key = ? AND p.id = ?
+            """,
+            (course_key, student_id),
+        ).fetchone()
+        if row is None:
+            raise PlatformNotFound("student is not enrolled in this course")
+        return {
+            "student_key": row["student_key"],
+            "course_key": course_key,
+            "identity_kind": row["identity_kind"],
+            "github_login": (
+                row["github_login"]
+                if row["identity_kind"] == StudentIdentityKind.GITHUB.value
+                else None
+            ),
+            "active": bool(row["student_active"] and row["enrollment_active"]),
+            "password_configured": bool(row["password_configured"]),
+            "password_locked_until": row["locked_until"],
+            "assignments": int(row["assignments"]),
+            "acceptances": int(row["acceptances"]),
+            "downloads": int(row["downloads"]),
+            "submissions": int(row["submissions"]),
+        }
 
     # Student activation credentials ---------------------------------
 
@@ -2090,6 +2988,16 @@ class PlatformStateStore:
                   )
                   AND NOT EXISTS (
                       SELECT 1 FROM platform_student_activations AS a
+                      WHERE a.device_authorization_id =
+                            device_authorizations.authorization_id
+                  )
+                  AND NOT EXISTS (
+                      SELECT 1 FROM platform_assignment_grants AS g
+                      WHERE g.device_authorization_id =
+                            device_authorizations.authorization_id
+                  )
+                  AND NOT EXISTS (
+                      SELECT 1 FROM platform_assignment_acceptances AS a
                       WHERE a.device_authorization_id =
                             device_authorizations.authorization_id
                   )
@@ -5507,6 +6415,15 @@ class PlatformStateStore:
                     FROM bundle_submission_requests
                     GROUP BY student_id, assignment_id
                 ),
+                acceptance_summary AS (
+                    SELECT e.student_id, a.assignment_id,
+                           COUNT(*) AS acceptance_count,
+                           MAX(a.accepted_at) AS latest_claim_accepted_at
+                    FROM platform_assignment_acceptances AS a
+                    JOIN platform_enrollments AS e ON e.id = a.enrollment_id
+                    WHERE a.delivery_mode = 'bundle'
+                    GROUP BY e.student_id, a.assignment_id
+                ),
                 latest_submission AS (
                     SELECT r.*
                     FROM bundle_submission_requests AS r
@@ -5530,6 +6447,8 @@ class PlatformStateStore:
                     COALESCE(d.download_count, 0) AS download_count,
                     d.first_downloaded_at,
                     d.last_downloaded_at,
+                    COALESCE(accepted.acceptance_count, 0) AS acceptance_count,
+                    accepted.latest_claim_accepted_at,
                     COALESCE(s.submission_count, 0) AS submission_count,
                     latest.submission_id AS latest_submission_id,
                     latest.state AS latest_state,
@@ -5546,6 +6465,9 @@ class PlatformStateStore:
                   ON d.student_id = p.id AND d.assignment_id = a.assignment_id
                 LEFT JOIN submission_summary AS s
                   ON s.student_id = p.id AND s.assignment_id = a.assignment_id
+                LEFT JOIN acceptance_summary AS accepted
+                  ON accepted.student_id = p.id
+                 AND accepted.assignment_id = a.assignment_id
                 LEFT JOIN latest_submission AS latest
                   ON latest.student_id = p.id
                  AND latest.assignment_id = a.assignment_id
@@ -5641,6 +6563,112 @@ class PlatformStateStore:
         ).fetchone()
 
     @staticmethod
+    def _student_password_row(
+        connection: sqlite3.Connection,
+        *,
+        enrollment_id: int,
+        required: bool = True,
+    ) -> Optional[sqlite3.Row]:
+        row = connection.execute(
+            """
+            SELECT c.*, e.student_id, e.course_key, p.student_key
+            FROM platform_student_passwords AS c
+            JOIN platform_enrollments AS e ON e.id = c.enrollment_id
+            JOIN platform_students AS p ON p.id = e.student_id
+            WHERE c.enrollment_id = ?
+            """,
+            (enrollment_id,),
+        ).fetchone()
+        if row is None and required:
+            raise PlatformNotFound("student password credential was not found")
+        return row
+
+    @staticmethod
+    def _assignment_grant_row(
+        connection: sqlite3.Connection,
+        *,
+        assignment_grant_id: str,
+    ) -> sqlite3.Row:
+        row = connection.execute(
+            """
+            SELECT g.*, e.student_id, e.course_key
+            FROM platform_assignment_grants AS g
+            JOIN platform_enrollments AS e ON e.id = g.enrollment_id
+            WHERE g.assignment_grant_id = ?
+            """,
+            (assignment_grant_id,),
+        ).fetchone()
+        if row is None:
+            raise PlatformNotFound("assignment grant was not found")
+        return row
+
+    @staticmethod
+    def _assignment_acceptance_row(
+        connection: sqlite3.Connection,
+        *,
+        acceptance_id: str,
+    ) -> sqlite3.Row:
+        row = connection.execute(
+            """
+            SELECT a.*, e.student_id, e.course_key
+            FROM platform_assignment_acceptances AS a
+            JOIN platform_enrollments AS e ON e.id = a.enrollment_id
+            WHERE a.acceptance_id = ?
+            """,
+            (acceptance_id,),
+        ).fetchone()
+        if row is None:
+            raise PlatformNotFound("assignment acceptance was not found")
+        return row
+
+    @staticmethod
+    def _available_assignment_delivery_mode(
+        connection: sqlite3.Connection,
+        *,
+        enrollment_id: int,
+        student_id: int,
+        course_key: str,
+        assignment_id: str,
+        now: str,
+    ) -> str:
+        modes: list[str] = []
+        bundle = connection.execute(
+            """
+            SELECT 1 FROM bundle_assignment_releases
+            WHERE assignment_id = ? AND course_key = ?
+              AND active = 1 AND ready = 1
+              AND (opens_at IS NULL OR opens_at <= ?)
+              AND (due_at IS NULL OR due_at > ?)
+            """,
+            (assignment_id, course_key, now, now),
+        ).fetchone()
+        if bundle is not None:
+            modes.append("bundle")
+        git = connection.execute(
+            """
+            SELECT 1 FROM platform_assignments
+            WHERE assignment_id = ? AND enrollment_id = ?
+              AND student_id = ? AND course_key = ?
+              AND active = 1 AND ready = 1
+              AND (opens_at IS NULL OR opens_at <= ?)
+              AND (due_at IS NULL OR due_at > ?)
+            """,
+            (
+                assignment_id,
+                enrollment_id,
+                student_id,
+                course_key,
+                now,
+                now,
+            ),
+        ).fetchone()
+        if git is not None:
+            modes.append("git")
+        if len(modes) != 1:
+            raise PlatformAccessDenied("assignment is unavailable or ambiguous")
+        return modes[0]
+
+    @staticmethod
     def _prune_auth_history(
         connection: sqlite3.Connection,
         *,
@@ -5688,10 +6716,16 @@ class PlatformStateStore:
                 "AND NOT EXISTS (SELECT 1 FROM platform_sessions "
                 "WHERE device_authorization_id = ?) "
                 "AND NOT EXISTS (SELECT 1 FROM platform_student_activations "
+                "WHERE device_authorization_id = ?) "
+                "AND NOT EXISTS (SELECT 1 FROM platform_assignment_grants "
+                "WHERE device_authorization_id = ?) "
+                "AND NOT EXISTS (SELECT 1 FROM platform_assignment_acceptances "
                 "WHERE device_authorization_id = ?)",
                 (
                     row["device_authorization_id"],
                     course_key,
+                    row["device_authorization_id"],
+                    row["device_authorization_id"],
                     row["device_authorization_id"],
                     row["device_authorization_id"],
                 ),
@@ -5743,6 +6777,53 @@ class PlatformStateStore:
             consumed_at=row["consumed_at"],
             revoked_at=row["revoked_at"],
             device_authorization_id=row["device_authorization_id"],
+        )
+
+    @staticmethod
+    def _student_password(row: sqlite3.Row) -> StudentPasswordCredential:
+        return StudentPasswordCredential(
+            enrollment_id=int(row["enrollment_id"]),
+            student_id=int(row["student_id"]),
+            student_key=row["student_key"],
+            course_key=row["course_key"],
+            password_hash=row["password_hash"],
+            failed_attempts=int(row["failed_attempts"]),
+            locked_until=row["locked_until"],
+            updated_at=row["updated_at"],
+        )
+
+    @staticmethod
+    def _assignment_grant(row: sqlite3.Row) -> AssignmentGrant:
+        return AssignmentGrant(
+            assignment_grant_id=row["assignment_grant_id"],
+            enrollment_id=int(row["enrollment_id"]),
+            student_id=int(row["student_id"]),
+            course_key=row["course_key"],
+            assignment_id=row["assignment_id"],
+            delivery_mode=row["delivery_mode"],
+            claim_tag=row["claim_tag"],
+            state=AssignmentClaimState(row["state"]),
+            failed_attempts=int(row["failed_attempts"]),
+            expires_at=row["expires_at"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+            consumed_at=row["consumed_at"],
+            revoked_at=row["revoked_at"],
+            device_authorization_id=row["device_authorization_id"],
+        )
+
+    @staticmethod
+    def _assignment_acceptance(row: sqlite3.Row) -> AssignmentAcceptance:
+        return AssignmentAcceptance(
+            acceptance_id=row["acceptance_id"],
+            assignment_grant_id=row["assignment_grant_id"],
+            enrollment_id=int(row["enrollment_id"]),
+            student_id=int(row["student_id"]),
+            course_key=row["course_key"],
+            assignment_id=row["assignment_id"],
+            delivery_mode=row["delivery_mode"],
+            device_authorization_id=row["device_authorization_id"],
+            accepted_at=row["accepted_at"],
         )
 
     @staticmethod
@@ -5950,6 +7031,8 @@ class PlatformStateStore:
             download_count=int(row["download_count"]),
             first_downloaded_at=row["first_downloaded_at"],
             last_downloaded_at=row["last_downloaded_at"],
+            acceptance_count=int(row["acceptance_count"]),
+            latest_claim_accepted_at=row["latest_claim_accepted_at"],
             submission_count=int(row["submission_count"]),
             latest_submission_id=row["latest_submission_id"],
             latest_state=(

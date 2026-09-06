@@ -12,6 +12,7 @@ The facade is duck typed and may implement these methods::
 
     create_device_authorization(payload, base_url)
     exchange_device_authorization(payload)
+    redeem_assignment_claim(payload)
     refresh_tokens(payload)
     revoke_current(access_token)
     get_me(access_token)
@@ -27,7 +28,9 @@ The facade is duck typed and may implement these methods::
 
 Optional browser endpoints use ``activate_page(query)``,
 ``github_start(query)``, ``github_callback(query)``, and
-``approve_activation(form, cookies)``.  A method may return an
+``approve_activation(form, cookies)``. Password-backed assignment claims use
+``assignment_claim_page(query)`` and ``issue_assignment_claim(form, cookies)``.
+A method may return an
 :class:`HTTPResult`, ``(status, body)``, ``(status, body, headers)``, or a body
 mapping.  It may raise :class:`PlatformHTTPError`.  Application exceptions from
 another module can avoid importing this transport by exposing the safe
@@ -498,6 +501,11 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
                 frozenset({"POST"}),
                 "exchange_device_authorization",
             ),
+            "/v1/assignment-claims/redeem": (
+                "redeem_assignment_claim",
+                frozenset({"POST"}),
+                "redeem_assignment_claim",
+            ),
             "/v1/tokens/refresh": (
                 "refresh_tokens",
                 frozenset({"POST"}),
@@ -544,6 +552,16 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
                 frozenset({"POST"}),
                 "approve_activation",
             ),
+            "/assignment-claim": (
+                "assignment_claim_page",
+                frozenset({"GET"}),
+                "assignment_claim_page",
+            ),
+            "/assignment-claim/issue": (
+                "issue_assignment_claim",
+                frozenset({"POST"}),
+                "issue_assignment_claim",
+            ),
             "/auth/github/start": (
                 "github_start",
                 frozenset({"GET"}),
@@ -561,6 +579,8 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
             if optional_method in {
                 "activate_page",
                 "approve_activation",
+                "assignment_claim_page",
+                "issue_assignment_claim",
                 "github_start",
                 "github_callback",
                 "instructor_dashboard_page",
@@ -570,6 +590,18 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
             return route, {}, allowed
 
         parts = path.split("/")
+        if (
+            len(parts) == 3
+            and parts[:2] == ["", "assignment-claim"]
+            and callable(getattr(facade, "assignment_claim_page", None))
+        ):
+            identifier = self._identifier(parts[2])
+            if identifier is not None:
+                return (
+                    "assignment_claim_page_path",
+                    {"assignment_id": identifier},
+                    frozenset({"GET"}),
+                )
         if len(parts) == 5 and parts[:3] == ["", "v1", "assignments"]:
             identifier = self._identifier(parts[3])
             if identifier is not None and parts[4] == "repository":
@@ -654,6 +686,8 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
             )
         if route == "device_token":
             return facade.exchange_device_authorization(self._read_json_object()), 200
+        if route == "redeem_assignment_claim":
+            return facade.redeem_assignment_claim(self._read_json_object()), 200
         if route == "refresh_tokens":
             return facade.refresh_tokens(self._read_json_object()), 200
         if route == "revoke_current":
@@ -752,6 +786,20 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
             form = self._read_form()
             cookies = self._cookies()
             return facade.approve_activation(form, cookies), 200
+        if route == "assignment_claim_page":
+            self._ensure_no_body()
+            return facade.assignment_claim_page(query), 200
+        if route == "assignment_claim_page_path":
+            self._ensure_no_body()
+            if query:
+                raise PlatformHTTPError(
+                    400, "invalid_request", "Unexpected query parameter"
+                )
+            return facade.assignment_claim_page(parameters), 200
+        if route == "issue_assignment_claim":
+            form = self._read_form()
+            cookies = self._cookies()
+            return facade.issue_assignment_claim(form, cookies), 200
         raise PlatformHTTPError(404, "not_found", "Resource not found")
 
     def _invoke_bundle_submission(

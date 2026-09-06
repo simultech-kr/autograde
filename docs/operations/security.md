@@ -2,8 +2,9 @@
 
 ## Local 파일럿 안전 경계
 
-현재 direct-bundle 파일럿은 local config CSV와 roster CSV, 기본 loopback HTTP,
-`grading_runtime=pilot-local`을 사용합니다. 별도 신뢰 LAN 기능 시험은 명시적
+현재 direct-bundle 파일럿은 local config CSV와 roster CSV, 기본 loopback HTTP 또는
+loopback listener 앞의 HTTPS reverse proxy, `grading_runtime=pilot-local`을 사용합니다.
+별도 신뢰 LAN 기능 시험은 명시적
 `external_access_mode=insecure-http` profile로만 허용합니다. 환경변수, GitHub credential,
 Docker/Podman과 image registry는 파일럿 실행에 사용하지 않습니다.
 
@@ -15,12 +16,14 @@ program을 실행하면 그 program도 host filesystem, 현재 OS 사용자 권�
 이 코드·데이터 제한을 완화하지 않습니다.
 
 Pilot config에는 공개 가능한 course/path/service endpoint/network mode/runtime 값만 저장하고
-raw token, 활성화 코드, instructor password나 학생 레코드를 넣지 않습니다. Roster는 별도
+raw token, 비밀번호·비밀번호 hash, 수령/활성화 코드, instructor password나 학생 레코드를
+넣지 않습니다. Roster는 별도
 CSV로 관리하고 필요한 `student_key,active`만 수집합니다. Environment file과 shell profile을
 설정 source로 사용하지 않습니다.
 
-아래 GitHub service 인증, TLS reverse proxy와 container 격리 항목은 해당 기능을 선택하는
-production 배포 기준입니다. Local 파일럿의 완료 조건이 아닙니다.
+아래 GitHub service 인증과 container 격리 항목은 해당 기능을 선택하는 production 배포
+기준입니다. 외부 QR 파일럿은 TLS reverse proxy를 요구하지만 이것이 `pilot-local` grader를
+production-safe하게 만들지는 않습니다.
 
 ## Production: GitHub service 인증
 
@@ -39,9 +42,32 @@ production 배포 기준입니다. Local 파일럿의 완료 조건이 아닙니
 
 ## 학생 웹·Extension 인증
 
-- 학교 SSO 대신 active course enrollment에 결합된 학생별 1회용 활성화 코드가
-  기본 인증 경로입니다. GitHub numeric user ID/login은 repository 배정·표시
-  metadata이며 활성화 코드 경로의 인증 근거가 아닙니다.
+- 권장 흐름은 active course enrollment별 **Autograde 전용 비밀번호**로 HTTPS 과제 page에서
+  10분·1회용 수령 코드를 발급하는 방식입니다. 학교 포털 비밀번호를 수집·재사용하지 않습니다.
+  GitHub numeric user ID/login은 repository 배정·표시 metadata이며 인증 근거가 아닙니다.
+- 전용 비밀번호는 15자 이상, UTF-8 256 bytes 이하로 받아 NFC normalize 후 random salt를
+  사용하는 versioned scrypt hash로만 저장합니다. CLI는 terminal에서 두 번 입력하거나
+  owner-only mode `0600` 파일만 읽으며 argv와 roster CSV로 받지 않습니다.
+- 비밀번호 확인은 계정 존재 여부와 무관하게 같은 scrypt 경로를 실행하고 공개 오류를
+  통일합니다. Enrollment별 5회 실패 잠금과 process별 4개 password-hash 동시성 상한을
+  적용하며, reverse proxy의 IP/account rate limit도 별도로 둡니다.
+- QR은 HTTPS origin의 `/assignment-claim/{assignment_id}` 공개 path만 포함합니다. Server가
+  local에서 생성하며 query/fragment, 학생 정보와 secret을 포함하지 않습니다.
+- 수령 코드는 약 60-bit entropy의 `AK1-XXXX-XXXX-XXXX` 형식으로 원문을 한 번만 표시합니다.
+  DB에는 목적 분리 HMAC과 식별용 짧은 tag만 저장하고, 학생·교과목·과제와 pending device를
+  한 transaction에서 결합해 소비합니다. 전체 HMAC exact lookup을 사용하여 앞 4자만 같은
+  오입력이 다른 학생의 grant 상태를 바꾸지 않게 하고, 10분 만료와 1회 사용을 적용합니다.
+- 현재 MVP는 만료·소비·폐기된 assignment grant와 acceptance audit 행을 자동 GC하지 않습니다.
+  단기 파일럿에서는 data root 용량을 관찰하고 종료 시 교과목 보존 정책에 따라 data root 전체를
+  보존하거나 폐기합니다. 과목별 폐기가 필요하면 data root도 과목별로 분리하고, 여러 과목이
+  공유한다면 모든 과목의 보존 기한이 끝날 때까지 root를 폐기하지 않습니다. 연결된 행을
+  임의로 부분 삭제하지 않으며, 장기 운영 전 명시적 retention/GC와 복구 시험을 추가합니다.
+- 수령 코드로 생성한 session은 해당 delivery mode/assignment로 제한합니다. Extension은
+  코드를 설정·SecretStorage·workspace state에 저장하지 않고 network 요청 뒤 local reference도
+  해제합니다. Access/refresh token 역시 Extension Host 메모리 전용입니다.
+- 기존 학생별 1회용 활성화 코드는 loopback·장애 대응용 호환 login 경로입니다.
+- 학생 identity 또는 course enrollment를 비활성화하거나 identity를 바꾸면 전용 비밀번호
+  hash도 삭제합니다. 재활성화만으로 과거 비밀번호가 되살아나지 않으며 다시 설정해야 합니다.
 - 운영자는 `auth issue STUDENT_KEY --output PATH`로 덮어쓰지 않는 mode `0600`
   파일에 코드를 발급합니다. 자동화에서 보호된 stdout이 필요한 경우에만
   `--show-code`를 명시합니다. 코드는 인증된 LMS 등의 학생별 개별 채널로
@@ -93,7 +119,8 @@ production 배포 기준입니다. Local 파일럿의 완료 조건이 아닙니
   access 인증, refresh rotation, session 목록·폐기, assignment/submission/result 소유 조회는
   모두 명시적으로 같은 course를 필터링하고 현재 enrollment를 다시 확인합니다. 한 학생이
   여러 과목에 등록되어도 한 과목에서 발급한 credential은 다른 과목 API에서 사용할 수 없습니다.
-- Extension은 서비스 base URL만 machine scope VS Code 설정에 유지합니다. Access/refresh token과
+- Extension은 서비스 base URL만 machine scope VS Code 설정에 유지합니다. 수령 코드,
+  access/refresh token과
   audience는 Extension Host 메모리 전용이며 SecretStorage, `.vscode`, workspace state, `.env`,
   Git config, command line과 log에 저장하지 않습니다. 시작 시 구버전 SecretStorage token을
   삭제하고, 창 종료·Window Reload·Extension Host 재시작·WSL 재연결 뒤에는 다시 로그인합니다.
@@ -164,9 +191,9 @@ server에는 production용 proxy IP/account rate limit이 없고 device별 입�
 회수를 수행합니다. 전체 절차는
 [신뢰 LAN 외부 접속 파일럿](trusted-lan-pilot.md)을 따릅니다.
 
-중앙 server, 공용·개방 LAN 또는 인터넷 주소가 필요하면 이 예외를 사용하지 않고
-HTTPS·server identity·운영 인증, rate limit과 격리된 worker를 갖춘 별도 배포 검토로
-전환합니다.
+중앙 server, 공용·개방 LAN 또는 인터넷 주소가 필요하면 이 예외를 사용하지 않고 built-in
+server는 loopback에 둔 채 HTTPS reverse proxy·server identity·운영 인증과 rate limit을
+적용합니다. 실제 학생 코드를 실행하려면 별도로 격리된 worker까지 갖춘 배포 검토로 전환합니다.
 
 상세 흐름은 [학생 플랫폼 아키텍처](../architecture/student-platform.md),
 [ADR 0003](../../design/adr/0003-wsl-extension-device-authorization.md)와 이를 공용 좌석 정책으로

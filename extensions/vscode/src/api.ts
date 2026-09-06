@@ -1,5 +1,7 @@
 import {
+  isInsecureHttpPilotUrl,
   normalizeAssignments,
+  normalizeClaimCode,
   normalizeGradeResult,
   normalizeServiceBaseUrl,
   normalizeSubmission,
@@ -7,6 +9,7 @@ import {
 import { shouldDiscardTokensAfterRefreshError } from "./authPolicy";
 import type {
   Assignment,
+  AssignmentClaim,
   DeviceAuthorization,
   GradeResult,
   SubmissionSummary,
@@ -539,7 +542,11 @@ export class AutogradeClient {
     private readonly retrySleep: (milliseconds: number) => Promise<void> = delay,
   ) {}
 
-  public createDeviceAuthorization(deviceName: string, extensionVersion: string): Promise<DeviceAuthorization> {
+  public createDeviceAuthorization(
+    deviceName: string,
+    extensionVersion: string,
+    signal?: AbortSignal,
+  ): Promise<DeviceAuthorization> {
     return this.transport.request<DeviceAuthorization>("/v1/device-authorizations", {
       method: "POST",
       body: JSON.stringify({
@@ -547,7 +554,7 @@ export class AutogradeClient {
         extension_version: extensionVersion,
         device_name: deviceName,
       }),
-    });
+    }, undefined, { signal });
   }
 
   public exchangeDeviceCode(deviceCode: string, signal?: AbortSignal): Promise<TokenResponse> {
@@ -555,6 +562,40 @@ export class AutogradeClient {
       method: "POST",
       body: JSON.stringify({ device_code: deviceCode }),
     }, undefined, { signal });
+  }
+
+  /**
+   * Redeem one opaque, single-use assignment claim code.
+   *
+   * This request is intentionally unauthenticated: the claim code approves an
+   * already-pending device authorization. Tokens are obtained separately from
+   * the existing bounded device-token exchange. The code is sent only in the
+   * JSON body so it cannot leak through a URL, referrer, or Authorization header.
+   */
+  public async redeemAssignmentClaim(
+    claimCode: string,
+    deviceCode: string,
+    signal?: AbortSignal,
+  ): Promise<AssignmentClaim> {
+    if (isInsecureHttpPilotUrl(this.transport.getBaseUrl())) {
+      throw new ApiError(
+        "과제 수령 코드는 HTTPS 서버에서만 사용할 수 있습니다.",
+        0,
+        "insecure_claim_redemption",
+      );
+    }
+    const normalizedClaimCode = normalizeClaimCode(claimCode);
+    if (!normalizedClaimCode) {
+      throw new ApiError("수령 코드 형식이 올바르지 않습니다.", 0, "invalid_claim_code");
+    }
+    const payload = await this.transport.request<unknown>("/v1/assignment-claims/redeem", {
+      method: "POST",
+      body: JSON.stringify({
+        claim_code: normalizedClaimCode,
+        device_code: deviceCode,
+      }),
+    }, undefined, { signal });
+    return normalizeAssignmentClaim(payload);
   }
 
   public async getAssignments(): Promise<Assignment[]> {
@@ -715,6 +756,31 @@ export class AutogradeClient {
       return this.transport.requestBytes(endpoint, init, accessToken, options);
     }
   }
+}
+
+function normalizeAssignmentClaim(payload: unknown): AssignmentClaim {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new ApiError("서비스가 유효하지 않은 수령 코드 교환 응답을 반환했습니다.", 0, "invalid_response");
+  }
+  const raw = payload as Record<string, unknown>;
+  const assignmentId = raw.assignment_id;
+  const courseKey = raw.course_key;
+  const deliveryMode = raw.delivery_mode;
+  const acceptanceId = raw.acceptance_id;
+  if (
+    typeof assignmentId !== "string" || !assignmentId ||
+    typeof courseKey !== "string" || !courseKey ||
+    typeof deliveryMode !== "string" || !deliveryMode ||
+    typeof acceptanceId !== "string" || !acceptanceId
+  ) {
+    throw new ApiError("서비스가 유효하지 않은 수령 코드 교환 응답을 반환했습니다.", 0, "invalid_response");
+  }
+  return {
+    assignmentId,
+    courseKey,
+    deliveryMode,
+    acceptanceId,
+  };
 }
 
 function validatedStarterEndpoint(

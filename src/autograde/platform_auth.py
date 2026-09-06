@@ -18,6 +18,7 @@ import secrets
 import stat
 import string
 import time
+import unicodedata
 from typing import Any, Mapping
 
 
@@ -35,7 +36,14 @@ class AuthSecretError(PlatformAuthError):
 
 _USER_CODE_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"
 _ACTIVATION_CODE_CHARACTERS = 26
+_ASSIGNMENT_CLAIM_CHARACTERS = 12
 _TOKEN_BYTES = 32
+_PASSWORD_SALT_BYTES = 16
+_PASSWORD_HASH_BYTES = 32
+_PASSWORD_SCRYPT_N = 1 << 14
+_PASSWORD_SCRYPT_R = 8
+_PASSWORD_SCRYPT_P = 1
+_PASSWORD_SCRYPT_MAXMEM = 64 * 1024 * 1024
 
 
 def create_or_load_auth_secret(path: str | Path) -> bytes:
@@ -177,6 +185,102 @@ def new_activation_code() -> str:
     )
     groups = [raw[index : index + 4] for index in range(0, len(raw), 4)]
     return "AG1-" + "-".join(groups)
+
+
+def new_assignment_claim_code() -> str:
+    """Return a short-lived, human-transcribable assignment claim secret."""
+
+    raw = "".join(
+        secrets.choice(_USER_CODE_ALPHABET)
+        for _ in range(_ASSIGNMENT_CLAIM_CHARACTERS)
+    )
+    return "AK1-" + "-".join(
+        raw[index : index + 4] for index in range(0, len(raw), 4)
+    )
+
+
+def hash_student_password(password: str, *, salt: bytes | None = None) -> str:
+    """Hash one dedicated Autograde password using a versioned scrypt format."""
+
+    password_bytes = _student_password_bytes(password, enforce_policy=True)
+    actual_salt = secrets.token_bytes(_PASSWORD_SALT_BYTES) if salt is None else salt
+    if not isinstance(actual_salt, bytes) or len(actual_salt) != _PASSWORD_SALT_BYTES:
+        raise ValueError("password salt must contain exactly 16 bytes")
+    digest = hashlib.scrypt(
+        password_bytes,
+        salt=actual_salt,
+        n=_PASSWORD_SCRYPT_N,
+        r=_PASSWORD_SCRYPT_R,
+        p=_PASSWORD_SCRYPT_P,
+        maxmem=_PASSWORD_SCRYPT_MAXMEM,
+        dklen=_PASSWORD_HASH_BYTES,
+    )
+    return "$".join(
+        (
+            "scrypt",
+            "v1",
+            str(_PASSWORD_SCRYPT_N),
+            str(_PASSWORD_SCRYPT_R),
+            str(_PASSWORD_SCRYPT_P),
+            _b64url(actual_salt),
+            _b64url(digest),
+        )
+    )
+
+
+def verify_student_password(password: str, encoded_hash: str) -> bool:
+    """Verify a password without returning early on malformed stored values."""
+
+    valid_format = True
+    try:
+        parts = encoded_hash.split("$")
+        if len(parts) != 7 or parts[:5] != [
+            "scrypt",
+            "v1",
+            str(_PASSWORD_SCRYPT_N),
+            str(_PASSWORD_SCRYPT_R),
+            str(_PASSWORD_SCRYPT_P),
+        ]:
+            raise ValueError("unsupported password hash")
+        salt = _b64url_decode(parts[5])
+        expected = _b64url_decode(parts[6])
+        if len(salt) != _PASSWORD_SALT_BYTES or len(expected) != _PASSWORD_HASH_BYTES:
+            raise ValueError("invalid password hash size")
+    except (AttributeError, ValueError, binascii.Error):
+        valid_format = False
+        salt = b"\0" * _PASSWORD_SALT_BYTES
+        expected = b"\0" * _PASSWORD_HASH_BYTES
+
+    try:
+        password_bytes = _student_password_bytes(password, enforce_policy=False)
+    except (TypeError, ValueError, UnicodeError):
+        valid_format = False
+        password_bytes = b"invalid-password"
+    actual = hashlib.scrypt(
+        password_bytes,
+        salt=salt,
+        n=_PASSWORD_SCRYPT_N,
+        r=_PASSWORD_SCRYPT_R,
+        p=_PASSWORD_SCRYPT_P,
+        maxmem=_PASSWORD_SCRYPT_MAXMEM,
+        dklen=_PASSWORD_HASH_BYTES,
+    )
+    matched = hmac.compare_digest(actual, expected)
+    return bool(valid_format and matched)
+
+
+def _student_password_bytes(password: str, *, enforce_policy: bool) -> bytes:
+    if not isinstance(password, str):
+        raise TypeError("password must be a string")
+    normalized = unicodedata.normalize("NFC", password)
+    if any(ord(character) < 32 or ord(character) == 127 for character in normalized):
+        raise ValueError("password must not contain control characters")
+    encoded = normalized.encode("utf-8", "strict")
+    if not encoded or len(encoded) > 256:
+        raise ValueError("password must contain between 1 and 256 UTF-8 bytes")
+    if enforce_policy and len(normalized) < 15:
+        raise ValueError("Autograde 전용 비밀번호는 15자 이상이어야 합니다")
+    return encoded
 
 
 def new_public_id(prefix: str) -> str:

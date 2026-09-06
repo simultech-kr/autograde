@@ -10,9 +10,12 @@ pilot config CSV ─┐
                   ├──> instructor CLI ──────> SQLite + private local artifacts
 roster CSV ───────┘             │
                                 ├── starter/assessment/data bundle 등록
-                                └── 학생 활성화 코드 발급
+                                ├── 교과목/학생 상태와 전용 비밀번호 관리
+                                └── 과제별 공개 QR 생성
 
-VS Code Extension ── HTTP (*) ───────> Auth + Assignment API
+학생 browser ── HTTPS QR page ──> password 확인 ──> 10분·1회용 수령 코드
+                                                        │
+VS Code Extension ── HTTP(S) (*) ───> Auth + Assignment API
        │                                      │
        ├── URL 설정 지속/token은 메모리 전용   ├── 최신 로그인 1-session
        ├── starter download                   ├── immutable receipt
@@ -28,11 +31,13 @@ VS Code Extension ── HTTP (*) ───────> Auth + Assignment API
                                   SQLite result <────┘
                                       │          │
                              Extension result   Instructor dashboard
-                                                (loopback profile only)
+                                                (loopback/TLS profile)
 ```
 
-(*) 기본값은 같은 장비의 loopback입니다. 별도 신뢰 LAN 시험에서는 server와 Extension이
-각각 명시적으로 opt-in한 동안에만 실제 RFC 1918 interface의 단기 HTTP 접속을 허용합니다.
+(*) 기본값은 같은 장비의 loopback입니다. 외부 QR 파일럿은 built-in server의 loopback bind를
+유지하고 앞단 HTTPS reverse proxy를 사용합니다. 별도 신뢰 LAN 시험에서는 server와 Extension이
+각각 명시적으로 opt-in한 동안에만 실제 RFC 1918 interface의 단기 HTTP 접속을 허용하지만
+비밀번호 기반 수령은 거부합니다.
 
 `pilot-local process grader`는 구조상의 adapter 경계일 뿐 보안 sandbox가 아닙니다. API, SQLite,
 assessment와 학생 프로그램이 같은 host 권한·network 환경에 있을 수 있습니다. 이 구조는 합성
@@ -69,10 +74,12 @@ Local process가 다른 tree나 host를 읽지 못하게 하는 보안 경계는
 
 ## 인증과 API 경계
 
-학생은 로그인할 때마다 교수자가 새로 발급한, active roster enrollment에 결합된 1회용
-활성화 코드로 browser/device authorization을 승인합니다. Extension은 서비스 URL만 machine
-scope 설정에 유지하고 access/refresh token과 audience는 Extension Host 메모리에만 둡니다.
-창 종료, Window Reload 또는 WSL 재연결 뒤에는 새 코드로 다시 로그인해야 합니다.
+권장 흐름에서 학생은 과제의 비밀 없는 QR로 HTTPS page에 접속하고, 학번과 교과목별
+Autograde 전용 비밀번호를 확인해 10분·1회용 수령 코드를 받습니다. Extension은 새 pending
+device authorization과 이 코드를 원자적으로 결합해 과제를 수락하고, 발급된 session을 해당
+과제에만 제한합니다. 기존 교수자 발급 활성화 코드는 호환 login 경로로 남습니다. Extension은
+서비스 URL만 machine scope 설정에 유지하고 수령 코드, access/refresh token과 audience는
+저장하지 않습니다. 창 종료, Window Reload 또는 WSL 재연결 뒤에는 새 코드가 필요합니다.
 
 Access/refresh token은 server-side session에 연결합니다. 새 로그인이 성공하면 같은
 course/student의 이전 session을 교체하여 최신 session 하나만 유지하며, session은 최초 발급
@@ -82,7 +89,9 @@ course/student의 이전 session을 교체하여 최신 session 하나만 유지
 session은 절대 만료 또는 다음 로그인 교체까지 남을 수 있습니다. GitHub OAuth와 인증용
 환경변수는 파일럿에 사용하지 않습니다.
 
-Server는 기본적으로 loopback HTTP에만 bind합니다. 유일한 파일럿 예외인
+Server는 기본적으로 loopback HTTP에만 bind합니다. 외부 HTTPS profile은 같은 loopback
+listener 앞에서 TLS를 종료하고 공개 HTTPS origin을 service URL과 QR에 사용합니다. 평문 bind의
+유일한 파일럿 예외인
 `external_access_mode=insecure-http`는 `public_base_url`과 `listen`이 동일한 실제 RFC 1918
 IPv4이고 Extension에서 `autograde.allowInsecureHttpPilot=true`를 선택했을 때만 동작합니다.
 `0.0.0.0`, hostname, 공용·개방 LAN, router port forwarding과 인터넷 접속은 허용하지 않습니다.
@@ -90,7 +99,7 @@ IPv4이고 Extension에서 `autograde.allowInsecureHttpPilot=true`를 선택했�
 정확한 시작·종료 통제는 [신뢰 LAN 외부 접속 파일럿](../operations/trusted-lan-pilot.md)을
 따릅니다.
 
-기본 loopback Dashboard는 학생 bearer token과 다른 instructor Basic credential로
+기본 loopback/TLS Dashboard는 학생 bearer token과 다른 instructor Basic credential로
 보호합니다. `insecure-http` LAN mode에서는 Basic credential을 평문으로 받지 않도록
 `/instructor`와 instructor API를 `404`로 비활성화하고, 결과는 교수자 CLI로만 확인합니다.
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 import json
 import re
@@ -143,6 +144,23 @@ def activation_entry(service: StudentPlatformService, user_code: str):
     )
 
 
+def assignment_claim_entry(
+    service: StudentPlatformService, assignment_id: str
+):
+    page = service.assignment_claim_page({"assignment_id": assignment_id})
+    csrf_match = re.search(r'name="csrf" value="([^"]+)"', page.body)
+    assert csrf_match is not None
+    cookie = page.headers["Set-Cookie"].split(";", 1)[0].split("=", 1)[1]
+    return (
+        page,
+        {
+            "assignment_id": assignment_id,
+            "csrf": csrf_match.group(1),
+        },
+        {"autograde_assignment_claim": cookie},
+    )
+
+
 @pytest.mark.parametrize(
     ("notification_outcome", "expected_event"),
     [
@@ -241,6 +259,355 @@ def test_device_pairing_pending_slowdown_and_one_time_exchange(platform) -> None
     with pytest.raises(PlatformAPIError) as replay:
         service.exchange_device_authorization({"device_code": authorization["device_code"]})
     assert replay.value.code == "invalid_grant"
+
+
+def test_assignment_claim_atomically_approves_one_device_and_scopes_its_tokens(
+    platform,
+) -> None:
+    state, service, _clock, _notifications, student = platform
+    register_assignment(state, student)
+    state.register_assignment(
+        assignment_id="asn_lab02",
+        student_id=student.id,
+        course_key=COURSE,
+        assignment_key="lab02",
+        release_id="lab02-v1",
+        github_repository_id=9002,
+        repository_owner="school",
+        repository_name="lab02-student-one",
+        clone_url="https://github.com/school/lab02-student-one.git",
+        submission_mode="branch",
+        target_ref="main",
+        result_policy="immediate",
+        assessment_path="/srv/autograde/lab02",
+        assessment_digest=ASSESSMENT_DIGEST,
+        runner_image=RUNNER,
+        rubric_version="v1",
+        max_score=10,
+        opens_at=NOW - timedelta(minutes=1),
+        due_at=NOW + timedelta(days=7),
+        ready=True,
+        at=NOW,
+    )
+    password = "dedicated password 2026"
+    service.set_student_password(student_key="20260001", password=password)
+    claim_page, claim_form, claim_cookies = assignment_claim_entry(
+        service, "asn_lab01"
+    )
+    assert "학교 SSO 비밀번호가 아니라" in claim_page.body
+    assert "Autograde 전용 비밀번호는 15자 이상이어야 합니다" in claim_page.body
+    issued = service.issue_assignment_claim(
+        {
+            **claim_form,
+            "student_key": "20260001",
+            "password": password,
+        },
+        claim_cookies,
+    )
+    claim_match = re.search(r"<code>(AK1-[^<]+)</code>", issued.body)
+    assert claim_match is not None
+    claim_code = claim_match.group(1)
+
+    with pytest.raises(PlatformAPIError) as missing_device:
+        service.redeem_assignment_claim(
+            {
+                "claim_code": claim_code,
+                "device_code": "device-that-does-not-exist",
+            }
+        )
+    assert missing_device.value.code == "assignment_claim_denied"
+
+    device = service.create_device_authorization(
+        {"device_name": "Shared lab seat 07"}
+    )
+    accepted = service.redeem_assignment_claim(
+        {
+            "claim_code": claim_code.lower(),
+            "device_code": device["device_code"],
+        }
+    )
+    assert accepted["assignment_id"] == "asn_lab01"
+    assert accepted["delivery_mode"] == "git"
+    assert accepted["acceptance_id"].startswith("aac_")
+
+    replay_device = service.create_device_authorization(
+        {"device_name": "Shared lab seat 08"}
+    )
+    with pytest.raises(PlatformAPIError) as replay:
+        service.redeem_assignment_claim(
+            {
+                "claim_code": claim_code,
+                "device_code": replay_device["device_code"],
+            }
+        )
+    assert replay.value.code == "assignment_claim_denied"
+
+    with pytest.raises(PlatformAPIError) as still_pending:
+        service.exchange_device_authorization(
+            {"device_code": replay_device["device_code"]}
+        )
+    assert still_pending.value.code == "authorization_pending"
+
+    tokens = service.exchange_device_authorization(
+        {"device_code": device["device_code"]}
+    )
+    assignments = service.list_assignments(tokens["access_token"])["assignments"]
+    assert [item["assignment_id"] for item in assignments] == ["asn_lab01"]
+    assert service.get_assignment_repository(
+        tokens["access_token"], "asn_lab01"
+    )["repository"]["github_repository_id"] == 9001
+    with pytest.raises(PlatformAPIError) as outside_scope:
+        service.get_assignment_repository(tokens["access_token"], "asn_lab02")
+    assert outside_scope.value.code == "access_denied"
+
+
+def test_wrong_code_with_the_same_public_tag_cannot_revoke_a_live_claim(
+    platform,
+) -> None:
+    state, service, _clock, _notifications, student = platform
+    register_assignment(state, student)
+    password = "dedicated password 2026"
+    service.set_student_password(student_key="20260001", password=password)
+    _page, form, cookies = assignment_claim_entry(service, "asn_lab01")
+    issued = service.issue_assignment_claim(
+        {**form, "student_key": "20260001", "password": password},
+        cookies,
+    )
+    claim_code = re.search(r"<code>(AK1-[^<]+)</code>", issued.body).group(1)
+    tag = claim_code.split("-")[1]
+    wrong_tail = "2222-2222"
+    if claim_code == f"AK1-{tag}-{wrong_tail}":
+        wrong_tail = "3333-3333"
+    wrong_code = f"AK1-{tag}-{wrong_tail}"
+
+    for index in range(5):
+        device = service.create_device_authorization(
+            {"device_name": f"attacker-device-{index}"}
+        )
+        with pytest.raises(PlatformAPIError) as denied:
+            service.redeem_assignment_claim(
+                {
+                    "claim_code": wrong_code,
+                    "device_code": device["device_code"],
+                }
+            )
+        assert denied.value.code == "assignment_claim_denied"
+
+    with sqlite3.connect(state.database) as connection:
+        grant_state = connection.execute(
+            "SELECT state, failed_attempts FROM platform_assignment_grants"
+        ).fetchone()
+    assert grant_state == ("issued", 0)
+
+    valid_device = service.create_device_authorization(
+        {"device_name": "student-device"}
+    )
+    accepted = service.redeem_assignment_claim(
+        {
+            "claim_code": claim_code,
+            "device_code": valid_device["device_code"],
+        }
+    )
+    assert accepted["assignment_id"] == "asn_lab01"
+
+
+def test_concurrent_redemption_of_one_claim_has_exactly_one_winner(
+    platform,
+) -> None:
+    state, service, _clock, _notifications, student = platform
+    register_assignment(state, student)
+    password = "dedicated password 2026"
+    service.set_student_password(student_key="20260001", password=password)
+    _page, form, cookies = assignment_claim_entry(service, "asn_lab01")
+    issued = service.issue_assignment_claim(
+        {**form, "student_key": "20260001", "password": password},
+        cookies,
+    )
+    claim_code = re.search(r"<code>(AK1-[^<]+)</code>", issued.body).group(1)
+    devices = [
+        service.create_device_authorization({"device_name": f"seat-{index}"})
+        for index in range(2)
+    ]
+    barrier = threading.Barrier(2)
+
+    def redeem(device_code: str):
+        barrier.wait(timeout=5)
+        try:
+            return service.redeem_assignment_claim(
+                {"claim_code": claim_code, "device_code": device_code}
+            )
+        except PlatformAPIError as exc:
+            return exc
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        outcomes = list(
+            executor.map(redeem, [device["device_code"] for device in devices])
+        )
+
+    successes = [outcome for outcome in outcomes if isinstance(outcome, dict)]
+    failures = [outcome for outcome in outcomes if isinstance(outcome, PlatformAPIError)]
+    assert len(successes) == 1
+    assert len(failures) == 1
+    assert failures[0].code == "assignment_claim_denied"
+    with sqlite3.connect(state.database) as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM platform_assignment_acceptances"
+        ).fetchone()[0] == 1
+
+
+def test_assignment_claim_password_hashing_has_a_bounded_concurrency_pool(
+    platform,
+    monkeypatch,
+) -> None:
+    state, _service, clock, _notifications, student = platform
+    register_assignment(state, student)
+    service = StudentPlatformService(
+        state=state,
+        server_secret=b"s" * 32,
+        course_key=COURSE,
+        public_base_url="http://127.0.0.1:8000",
+        token_policy=TokenPolicy(max_concurrent_password_verifications=2),
+        now=clock.now,
+        monotonic=clock.monotonic,
+    )
+    password = "dedicated password 2026"
+    service.set_student_password(student_key="20260001", password=password)
+    entries = [assignment_claim_entry(service, "asn_lab01") for _ in range(6)]
+    lock = threading.Lock()
+    release = threading.Event()
+    two_entered = threading.Event()
+    active = 0
+    maximum = 0
+
+    def slow_verify(_password: str, _encoded_hash: str) -> bool:
+        nonlocal active, maximum
+        with lock:
+            active += 1
+            maximum = max(maximum, active)
+            if active == 2:
+                two_entered.set()
+        assert release.wait(5)
+        with lock:
+            active -= 1
+        return True
+
+    monkeypatch.setattr(platform_service, "verify_student_password", slow_verify)
+    failures: list[BaseException] = []
+
+    def issue(entry) -> None:
+        _page, form, cookies = entry
+        try:
+            service.issue_assignment_claim(
+                {
+                    **form,
+                    "student_key": "20260001",
+                    "password": password,
+                },
+                cookies,
+            )
+        except BaseException as exc:  # pragma: no cover - asserted below
+            failures.append(exc)
+
+    threads = [threading.Thread(target=issue, args=(entry,)) for entry in entries]
+    for thread in threads:
+        thread.start()
+    assert two_entered.wait(5)
+    with lock:
+        assert active == 2
+        assert maximum == 2
+    release.set()
+    for thread in threads:
+        thread.join(timeout=5)
+
+    assert not failures
+    assert all(not thread.is_alive() for thread in threads)
+    assert maximum == 2
+
+
+def test_assignment_claim_reissue_revokes_old_code_and_password_failures_lock(
+    platform,
+) -> None:
+    state, service, clock, _notifications, student = platform
+    register_assignment(state, student)
+    password = "dedicated password 2026"
+    service.set_student_password(student_key="20260001", password=password)
+
+    def issue(student_key: str, candidate: str) -> str:
+        _page, form, cookies = assignment_claim_entry(service, "asn_lab01")
+        response = service.issue_assignment_claim(
+            {**form, "student_key": student_key, "password": candidate},
+            cookies,
+        )
+        match = re.search(r"<code>(AK1-[^<]+)</code>", response.body)
+        assert match is not None
+        return match.group(1)
+
+    first_code = issue("20260001", password)
+    second_code = issue("20260001", password)
+    assert first_code != second_code
+    with sqlite3.connect(state.database) as connection:
+        rows = connection.execute(
+            "SELECT state, claim_code_hmac FROM platform_assignment_grants "
+            "ORDER BY created_at, assignment_grant_id"
+        ).fetchall()
+        columns = {
+            row[1]
+            for row in connection.execute(
+                "PRAGMA table_info(platform_assignment_grants)"
+            )
+        }
+    assert sorted(row[0] for row in rows) == ["issued", "revoked"]
+    assert "claim_code" not in columns
+    assert all(first_code not in row[1] and second_code not in row[1] for row in rows)
+
+    unknown_error = None
+    _page, unknown_form, unknown_cookies = assignment_claim_entry(
+        service, "asn_lab01"
+    )
+    with pytest.raises(PlatformAPIError) as unknown:
+        service.issue_assignment_claim(
+            {
+                **unknown_form,
+                "student_key": "not-enrolled",
+                "password": "wrong password value",
+            },
+            unknown_cookies,
+        )
+    unknown_error = (unknown.value.status, unknown.value.code, unknown.value.safe_message)
+
+    for _attempt in range(5):
+        _page, form, cookies = assignment_claim_entry(service, "asn_lab01")
+        with pytest.raises(PlatformAPIError) as wrong:
+            service.issue_assignment_claim(
+                {
+                    **form,
+                    "student_key": "20260001",
+                    "password": "wrong password value",
+                },
+                cookies,
+            )
+        assert (wrong.value.status, wrong.value.code, wrong.value.safe_message) == (
+            unknown_error
+        )
+
+    _page, locked_form, locked_cookies = assignment_claim_entry(
+        service, "asn_lab01"
+    )
+    with pytest.raises(PlatformAPIError) as locked:
+        service.issue_assignment_claim(
+            {
+                **locked_form,
+                "student_key": "20260001",
+                "password": password,
+            },
+            locked_cookies,
+        )
+    assert (locked.value.status, locked.value.code, locked.value.safe_message) == (
+        unknown_error
+    )
+
+    clock.value += timedelta(seconds=301)
+    assert issue("20260001", password).startswith("AK1-")
 
 
 def test_oauth_free_student_activation_approves_device_without_secret_persistence(
@@ -1221,6 +1588,8 @@ def test_public_base_url_requires_https_except_loopback(tmp_path) -> None:
         TokenPolicy(max_active_sessions=2, session_list_limit=1)
     with pytest.raises(ValueError, match="max_activation_attempts"):
         TokenPolicy(max_activation_attempts=21)
+    with pytest.raises(ValueError, match="max_concurrent_password_verifications"):
+        TokenPolicy(max_concurrent_password_verifications=33)
 
     state = PlatformStateStore(tmp_path / "state.sqlite3")
     with pytest.raises(ValueError, match="HTTPS"):
@@ -1246,6 +1615,17 @@ def test_public_base_url_requires_https_except_loopback(tmp_path) -> None:
         external_access_mode="insecure-http",
     )
     assert insecure.public_base_url == "http://192.168.50.9:18080"
+    for operation in (
+        lambda: insecure.assignment_claim_page({"assignment_id": "asn_lab01"}),
+        lambda: insecure.issue_assignment_claim({}, {}),
+        lambda: insecure.redeem_assignment_claim(
+            {"claim_code": "AK1-2345-6789-ABCD", "device_code": "x" * 32}
+        ),
+    ):
+        with pytest.raises(PlatformAPIError) as unavailable:
+            operation()
+        assert unavailable.value.status == 403
+        assert unavailable.value.code == "assignment_claim_unavailable"
 
     for rejected_url in (
         "http://grade.lan:18080",

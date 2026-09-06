@@ -10,6 +10,7 @@ import {
   isSupportedWorkspacePlatform,
   normalizeAssignments,
   normalizeGradeResult,
+  normalizeClaimCode,
   normalizeRepositoryLocator,
   normalizeServiceBaseUrl,
   normalizeTargetRef,
@@ -59,6 +60,15 @@ test("insecure pilot URL recognition is limited to canonical RFC1918 IPv4", () =
   assert.equal(isRfc1918Ipv4Host("172.16.0.1"), true);
   assert.equal(isRfc1918Ipv4Host("172.32.0.1"), false);
   assert.equal(isRfc1918Ipv4Host("192.168.999.1"), false);
+});
+
+test("claim codes canonicalize case, hyphens and ASCII whitespace only", () => {
+  assert.equal(normalizeClaimCode(" ak1 2345-6789-abcd "), "AK1-2345-6789-ABCD");
+  assert.equal(normalizeClaimCode("AK1--2345\t6789\nABCD"), "AK1-2345-6789-ABCD");
+  assert.equal(normalizeClaimCode("AK1-2345-6789-ABCI"), undefined);
+  assert.equal(normalizeClaimCode("AK1-2345-6789-ABC0"), undefined);
+  assert.equal(normalizeClaimCode("AK1-2345-6789-ABC\u00a0D"), undefined);
+  assert.equal(normalizeClaimCode("AK1-2345-6789-ABC\u017f"), undefined);
 });
 
 test("workspace platform policy allows Linux, macOS and Windows WSL2", () => {

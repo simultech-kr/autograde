@@ -177,7 +177,7 @@ def test_rejects_mismatched_loopback_origin_and_listener(tmp_path: Path) -> None
         load_pilot_config(path)
 
 
-def test_pilot_local_rejects_https_and_unsupported_ipv6_listener(
+def test_pilot_local_accepts_https_proxy_and_rejects_unsupported_ipv6_listener(
     tmp_path: Path,
 ) -> None:
     path = write_config(tmp_path / "pilot.csv")
@@ -189,8 +189,10 @@ def test_pilot_local_rejects_https_and_unsupported_ipv6_listener(
         ),
         encoding="utf-8",
     )
-    with pytest.raises(PilotConfigError, match="loopback HTTP"):
-        load_pilot_config(path)
+    config = load_pilot_config(path)
+    assert config.values["public_base_url"] == "https://grade.example.test"
+    assert config.values["listen"] == "127.0.0.1"
+    assert config.values["grading_runtime"] == "pilot-local"
 
     path.write_text(
         text.replace(
@@ -393,7 +395,6 @@ def test_explicit_port_override_must_also_keep_origin_coherent(tmp_path: Path) -
 @pytest.mark.parametrize(
     "public_url",
     (
-        "https://grade.example.test",
         "http://evil.example.test:18080",
         "http://127.0.0.1:18080/path",
         "http://user:pass@127.0.0.1:18080",
@@ -453,7 +454,7 @@ def test_explicit_data_root_and_worker_count_remain_inside_pilot_bounds(
         )
 
 
-def test_non_serve_public_url_override_must_match_pilot_endpoint(
+def test_https_public_url_override_supports_loopback_reverse_proxy(
     tmp_path: Path,
 ) -> None:
     config = load_pilot_config(write_config(tmp_path / "pilot.csv"))
@@ -463,18 +464,49 @@ def test_non_serve_public_url_override_must_match_pilot_endpoint(
         public_base_url="https://grade.example.test",
     )
 
-    with pytest.raises(PilotConfigError, match="loopback HTTP"):
-        apply_pilot_config(
-            namespace,
-            config,
-            argv=(
-                "--public-base-url",
-                "https://grade.example.test",
-                "auth",
-                "issue",
-                "s001",
-            ),
-        )
+    apply_pilot_config(
+        namespace,
+        config,
+        argv=(
+            "--public-base-url",
+            "https://grade.example.test",
+            "auth",
+            "issue",
+            "s001",
+        ),
+    )
+    assert namespace.public_base_url == "https://grade.example.test"
+    assert namespace.external_access_mode == "disabled"
+
+
+def test_pilot_local_https_proxy_may_use_a_different_public_port(
+    tmp_path: Path,
+) -> None:
+    config = load_pilot_config(write_config(tmp_path / "pilot.csv"))
+    namespace = SimpleNamespace(
+        course_key="cse101-2026f",
+        data_root=str(tmp_path / "state"),
+        public_base_url="https://grade.example.test:8443",
+        listen="127.0.0.1",
+        port=18080,
+        grading_runtime="pilot-local",
+        bundle_worker_count=4,
+    )
+
+    apply_pilot_config(
+        namespace,
+        config,
+        argv=(
+            "--public-base-url",
+            "https://grade.example.test:8443",
+            "serve",
+        ),
+    )
+
+    assert namespace.public_base_url == "https://grade.example.test:8443"
+    assert namespace.listen == "127.0.0.1"
+    assert namespace.port == 18080
+    assert namespace.grading_runtime == "pilot-local"
 
 
 def test_non_serve_command_preserves_insecure_http_config_validation(

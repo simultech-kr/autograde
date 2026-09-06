@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 import autograde.platform_state as platform_state_module
+from autograde.platform_auth import hash_student_password
 from autograde.platform_state import (
     DeviceAuthorizationExpired,
     DeviceAuthorizationState,
@@ -243,7 +244,7 @@ def test_bootstrap_has_an_independent_migration_namespace(database: Path) -> Non
     StateStore(database)
     platform = PlatformStateStore(database)
 
-    assert platform.schema_version() == 6
+    assert platform.schema_version() == 7
     with sqlite3.connect(database) as connection:
         tables = {
             row[0]
@@ -260,6 +261,9 @@ def test_bootstrap_has_an_independent_migration_namespace(database: Path) -> Non
         "platform_sessions",
         "platform_token_families",
         "platform_student_activations",
+        "platform_student_passwords",
+        "platform_assignment_grants",
+        "platform_assignment_acceptances",
         "platform_assignments",
         "submission_requests",
         "submission_receipts",
@@ -331,7 +335,7 @@ def test_v4_migration_backfills_existing_refresh_rotation_count(
         connection.commit()
 
     migrated = PlatformStateStore(database)
-    assert migrated.schema_version() == 6
+    assert migrated.schema_version() == 7
     with sqlite3.connect(database) as connection:
         family = connection.execute(
             "SELECT course_key, refresh_rotation_count "
@@ -833,6 +837,59 @@ def test_course_deactivation_revokes_activation_without_revival(
     ).state == StudentActivationState.REVOKED
 
 
+def test_course_deactivation_requires_a_new_student_password_after_reactivation(
+    store: PlatformStateStore,
+) -> None:
+    fixture = PlatformFixture(store)
+    store.set_student_password_hash(
+        student_id=fixture.student.id,
+        course_key=COURSE,
+        password_hash=hash_student_password("dedicated password 2026"),
+        at=NOW,
+    )
+
+    store.upsert_enrollment(
+        student_id=fixture.student.id,
+        course_key=COURSE,
+        active=False,
+        at=NOW + timedelta(seconds=1),
+    )
+    store.upsert_enrollment(
+        student_id=fixture.student.id,
+        course_key=COURSE,
+        active=True,
+        at=NOW + timedelta(seconds=2),
+    )
+
+    with pytest.raises(PlatformNotFound, match="password credential"):
+        store.get_student_password_credential(
+            student_key="s001", course_key=COURSE
+        )
+
+
+def test_password_rotation_revokes_sessions_without_deleting_the_replacement(
+    store: PlatformStateStore,
+) -> None:
+    fixture = PlatformFixture(store)
+    store.set_student_password_hash(
+        student_id=fixture.student.id,
+        course_key=COURSE,
+        password_hash=hash_student_password("first dedicated password"),
+        at=NOW,
+    )
+    replacement = store.set_student_password_hash(
+        student_id=fixture.student.id,
+        course_key=COURSE,
+        password_hash=hash_student_password("second dedicated password"),
+        at=NOW + timedelta(seconds=1),
+    )
+
+    current = store.get_student_password_credential(
+        student_key="s001", course_key=COURSE
+    )
+    assert current.password_hash == replacement.password_hash
+
+
 def test_device_authorization_is_one_time_and_creates_a_session(
     store: PlatformStateStore,
 ) -> None:
@@ -1251,6 +1308,31 @@ def test_identity_change_revokes_old_sessions_refresh_and_approved_device_grants
         ).state
         == DeviceAuthorizationState.DENIED
     )
+
+
+def test_identity_change_deletes_every_course_password(
+    store: PlatformStateStore,
+) -> None:
+    fixture = PlatformFixture(store)
+    store.set_student_password_hash(
+        student_id=fixture.student.id,
+        course_key=COURSE,
+        password_hash=hash_student_password("dedicated password 2026"),
+        at=NOW,
+    )
+
+    store.upsert_student(
+        student_key="s001",
+        auth_subject="github:202",
+        github_user_id=202,
+        github_login="replacement-account",
+        at=NOW + timedelta(minutes=1),
+    )
+
+    with pytest.raises(PlatformNotFound, match="password credential"):
+        store.get_student_password_credential(
+            student_key="s001", course_key=COURSE
+        )
 
 
 def test_deactivation_does_not_revive_old_session_after_reactivation(

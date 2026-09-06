@@ -2,18 +2,21 @@
 
 ## 목적
 
-기본적으로 한 컴퓨터에서 교수자 과제 등록, 학생 역할의 VS Code 다운로드·제출, 자동 결과
-반환과 교수자 dashboard를 검증합니다. 별도 신뢰 LAN profile은 다른 컴퓨터에서 같은 기능
-흐름을 짧게 확인하는 좁은 예외입니다. 20명 이상 상태·동시성은 자동 integration test로
-검증하고, 수동 시험은 합성 제출물과 신뢰된 참여자로 제한합니다.
+기본적으로 교수자 과제 등록, 학생 역할의 QR 수령과 VS Code 다운로드·제출, 자동 결과 반환과
+교수자 dashboard를 검증합니다. 같은 장비의 loopback 또는 loopback listener 앞의 외부 HTTPS
+reverse proxy를 사용합니다. 별도 신뢰 LAN HTTP profile은 비밀번호 수령 기능을 제외한 흐름을
+짧게 확인하는 좁은 예외입니다. 20명 이상 상태·동시성은 자동 integration test로 검증하고,
+수동 시험은 합성 제출물과 신뢰된 참여자로 제한합니다.
 
 ## 전제
 
 - 학생의 학교 식별자인 `student_key`와 수강 활성 상태가 local roster CSV에 있습니다.
+- 학교 계정과 분리한 15자 이상의 Autograde 전용 비밀번호를 교과목 enrollment에 설정합니다.
 - 학교 SSO, GitHub 계정/OAuth/App, 학생별 repository는 사용하지 않습니다.
 - 설정은 shell 환경변수가 아니라 명시적으로 선택한 local pilot config CSV에서 읽습니다.
-- 서버와 VS Code는 기본적으로 같은 시험 장비에서 loopback으로 통신합니다. 신뢰 LAN 기능
-  시험은 별도 config와 server/Extension 이중 opt-in을 사용합니다.
+- Built-in server는 loopback에만 bind합니다. 외부 학생은 HTTPS reverse proxy를 통해
+  접속합니다. 신뢰 LAN HTTP 기능 시험은 별도 config와 server/Extension 이중 opt-in을
+  사용하지만 비밀번호 기반 수령은 허용하지 않습니다.
 - 공용 실습 장비의 VS Code 설정에는 서비스 주소만 유지합니다. 학생 access/refresh token은
   Extension Host 메모리에서만 유지하고 disk 또는 VS Code SecretStorage에 저장하지 않습니다.
 - Linux/macOS는 native workspace, Windows는 WSL2 workspace를 사용합니다.
@@ -29,7 +32,8 @@
 3. Config는 알 수 없는 key, 중복 key, 빈 필수 값, 잘못된 URL/port/runtime을 상태 변경 전에
    거부해야 합니다.
 4. UTF-8 roster CSV를 전체 검증한 뒤 active course enrollment로 반영합니다.
-5. 학생 인증은 roster의 `student_key`와 학생별 1회용 활성화 코드에 결합합니다.
+5. 권장 학생 인증은 roster의 `student_key`, 교과목별 Autograde 전용 비밀번호와 과제별
+   10분·1회용 수령 코드에 결합합니다. 기존 활성화 코드는 호환 login 경로입니다.
 6. Course-wide immutable release에 starter, assessment와 선택적 data digest를 고정합니다.
 7. Active 학생만 starter를 다운로드하고 자신의 source bundle을 제출할 수 있습니다.
 8. Server는 compressed/expanded size, entry count, path/type, content digest와 executable bit를
@@ -37,8 +41,9 @@
 9. 제출은 idempotency key와 source digest를 사용해 중복 network retry를 흡수합니다.
 10. 접수된 제출은 bounded worker queue에서 처리하고 SQLite에 상태와 결과를 영속화합니다.
 11. 결과는 학생 소유권을 매번 확인하고 score, rubric과 정제된 diagnostics만 반환합니다.
-12. 기본 loopback profile의 Instructor dashboard는 active roster × assignment의
-    다운로드·제출·최신 상태를 read-only로 보여주며 별도 instructor credential을 요구합니다.
+12. 기본 loopback/TLS profile의 Instructor dashboard는 교과목 요약, 학생별 비밀번호 상태와
+    roster × assignment의 수락·다운로드·제출·최신 상태를 read-only로 보여주며 별도 instructor
+    credential을 요구합니다.
     `insecure-http` LAN profile에서는 Basic credential 전송을 막기 위해 dashboard endpoint를
     비활성화하고 교수자 CLI로 결과를 조회해야 합니다.
 13. 25명 threaded HTTP integration test가 admission, worker, 결과 소유권과 dashboard 집계를
@@ -46,7 +51,7 @@
 14. Linux/macOS native와 Windows WSL2 Extension의 로그인, 다운로드, 제출과 결과 조회를 각각
     수동으로 확인합니다.
 15. VS Code 창 종료, Window Reload 또는 WSL 재연결 후에는 이전 credential을 복구하지 않고
-    `Autograde: Sign In`을 다시 요구해야 합니다.
+    새 수령 코드 또는 호환 `Autograde: Sign In`을 다시 요구해야 합니다.
 16. 교수자는 **로그인 시도마다** 새 학생 활성화 코드를 발급해야 하며, 승인에 사용한 코드는
     소비되어 같은 학생의 다음 로그인에 재사용할 수 없어야 합니다.
 17. 학생별 최신 로그인만 active session으로 남기고 이전 session은 새 로그인 token을
@@ -64,6 +69,18 @@
     로그인별 위험 확인 전에는 첫 network 요청을 보내지 않아야 합니다.
 22. `insecure-http`에서 `/instructor`와 instructor API는 인증 prompt 대신 `404`로
     비활성화되어 Basic credential을 평문으로 받지 않아야 합니다.
+23. 교수자는 CLI에서 전체 교과목 요약과 선택 교과목의 학생·과제 상태를 조회하고, 학생별
+    상태와 전용 비밀번호를 설정·재설정할 수 있어야 합니다. 비밀번호는 argv/CSV로 받지 않습니다.
+24. 과제 QR에는 `HTTPS origin + /assignment-claim/{assignment_id}`만 포함하고 secret, 학번과
+    query/fragment를 포함하지 않아야 합니다. QR은 server 안에서 생성합니다.
+25. 비밀번호 수령 page는 HTTPS 또는 loopback HTTP에서만 열리고 CSRF, 계정 열거 방지,
+    비밀번호 실패 잠금과 제한된 동시 password hashing을 적용해야 합니다.
+26. 수령 코드는 원문을 저장하지 않고 HMAC만 저장하며 학생·교과목·과제·device authorization에
+    원자적으로 결합해 소비합니다. 만료·재사용·다른 과제 접근을 거부해야 합니다.
+27. VS Code는 수령 코드를 저장하지 않고 device authorization을 만든 뒤 코드를 소비하며,
+    assignment-scoped memory session으로 해당 과제만 자동 다운로드해야 합니다.
+28. External HTTPS profile은 `external_access_mode=disabled`, loopback `listen`을 유지하면서
+    HTTPS public URL과 다른 local port를 허용해야 합니다.
 
 ## Local CSV contract
 
@@ -84,9 +101,10 @@ bundle_worker_count,4
 `grading_runtime`, `bundle_worker_count`, `external_access_mode`를 생략하면 각각
 `pilot-local`, `4`, `disabled`를 사용합니다.
 
-기본 `external_access_mode=disabled`에서는 built-in server의 HTTP listener와 public URL을
-`127.0.0.1` 또는 `localhost`로 제한합니다. 좁은 예외인 `insecure-http`는 public/listen에
-동일한 실제 RFC 1918 IPv4 literal을 사용하고 URL port와 `port`가 같을 때만 허용합니다.
+기본 `external_access_mode=disabled`에서는 built-in server의 HTTP listener를 loopback으로
+제한합니다. `public_base_url`은 loopback HTTP 또는 그 listener 앞에서 TLS를 종료하는 HTTPS
+origin일 수 있습니다. 좁은 예외인 `insecure-http`는 public/listen에 동일한 실제 RFC 1918
+IPv4 literal을 사용하고 URL port와 `port`가 같을 때만 허용합니다.
 Extension도 별도 `autograde.allowInsecureHttpPilot=true`가 필요하며 기본값은 `false`입니다.
 `data_root`는 config 디렉터리의 전용 하위 디렉터리여야 하며 config 디렉터리·상위/외부
 경로·symlink를 거부합니다. LAN 예외 contract와 운영 통제는
@@ -108,6 +126,8 @@ s002,true
 - 환경변수가 비어 있는 새 shell에서도 config CSV만 지정해 같은 course/data root가 선택됩니다.
 - 같은 roster와 release를 다시 반영해도 학생·과제 identity가 중복 생성되지 않습니다.
 - 비활성/미등록 학생은 활성화, 다운로드, 제출과 결과 API를 사용할 수 없습니다.
+- 만료·재사용·다른 학생/교과목/과제의 수령 코드는 거부되며 원문은 DB/log에 남지 않습니다.
+- 교수자 교과목/학생 집계와 Dashboard의 QR·수락 상태가 SQLite 원장과 일치합니다.
 - 같은 valid submission retry는 기존 receipt를 반환하고 다른 body의 idempotency 충돌은
   거부됩니다.
 - 다른 학생의 submission/result ID를 알아도 조회할 수 없습니다.
@@ -124,6 +144,8 @@ s002,true
   workspace/source 및 browser/OS profile 잔여물을 정리합니다.
 - 기본 network mode에서 non-loopback HTTP가 거부되고, LAN profile에서는 server/Extension
   이중 opt-in과 로그인별 위험 확인, 시험 후 session/code/firewall 폐기가 검증됩니다.
+- HTTPS reverse proxy profile에서도 built-in server는 loopback만 listen하고 학생 QR과
+  Extension origin이 같은 공개 HTTPS 주소를 사용합니다.
 
 ## 안전 요구사항과 No-Go
 

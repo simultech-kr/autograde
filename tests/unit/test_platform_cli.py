@@ -493,6 +493,7 @@ def test_runner_runtime_defaults_are_shared_and_inspect_timeout_is_bounded(
     assert serve.max_bundle_compressed_bytes == 25 * 1024 * 1024
     assert serve.max_bundle_expanded_bytes == 100 * 1024 * 1024
     assert serve.max_bundle_files == 5_000
+    assert serve.max_concurrent_password_verifications == 4
 
     with pytest.raises(SystemExit):
         parser.parse_args(
@@ -697,6 +698,68 @@ def test_platform_cli_issues_activation_once_to_stdout_or_private_file_and_revok
     assert state.get_student_activation(
         written["activation_id"], course_key=COURSE
     ).state == StudentActivationState.REVOKED
+
+
+def test_course_and_student_management_set_password_without_plaintext_output(
+    tmp_path,
+    capsys,
+    monkeypatch,
+) -> None:
+    data_root = tmp_path / "private"
+    assert invoke(data_root, "student", "add", "000123") == 0
+    output(capsys)
+    password = "correct horse battery staple"
+    answers = iter((password, password))
+    monkeypatch.setattr(
+        platform_cli.getpass,
+        "getpass",
+        lambda _prompt: next(answers),
+    )
+
+    assert invoke(data_root, "student", "password-set", "000123") == 0
+    configured_output = capsys.readouterr().out
+    configured = json.loads(configured_output)["result"]
+    assert configured["password_configured"] is True
+    assert password not in configured_output
+
+    with sqlite3.connect(data_root / "state.sqlite3") as connection:
+        stored = connection.execute(
+            "SELECT password_hash FROM platform_student_passwords"
+        ).fetchone()[0]
+    assert stored.startswith("scrypt$v1$")
+    assert password not in stored
+
+    assert invoke(data_root, "student", "list") == 0
+    students = output(capsys)["result"]["students"]
+    assert students[0]["student_key"] == "000123"
+    assert students[0]["password_configured"] is True
+    assert "password_hash" not in students[0]
+
+    assert main(["--data-root", str(data_root), "course", "list"]) == 0
+    courses = output(capsys)["result"]["courses"]
+    assert courses[0]["course_key"] == COURSE
+    assert courses[0]["enrolled_students"] == 1
+
+    assert main(
+        ["--data-root", str(data_root), "course", "show", COURSE]
+    ) == 0
+    shown = output(capsys)["result"]
+    assert shown["students"][0]["student_key"] == "000123"
+    assert shown["assignment_details"] == []
+
+
+def test_password_file_must_be_exactly_mode_0600(tmp_path) -> None:
+    password_file = tmp_path / "password.txt"
+    password_file.write_text("correct horse battery staple\n", encoding="utf-8")
+    password_file.chmod(0o644)
+
+    with pytest.raises(ValueError, match="0600"):
+        platform_cli._read_student_password(password_file)
+
+    password_file.chmod(0o600)
+    assert platform_cli._read_student_password(password_file) == (
+        "correct horse battery staple"
+    )
 
 
 def test_platform_cli_refuses_activation_file_overwrite_before_reissuing(

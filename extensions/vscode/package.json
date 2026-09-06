@@ -2,7 +2,7 @@
   "name": "autograde-vscode",
   "displayName": "Autograde",
   "description": "Download, submit, and review Autograde assignments from Linux, macOS, or WSL2.",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "private": true,
   "publisher": "autograde",
   "license": "UNLICENSED",
@@ -32,6 +32,7 @@
     "onView:autograde.assignments",
     "onCommand:autograde.signIn",
     "onCommand:autograde.signOut",
+    "onCommand:autograde.redeemAssignmentClaim",
     "onCommand:autograde.refreshAssignments",
     "onCommand:autograde.cloneAssignment",
     "onCommand:autograde.submitCurrentCommit",
@@ -52,6 +53,13 @@
         "shortTitle": "로그아웃",
         "enablement": "autograde.authenticated",
         "icon": "$(sign-out)"
+      },
+      {
+        "command": "autograde.redeemAssignmentClaim",
+        "title": "Autograde: Enter Assignment Claim Code and Download",
+        "shortTitle": "수령 코드 입력 및 다운로드",
+        "enablement": "isWorkspaceTrusted",
+        "icon": "$(key)"
       },
       {
         "command": "autograde.refreshAssignments",
@@ -120,12 +128,12 @@
       {
         "view": "autograde.assignments",
         "when": "!autograde.authenticated",
-        "contents": "Autograde에 로그인하면 과제를 바로 받을 수 있습니다.\n[지금 로그인](command:autograde.signIn)"
+        "contents": "Autograde에 로그인하거나 웹사이트에서 받은 과제 수령 코드(과제 키)로 바로 시작하세요.\n[지금 로그인](command:autograde.signIn)\n[수령 코드 입력 및 다운로드](command:autograde.redeemAssignmentClaim)"
       },
       {
         "view": "autograde.assignments",
         "when": "autograde.authenticated",
-        "contents": "현재 표시할 과제가 없습니다.\n[과제 새로고침](command:autograde.refreshAssignments)"
+        "contents": "현재 표시할 과제가 없습니다.\n[수령 코드 입력 및 다운로드](command:autograde.redeemAssignmentClaim)\n[과제 새로고침](command:autograde.refreshAssignments)"
       }
     ],
     "menus": {
@@ -136,24 +144,29 @@
           "group": "navigation@1"
         },
         {
+          "command": "autograde.redeemAssignmentClaim",
+          "when": "view == autograde.assignments && isWorkspaceTrusted",
+          "group": "navigation@2"
+        },
+        {
           "command": "autograde.signOut",
           "when": "view == autograde.assignments && autograde.authenticated",
-          "group": "navigation@1"
+          "group": "navigation@3"
         },
         {
           "command": "autograde.refreshAssignments",
           "when": "view == autograde.assignments && autograde.authenticated",
-          "group": "navigation@2"
+          "group": "navigation@4"
         },
         {
           "command": "autograde.cloneAssignment",
           "when": "view == autograde.assignments && autograde.authenticated && autograde.hasDownloadableAssignments && isWorkspaceTrusted",
-          "group": "navigation@3"
+          "group": "navigation@5"
         },
         {
           "command": "autograde.submitCurrentCommit",
           "when": "view == autograde.assignments && autograde.authenticated && isWorkspaceTrusted",
-          "group": "navigation@4"
+          "group": "navigation@6"
         }
       ],
       "view/item/context": [

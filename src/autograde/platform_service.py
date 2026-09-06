@@ -26,14 +26,17 @@ from urllib.parse import quote, urlencode, urlsplit
 
 from .domain import git_oid, utc_iso
 from .platform_auth import (
+    hash_student_password,
     InvalidSignedValue,
     new_activation_code,
     new_api_token,
+    new_assignment_claim_code,
     new_device_code,
     new_public_id,
     new_user_code,
     secret_digest,
     sign_browser_value,
+    verify_student_password,
     verify_browser_value,
 )
 from .platform_events import emit_operator_event
@@ -50,6 +53,7 @@ from .platform_pinner import (
     SubmissionSourceInvalid,
     SubmissionSourceUnavailable,
 )
+from .platform_qr import assignment_claim_qr_svg
 from .platform_state import (
     DeviceAuthorization,
     DeviceAuthorizationExpired,
@@ -149,6 +153,10 @@ class TokenPolicy:
     max_activation_attempts: int = 5
     session_list_limit: int = 50
     auth_history_retention_seconds: int = 30 * 24 * 60 * 60
+    assignment_claim_lifetime_seconds: int = 10 * 60
+    max_password_attempts: int = 5
+    password_lockout_seconds: int = 5 * 60
+    max_concurrent_password_verifications: int = 4
 
     def __post_init__(self) -> None:
         values = (
@@ -163,6 +171,10 @@ class TokenPolicy:
             self.max_activation_attempts,
             self.session_list_limit,
             self.auth_history_retention_seconds,
+            self.assignment_claim_lifetime_seconds,
+            self.max_password_attempts,
+            self.password_lockout_seconds,
+            self.max_concurrent_password_verifications,
         )
         if any(isinstance(value, bool) or not isinstance(value, int) or value <= 0 for value in values):
             raise ValueError("token policy durations must be positive integers")
@@ -176,6 +188,12 @@ class TokenPolicy:
             raise ValueError("session_list_limit must not exceed 100")
         if self.max_activation_attempts > 20:
             raise ValueError("max_activation_attempts must not exceed 20")
+        if self.max_password_attempts > 20:
+            raise ValueError("max_password_attempts must not exceed 20")
+        if self.max_concurrent_password_verifications > 32:
+            raise ValueError(
+                "max_concurrent_password_verifications must not exceed 32"
+            )
         if self.session_list_limit < self.max_active_sessions:
             raise ValueError(
                 "session_list_limit must be at least max_active_sessions"
@@ -203,10 +221,17 @@ _USER_CODE = re.compile(r"^[23456789ABCDEFGHJKLMNPQRSTUVWXYZ]{4}-[23456789ABCDEF
 _ACTIVATION_CODE = re.compile(
     r"^AG1[23456789ABCDEFGHJKLMNPQRSTUVWXYZ]{26}$"
 )
+_ASSIGNMENT_CLAIM_CODE = re.compile(
+    r"^AK1[23456789ABCDEFGHJKLMNPQRSTUVWXYZ]{12}$"
+)
 _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._~-]{0,255}$")
 _MAX_DEVICE_POLL_TRACKERS = 2_000
 _DEFAULT_ACTIVATION_LIFETIME_SECONDS = 7 * 24 * 60 * 60
 _MAX_ACTIVATION_LIFETIME_SECONDS = 30 * 24 * 60 * 60
+_DUMMY_PASSWORD_HASH = (
+    "scrypt$v1$16384$8$1$AAAAAAAAAAAAAAAAAAAAAA$"
+    "KtFLbYYMHawcT6bz3UL3EQWOYqrGjouUFpkpVOI3qcI"
+)
 
 
 def _utc_now() -> datetime:
@@ -340,6 +365,9 @@ class StudentPlatformService:
         self._refresh_flights_lock = threading.Lock()
         self._refresh_flights: MutableMapping[str, _RefreshFlight] = {}
         self._submission_locks = tuple(threading.Lock() for _ in range(64))
+        self._password_verification_slots = threading.BoundedSemaphore(
+            self.policy.max_concurrent_password_verifications
+        )
 
     # Public JSON API -------------------------------------------------
 
@@ -683,7 +711,10 @@ class StudentPlatformService:
         return None
 
     def list_assignments(self, access_token: str) -> Mapping[str, Any]:
-        self._authorize(access_token)
+        session, _student = self._authorize(access_token)
+        assignment_scope = self.state.get_session_assignment_scope(
+            session_id=session.session_id, course_key=self.course_key
+        )
         verifier = self._access_verifier(access_token)
         try:
             assignments = self.state.list_owned_assignments(
@@ -696,6 +727,11 @@ class StudentPlatformService:
             raise PlatformAPIError(403, "access_denied", "course enrollment is inactive") from exc
         projected = []
         for assignment in assignments:
+            if assignment_scope is not None and assignment_scope != (
+                "git",
+                assignment.assignment_id,
+            ):
+                continue
             item = dict(self._assignment_projection(assignment))
             latest = self.state.get_latest_owned_submission(
                 access_token_hash=verifier,
@@ -719,6 +755,11 @@ class StudentPlatformService:
                 403, "access_denied", "course enrollment is inactive"
             ) from exc
         for assignment in bundle_assignments:
+            if assignment_scope is not None and assignment_scope != (
+                "bundle",
+                assignment.assignment_id,
+            ):
+                continue
             item = dict(self._bundle_assignment_projection(assignment))
             latest = self.state.get_latest_owned_bundle_submission(
                 access_token_hash=verifier,
@@ -1161,7 +1202,7 @@ class StudentPlatformService:
         return {"submission": self._submission_projection(outcome.request), "replayed": outcome.replayed}
 
     def get_submission(self, access_token: str, submission_id: str) -> Mapping[str, Any]:
-        self._authorize(access_token)
+        session, _student = self._authorize(access_token)
         safe_id = self._safe_identifier(submission_id, "submission_id")
         if safe_id.startswith("bsub_"):
             try:
@@ -1175,6 +1216,9 @@ class StudentPlatformService:
                 raise PlatformAPIError(
                     404, "not_found", "submission was not found"
                 ) from exc
+            self._enforce_session_assignment_scope(
+                session, "bundle", request.assignment_id
+            )
             return {"submission": self._bundle_submission_projection(request)}
         try:
             request = self.state.get_owned_submission(
@@ -1185,10 +1229,11 @@ class StudentPlatformService:
             )
         except PlatformNotFound as exc:
             raise PlatformAPIError(404, "not_found", "submission was not found") from exc
+        self._enforce_session_assignment_scope(session, "git", request.assignment_id)
         return {"submission": self._submission_projection(request)}
 
     def get_result(self, access_token: str, submission_id: str) -> Mapping[str, Any]:
-        self._authorize(access_token)
+        session, _student = self._authorize(access_token)
         safe_id = self._safe_identifier(submission_id, "submission_id")
         verifier = self._access_verifier(access_token)
         if safe_id.startswith("bsub_"):
@@ -1211,6 +1256,9 @@ class StudentPlatformService:
                     "result_not_available",
                     "published result is not available",
                 ) from exc
+            self._enforce_session_assignment_scope(
+                session, "bundle", receipt.assignment_id
+            )
             projection = self._bundle_result_projection(result)
             if receipt.result_policy == ResultPolicy.SCORE_ONLY:
                 projection["rubric"] = {}
@@ -1238,6 +1286,9 @@ class StudentPlatformService:
             )
         except PlatformNotFound as exc:
             raise PlatformAPIError(404, "result_not_available", "published result is not available") from exc
+        self._enforce_session_assignment_scope(
+            session, "git", request.assignment_id
+        )
         projection = self._result_projection(result)
         if assignment.result_policy == ResultPolicy.SCORE_ONLY:
             projection["rubric"] = {}
@@ -1251,15 +1302,92 @@ class StudentPlatformService:
 
         self._authorize_instructor(authorization)
         rows = self.state.list_bundle_dashboard_rows(course_key=self.course_key)
+        try:
+            course_summary = self.state.get_course_summary(course_key=self.course_key)
+        except PlatformNotFound:
+            course_summary = {
+                "course_key": self.course_key,
+                "enrolled_students": 0,
+                "active_students": 0,
+                "assignments": 0,
+                "acceptances": 0,
+                "submissions": 0,
+            }
+        student_summaries = self.state.list_course_student_summaries(
+            course_key=self.course_key
+        )
+        projected_rows = [self._dashboard_projection(row) for row in rows]
+        claim_assignments = self.state.list_operator_bundle_assignments(
+            course_key=self.course_key,
+            ready_only=True,
+            active_only=True,
+        )
+        now = utc_iso(self._aware_now())
+        assignments = [
+            {
+                "assignment_id": assignment.assignment_id,
+                "assignment_key": assignment.assignment_key,
+                "release_id": assignment.release_id,
+                "title": assignment.title,
+                "claim_url": self._assignment_claim_url(assignment.assignment_id),
+            }
+            for assignment in claim_assignments
+            if (
+                assignment.opens_at is None or assignment.opens_at <= now
+            )
+            and (assignment.due_at is None or assignment.due_at > now)
+        ]
         return {
             "course_key": self.course_key,
             "generated_at": utc_iso(self._aware_now()),
-            "rows": [self._dashboard_projection(row) for row in rows],
+            "course": course_summary,
+            "students": student_summaries,
+            "assignments": assignments,
+            "rows": projected_rows,
         }
 
     def instructor_dashboard_page(self, authorization: str) -> PlatformResponse:
         dashboard = self.instructor_dashboard(authorization)
         rows = dashboard["rows"]
+        course = dashboard["course"]
+        student_management_rows = []
+        for student in dashboard["students"]:
+            password_state = "미설정"
+            if student["password_configured"]:
+                locked_until = student["password_locked_until"]
+                password_state = (
+                    f"잠김 ({locked_until})"
+                    if locked_until and locked_until > dashboard["generated_at"]
+                    else "설정됨"
+                )
+            student_management_rows.append(
+                "<tr>"
+                f"<td>{html.escape(str(student['student_key']))}</td>"
+                f"<td>{'활성' if student['active'] else '비활성'}</td>"
+                f"<td>{html.escape(password_state)}</td>"
+                f"<td>{int(student['acceptances'])}</td>"
+                f"<td>{int(student['downloads'])}</td>"
+                f"<td>{int(student['submissions'])}</td>"
+                "</tr>"
+            )
+        assignment_cards = []
+        for assignment in dashboard["assignments"]:
+            claim_url = str(assignment["claim_url"])
+            title = str(assignment["title"])
+            assignment_cards.append(
+                "<section>"
+                f"<h2>{html.escape(title)}</h2>"
+                f"<p>{html.escape(str(assignment['assignment_key']))} · "
+                f"{html.escape(str(assignment['release_id']))}</p>"
+                f"<figure role=\"img\" aria-label=\"{html.escape(title, quote=True)} "
+                "과제 수령 페이지 QR 코드\">"
+                f"{assignment_claim_qr_svg(claim_url)}"
+                "</figure>"
+                f"<p><a href=\"{html.escape(claim_url, quote=True)}\">"
+                f"{html.escape(claim_url)}</a></p>"
+                "<p>QR에는 학생 정보나 수령 코드가 포함되지 않습니다.</p>"
+                "</section>"
+            )
         table_rows = []
         for row in rows:
             score = "—"
@@ -1271,6 +1399,7 @@ class StudentPlatformService:
                 f"<td>{html.escape(str(row['assignment_key']))} · "
                 f"{html.escape(str(row['title']))}</td>"
                 f"<td>{html.escape(str(row['release_id']))}</td>"
+                f"<td>{int(row['acceptance_count'])}</td>"
                 f"<td>{int(row['download_count'])}</td>"
                 f"<td>{int(row['submission_count'])}</td>"
                 f"<td>{html.escape(str(row['state'] or '미제출'))}</td>"
@@ -1285,8 +1414,27 @@ class StudentPlatformService:
             f"<h1>{html.escape(self.course_key)} 채점 현황</h1>"
             f"<p>갱신 시각: {html.escape(str(dashboard['generated_at']))} · "
             "<a href=\"/instructor\">새로 고침</a></p>"
-            "<table><thead><tr><th>학생</th><th>과제</th><th>릴리스</th>"
-            "<th>다운로드</th><th>제출</th><th>최신 상태</th><th>점수</th>"
+            "<h2>교과목 요약</h2>"
+            f"<p>등록 학생 {int(course['enrolled_students'])}명 · "
+            f"활성 학생 {int(course['active_students'])}명 · "
+            f"과제 {int(course['assignments'])}개 · "
+            f"수락 {int(course['acceptances'])}건 · "
+            f"제출 {int(course['submissions'])}건</p>"
+            "<h2>학생 관리</h2>"
+            "<table><thead><tr><th>학생</th><th>상태</th><th>전용 비밀번호</th>"
+            "<th>수락</th><th>다운로드</th><th>제출</th></tr></thead><tbody>"
+            + "".join(student_management_rows)
+            + "</tbody></table>"
+            + (
+                "<p>등록된 학생이 없습니다.</p>"
+                if not student_management_rows
+                else ""
+            )
+            + "<h2>과제 수령 QR</h2>"
+            + "".join(assignment_cards)
+            + ("<p>공개된 bundle 과제가 없습니다.</p>" if not assignment_cards else "")
+            + "<table><thead><tr><th>학생</th><th>과제</th><th>릴리스</th>"
+            "<th>수락</th><th>다운로드</th><th>제출</th><th>최신 상태</th><th>점수</th>"
             "<th>최근 제출</th></tr></thead><tbody>"
             + "".join(table_rows)
             + "</tbody></table>"
@@ -1328,8 +1476,7 @@ class StudentPlatformService:
                 headers=challenge,
             )
 
-    @staticmethod
-    def _dashboard_projection(row: Any) -> Mapping[str, Any]:
+    def _dashboard_projection(self, row: Any) -> Mapping[str, Any]:
         return {
             "student_key": row.student_key,
             "assignment_id": row.assignment_id,
@@ -1339,6 +1486,8 @@ class StudentPlatformService:
             "download_count": row.download_count,
             "first_downloaded_at": row.first_downloaded_at,
             "last_downloaded_at": row.last_downloaded_at,
+            "acceptance_count": row.acceptance_count,
+            "latest_claim_accepted_at": row.latest_claim_accepted_at,
             "submission_count": row.submission_count,
             "latest_submission_id": row.latest_submission_id,
             "state": row.latest_state.value if row.latest_state is not None else None,
@@ -1347,6 +1496,299 @@ class StudentPlatformService:
             "score": row.latest_score,
             "max_score": row.max_score,
             "published_at": row.latest_published_at,
+            "claim_url": self._assignment_claim_url(row.assignment_id),
+        }
+
+    def _assignment_claim_url(self, assignment_id: str) -> str:
+        return (
+            f"{self.public_base_url}/assignment-claim/"
+            f"{quote(assignment_id, safe='')}"
+        )
+
+    # Password-backed assignment claims ------------------------------
+
+    def set_student_password(
+        self, *, student_key: str, password: str
+    ) -> Mapping[str, Any]:
+        """Set one course-scoped Autograde password from a trusted CLI."""
+
+        student = self.state.get_student_by_key(
+            _required_string(student_key, "student_key", maximum=255)
+        )
+        credential = self.state.set_student_password_hash(
+            student_id=student.id,
+            course_key=self.course_key,
+            password_hash=hash_student_password(password),
+            at=self._aware_now(),
+        )
+        return {
+            "student_key": credential.student_key,
+            "course_key": credential.course_key,
+            "password_configured": True,
+            "updated_at": credential.updated_at,
+        }
+
+    def assignment_claim_page(
+        self, query: Mapping[str, str]
+    ) -> PlatformResponse:
+        """Render a CSRF-bound password form; the URL contains no secret."""
+
+        self._require_secure_password_claim_transport()
+        _strict_object(
+            query,
+            allowed={"assignment_id"},
+            required={"assignment_id"},
+        )
+        assignment_id = self._safe_identifier(
+            _required_string(
+                query.get("assignment_id"), "assignment_id", maximum=256
+            ),
+            "assignment_id",
+        )
+        assignment_label = self._assignment_claim_display_name(assignment_id)
+        csrf = new_api_token()
+        signed_entry = sign_browser_value(
+            self._secret,
+            "assignment-claim-entry",
+            {
+                "assignment_id": assignment_id,
+                "course_key": self.course_key,
+                "csrf": csrf,
+            },
+            lifetime_seconds=self.policy.assignment_claim_lifetime_seconds,
+            now=int(self._aware_now().timestamp()),
+        )
+        body = self._html_page(
+            "과제 수령 코드 발급",
+            "<h1>과제 수령 코드(과제 키) 발급</h1>"
+            f"<p>교과목: <strong>{html.escape(self.course_key)}</strong><br>"
+            f"과제: <strong>{html.escape(assignment_label)}</strong></p>"
+            "<p>학교 SSO 비밀번호가 아니라 이 서비스에 별도로 등록한 "
+            "<strong>Autograde 전용 비밀번호</strong>를 입력하세요.</p>"
+            "<form method=\"post\" action=\"/assignment-claim/issue\">"
+            f"<input type=\"hidden\" name=\"assignment_id\" "
+            f"value=\"{html.escape(assignment_id, quote=True)}\">"
+            f"<input type=\"hidden\" name=\"csrf\" "
+            f"value=\"{html.escape(csrf, quote=True)}\">"
+            "<label>학번 <input name=\"student_key\" autocomplete=\"username\" "
+            "maxlength=\"255\" required></label>"
+            "<label>Autograde 전용 비밀번호 <input type=\"password\" "
+            "name=\"password\" autocomplete=\"current-password\" "
+            "minlength=\"15\" maxlength=\"256\" required></label>"
+            "<p><small>Autograde 전용 비밀번호는 15자 이상이어야 합니다. "
+            "붙여넣기와 비밀번호 관리자를 사용할 수 있습니다.</small></p>"
+            "<button type=\"submit\">수령 코드 발급</button></form>",
+        )
+        return PlatformResponse(
+            200,
+            body,
+            {
+                "Content-Type": "text/html; charset=utf-8",
+                "Set-Cookie": self._assignment_claim_cookie(signed_entry),
+            },
+        )
+
+    def issue_assignment_claim(
+        self, form: Mapping[str, str], cookies: Mapping[str, str]
+    ) -> PlatformResponse:
+        """Authenticate a student and display one raw claim code exactly once."""
+
+        self._require_secure_password_claim_transport()
+        _strict_object(
+            form,
+            allowed={"student_key", "password", "assignment_id", "csrf"},
+            required={"student_key", "password", "assignment_id", "csrf"},
+        )
+        assignment_id = self._safe_identifier(
+            _required_string(
+                form.get("assignment_id"), "assignment_id", maximum=256
+            ),
+            "assignment_id",
+        )
+        student_key = _required_string(
+            form.get("student_key"), "student_key", maximum=255
+        )
+        password = form.get("password")
+        if not isinstance(password, str):
+            password = ""
+        try:
+            entry = verify_browser_value(
+                self._secret,
+                "assignment-claim-entry",
+                cookies.get("autograde_assignment_claim", ""),
+                now=int(self._aware_now().timestamp()),
+            )
+            entry_course = entry.get("course_key")
+            entry_assignment = entry.get("assignment_id")
+            expected_csrf = entry.get("csrf")
+            supplied_csrf = form.get("csrf", "")
+            if (
+                not isinstance(entry_course, str)
+                or not hmac.compare_digest(entry_course, self.course_key)
+                or not isinstance(entry_assignment, str)
+                or not hmac.compare_digest(entry_assignment, assignment_id)
+                or not isinstance(expected_csrf, str)
+                or not hmac.compare_digest(expected_csrf, supplied_csrf)
+            ):
+                raise InvalidSignedValue("assignment claim entry binding is invalid")
+        except InvalidSignedValue as exc:
+            raise PlatformAPIError(
+                403,
+                "assignment_claim_denied",
+                "assignment claim could not be issued",
+            ) from exc
+
+        credential = None
+        try:
+            credential = self.state.get_student_password_credential(
+                student_key=student_key,
+                course_key=self.course_key,
+            )
+        except PlatformNotFound:
+            pass
+        stored_hash = (
+            _DUMMY_PASSWORD_HASH
+            if credential is None
+            else credential.password_hash
+        )
+        if not self._password_verification_slots.acquire(timeout=5):
+            raise PlatformAPIError(
+                503,
+                "assignment_claim_unavailable",
+                "assignment claim is temporarily unavailable",
+                headers={"Retry-After": "1"},
+            )
+        try:
+            password_matches = verify_student_password(password, stored_hash)
+        finally:
+            self._password_verification_slots.release()
+        now = self._aware_now()
+        locked = bool(
+            credential is not None
+            and credential.locked_until is not None
+            and credential.locked_until > utc_iso(now)
+        )
+        if not password_matches or credential is None or locked:
+            if credential is not None and not password_matches:
+                try:
+                    self.state.record_student_password_failure(
+                        enrollment_id=credential.enrollment_id,
+                        expected_password_hash=credential.password_hash,
+                        max_failed_attempts=self.policy.max_password_attempts,
+                        lockout_seconds=self.policy.password_lockout_seconds,
+                        at=now,
+                    )
+                except PlatformAccessDenied:
+                    pass
+            raise PlatformAPIError(
+                403,
+                "assignment_claim_denied",
+                "assignment claim could not be issued",
+            )
+
+        grant = None
+        claim_code = ""
+        for _attempt in range(5):
+            claim_code = new_assignment_claim_code()
+            try:
+                grant = self.state.issue_assignment_grant(
+                    assignment_grant_id=new_public_id("agr"),
+                    student_id=credential.student_id,
+                    course_key=self.course_key,
+                    expected_password_hash=credential.password_hash,
+                    assignment_id=assignment_id,
+                    claim_tag=claim_code.split("-", 2)[1],
+                    claim_code_hmac=self._digest(
+                        "assignment-claim-code", claim_code
+                    ),
+                    expires_at=now
+                    + timedelta(
+                        seconds=self.policy.assignment_claim_lifetime_seconds
+                    ),
+                    at=now,
+                )
+                break
+            except PlatformConflict:
+                continue
+            except (PlatformAccessDenied, PlatformNotFound) as exc:
+                raise PlatformAPIError(
+                    403,
+                    "assignment_claim_denied",
+                    "assignment claim could not be issued",
+                ) from exc
+        if grant is None:
+            raise PlatformAPIError(
+                503,
+                "assignment_claim_unavailable",
+                "assignment claim is temporarily unavailable",
+            )
+
+        body = self._html_page(
+            "과제 수령 코드",
+            "<h1>수령 코드가 발급되었습니다</h1>"
+            "<p>과제: <strong>"
+            f"{html.escape(self._assignment_claim_display_name(grant.assignment_id))}"
+            "</strong></p>"
+            f"<p>수령 코드: <strong><code>{html.escape(claim_code)}</code></strong></p>"
+            "<p>이 코드는 10분 동안 유효하고 한 번만 사용할 수 있습니다. "
+            "VS Code의 Autograde 입력창에 옮긴 뒤 이 페이지를 닫으세요. "
+            "코드는 다시 표시되지 않습니다.</p>",
+        )
+        return PlatformResponse(
+            200,
+            body,
+            {
+                "Content-Type": "text/html; charset=utf-8",
+                "Set-Cookie": self._assignment_claim_cookie("", max_age=0),
+            },
+        )
+
+    def redeem_assignment_claim(
+        self, payload: Mapping[str, Any]
+    ) -> Mapping[str, Any]:
+        """Consume one claim while atomically approving its pending device."""
+
+        self._require_secure_password_claim_transport()
+        _strict_object(
+            payload,
+            allowed={"claim_code", "device_code"},
+            required={"claim_code", "device_code"},
+        )
+        claim_code = self._normalize_assignment_claim_code(
+            payload.get("claim_code")
+        )
+        device_code = _required_string(
+            payload.get("device_code"), "device_code", maximum=256
+        )
+        now = self._aware_now()
+        try:
+            grant, _device, acceptance = self.state.redeem_assignment_claim(
+                claim_tag=claim_code.split("-", 2)[1],
+                claim_code_hmac=self._digest(
+                    "assignment-claim-code", claim_code
+                ),
+                course_key=self.course_key,
+                device_code_hash=self._digest("device", device_code),
+                acceptance_id=new_public_id("aac"),
+                at=now,
+            )
+        except (
+            PlatformAccessDenied,
+            PlatformConflict,
+            PlatformInvalidTransition,
+            PlatformNotFound,
+        ) as exc:
+            raise PlatformAPIError(
+                403,
+                "assignment_claim_denied",
+                "assignment claim could not be completed",
+            ) from exc
+
+        return {
+            "course_key": grant.course_key,
+            "assignment_id": grant.assignment_id,
+            "delivery_mode": grant.delivery_mode,
+            "acceptance_id": acceptance.acceptance_id,
         }
 
     # Browser pairing -------------------------------------------------
@@ -1740,6 +2182,18 @@ class StudentPlatformService:
     def _digest(self, purpose: str, value: str) -> str:
         return secret_digest(self._secret, purpose, value)
 
+    def _require_secure_password_claim_transport(self) -> None:
+        parsed = urlsplit(self.public_base_url)
+        loopback = parsed.hostname in {"127.0.0.1", "localhost", "::1"}
+        if self.external_access_mode == "insecure-http" or not (
+            parsed.scheme == "https" or (parsed.scheme == "http" and loopback)
+        ):
+            raise PlatformAPIError(
+                403,
+                "assignment_claim_unavailable",
+                "password-based assignment claims require HTTPS",
+            )
+
     def _access_verifier(self, access_token: str) -> str:
         return self._digest("access", _required_string(access_token, "access token", maximum=256))
 
@@ -1772,12 +2226,14 @@ class StudentPlatformService:
             ) from exc
 
     def _owned_assignment(self, access_token: str, assignment_id: str) -> PlatformAssignment:
-        self._authorize(access_token)
+        session, _student = self._authorize(access_token)
+        safe_assignment_id = self._safe_identifier(assignment_id, "assignment_id")
+        self._enforce_session_assignment_scope(session, "git", safe_assignment_id)
         try:
             return self.state.get_owned_assignment(
                 access_token_hash=self._access_verifier(access_token),
                 course_key=self.course_key,
-                assignment_id=self._safe_identifier(assignment_id, "assignment_id"),
+                assignment_id=safe_assignment_id,
                 require_available=True,
                 at=self._aware_now(),
             )
@@ -1789,12 +2245,16 @@ class StudentPlatformService:
     def _owned_bundle_assignment(
         self, access_token: str, assignment_id: str
     ) -> BundleAssignmentRelease:
-        self._authorize(access_token)
+        session, _student = self._authorize(access_token)
+        safe_assignment_id = self._safe_identifier(assignment_id, "assignment_id")
+        self._enforce_session_assignment_scope(
+            session, "bundle", safe_assignment_id
+        )
         try:
             return self.state.get_owned_bundle_assignment(
                 access_token_hash=self._access_verifier(access_token),
                 course_key=self.course_key,
-                assignment_id=self._safe_identifier(assignment_id, "assignment_id"),
+                assignment_id=safe_assignment_id,
                 require_available=True,
                 at=self._aware_now(),
             )
@@ -1806,6 +2266,24 @@ class StudentPlatformService:
             raise PlatformAPIError(
                 403, "access_denied", "assignment is not available"
             ) from exc
+
+    def _enforce_session_assignment_scope(
+        self, session: PlatformSession, delivery_mode: str, assignment_id: str
+    ) -> None:
+        try:
+            scope = self.state.get_session_assignment_scope(
+                session_id=session.session_id, course_key=self.course_key
+            )
+        except PlatformNotFound as exc:
+            raise PlatformAPIError(
+                401, "invalid_token", "access token is invalid or expired"
+            ) from exc
+        if scope is not None and scope != (delivery_mode, assignment_id):
+            raise PlatformAPIError(
+                403,
+                "access_denied",
+                "this session is restricted to another assignment",
+            )
 
     def _poll_is_too_fast(
         self,
@@ -1899,6 +2377,33 @@ class StudentPlatformService:
         raw = compact[3:]
         groups = [raw[index : index + 4] for index in range(0, len(raw), 4)]
         return "AG1-" + "-".join(groups)
+
+    @staticmethod
+    def _normalize_assignment_claim_code(value: Any) -> str:
+        if not isinstance(value, str) or len(value) > 32:
+            raise PlatformAPIError(
+                403,
+                "assignment_claim_denied",
+                "assignment claim could not be completed",
+            )
+        text = value.strip().upper()
+        if not text or any(ord(character) < 32 for character in text):
+            raise PlatformAPIError(
+                403,
+                "assignment_claim_denied",
+                "assignment claim could not be completed",
+            )
+        compact = text.replace("-", "").replace(" ", "")
+        if not _ASSIGNMENT_CLAIM_CODE.fullmatch(compact):
+            raise PlatformAPIError(
+                403,
+                "assignment_claim_denied",
+                "assignment claim could not be completed",
+            )
+        raw = compact[3:]
+        return "AK1-" + "-".join(
+            raw[index : index + 4] for index in range(0, len(raw), 4)
+        )
 
     @staticmethod
     def _safe_identifier(value: str, field_name: str) -> str:
@@ -2082,6 +2587,28 @@ class StudentPlatformService:
             f"autograde_activation={value}; Path=/activate; HttpOnly; SameSite=Lax"
             f"{secure}{age}"
         )
+
+    def _assignment_claim_cookie(
+        self, value: str, *, max_age: int | None = None
+    ) -> str:
+        secure = "; Secure" if self.public_base_url.startswith("https://") else ""
+        age = f"; Max-Age={max_age}" if max_age is not None else ""
+        return (
+            "autograde_assignment_claim="
+            f"{value}; Path=/assignment-claim; HttpOnly; SameSite=Strict"
+            f"{secure}{age}"
+        )
+
+    def _assignment_claim_display_name(self, assignment_id: str) -> str:
+        """Prefer a human title without exposing another course's metadata."""
+
+        try:
+            assignment = self.state.get_bundle_assignment(assignment_id)
+        except PlatformNotFound:
+            return assignment_id
+        if assignment.course_key != self.course_key:
+            return assignment_id
+        return f"{assignment.title} ({assignment.assignment_key})"
 
     @staticmethod
     def _html_page(title: str, content: str) -> str:

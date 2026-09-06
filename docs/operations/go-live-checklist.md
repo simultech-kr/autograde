@@ -1,7 +1,8 @@
 # 파일럿 Go/No-Go 체크리스트
 
-이 체크리스트의 `Go`는 합성·신뢰 코드로 기본 한 컴퓨터 또는 엄격히 제한된 신뢰 LAN에서
-사용자 흐름을 검증해도 된다는 뜻입니다. 실제 학생 채점이나 production 배포 승인이 아닙니다.
+이 체크리스트의 `Go`는 합성·신뢰 코드로 한 컴퓨터, loopback 앞의 외부 HTTPS 또는 엄격히
+제한된 신뢰 LAN에서 사용자 흐름을 검증해도 된다는 뜻입니다. 실제 학생 채점이나 production
+배포 승인이 아닙니다. QR 흐름은 [QR 과제 수령 파일럿](qr-assignment-claim-pilot.md)을,
 LAN을 선택했다면 이 체크리스트와 [신뢰 LAN 외부 접속 파일럿](trusted-lan-pilot.md)을 함께
 통과해야 합니다. Docker/Podman 검증은 이번 파일럿 gate에서 제외하고 배포 단계 계획으로만
 관리합니다.
@@ -12,7 +13,9 @@ LAN을 선택했다면 이 체크리스트와 [신뢰 LAN 외부 접속 파일�
 
 - 실제 학생이 작성한 검토되지 않은 코드를 `pilot-local`로 실행함
 - 공식 성적, 시험, confidential hidden test 또는 민감 데이터를 사용함
-- Server를 인터넷, 공용·개방 LAN, router port forwarding 또는 불특정 VPN에 공개함
+- Built-in HTTP listener를 인터넷, 공용·개방 LAN, router port forwarding 또는 불특정 VPN에
+  직접 공개함. 외부 QR 파일럿은 loopback listener 앞의 검증된 HTTPS reverse proxy만 허용함
+- 학교 포털 비밀번호를 Autograde page에서 수집하거나 전용 비밀번호를 HTTP로 전송함
 - 개인 업무 credential이나 중요한 데이터가 있는 host에서 제출물을 신뢰할 수 없음
 - Pilot config/roster의 대상 course 또는 data root를 확인하지 못함
 - Config CSV, roster CSV, SQLite 또는 credential file 권한을 제한할 수 없음
@@ -33,13 +36,13 @@ filesystem, network, process/UID와 kernel 격리를 제공하지 않습니다.
 - [ ] Pilot config가 `key,value` 두 열이고 중복·알 수 없는 key가 없다.
 - [ ] `course_key`가 파일럿 전용 값이다.
 - [ ] `data_root`가 정확한 파일럿 전용 디렉터리다.
-- [ ] 기본 profile은 `external_access_mode=disabled`이고 `public_base_url`, `listen`, `port`가
-      같은 loopback endpoint를 나타낸다.
+- [ ] 기본 profile은 `external_access_mode=disabled`이고 `listen`은 loopback이다. 공개 URL은
+      같은 loopback endpoint 또는 검증한 reverse proxy의 HTTPS origin이다.
 - [ ] LAN profile을 선택했다면 별도 data root/port를 사용하고 `external_access_mode`가
       `insecure-http`이며 public/listen이 동일한 실제 RFC 1918 IPv4를 나타낸다.
 - [ ] `grading_runtime`이 정확히 `pilot-local`이다.
 - [ ] `bundle_worker_count`가 시험 장비에 맞는 양의 정수다.
-- [ ] Config에 secret, 활성화 코드나 학생 개인정보가 없다.
+- [ ] Config에 secret, 비밀번호/hash, 수령·활성화 코드나 학생 개인정보가 없다.
 - [ ] Roster는 별도 UTF-8 CSV이고 `student_key,active` schema를 따른다.
 - [ ] Roster의 ID, 중복, 빈 값과 active 상태를 교수자가 확인했다.
 - [ ] 실제 학생 roster 대신 합성 ID를 우선 사용한다.
@@ -51,6 +54,8 @@ filesystem, network, process/UID와 kernel 격리를 제공하지 않습니다.
 - [ ] Data root가 다른 수업·개발 작업과 공유되지 않는다.
 - [ ] Data root directory는 owner만 접근할 수 있다.
 - [ ] SQLite, server secret과 instructor token은 owner만 읽을 수 있다.
+- [ ] 학생 전용 비밀번호는 15자 이상이고 학교 포털과 재사용하지 않으며 hash만 SQLite에 둔다.
+- [ ] 초기 전용 비밀번호 전달과 분실 시 본인 확인·재설정 절차가 있다.
 - [ ] 활성화 코드는 **매 Sign In마다** 학생별 새 mode `0600` 파일과 새 경로로 발급하고
       덮어쓰지 않는다.
 - [ ] Raw 활성화 코드와 instructor token을 CSV, URL, log 또는 repository에 넣지 않는다.
@@ -74,6 +79,13 @@ filesystem, network, process/UID와 kernel 격리를 제공하지 않습니다.
 
 ## 4. 인증과 권한
 
+- [ ] QR에는 공개 HTTPS assignment path만 있고 학생 ID, query/fragment 또는 secret이 없다.
+- [ ] QR page의 domain·교과목·과제 표시가 교수자 안내와 일치한다.
+- [ ] 미등록/inactive 학생, 잘못된 비밀번호와 잠긴 계정은 같은 공개 오류로 거부된다.
+- [ ] 수령 코드는 10분 후 만료되고 한 번 소비하면 재사용할 수 없다.
+- [ ] 학생·교과목·과제·pending device 중 하나라도 다른 수령 코드는 원자적으로 거부된다.
+- [ ] 수령 코드 session에서는 수락한 과제 외의 목록·다운로드·제출·결과가 보이지 않는다.
+- [ ] 수령 코드와 비밀번호 원문은 DB, URL, log, Dashboard, Extension 저장소에 남지 않는다.
 - [ ] 미등록 또는 inactive 학생은 활성화 코드를 발급·사용할 수 없다.
 - [ ] 활성화 코드는 한 번 소비하면 재사용할 수 없다.
 - [ ] 같은 학생의 다음 로그인에는 새 활성화 코드를 발급하며, 학기 초 코드나 소비된 코드를
@@ -84,7 +96,7 @@ filesystem, network, process/UID와 kernel 격리를 제공하지 않습니다.
       거부되고 최신 session 하나만 남는다.
 - [ ] 최초 로그인 후 4시간이 지나면 access/refresh token 모두 거부되며 refresh가 절대 만료를
       연장하지 않는다.
-- [ ] Access/refresh token과 audience는 Extension Host 메모리 전용이며 VS Code SecretStorage,
+- [ ] 수령 코드, access/refresh token과 audience는 Extension Host 메모리 전용이며 VS Code SecretStorage,
       workspace, 환경변수, Git 설정과 log에 기록되지 않는다.
 - [ ] VS Code 종료, `Developer: Reload Window` 및 WSL 재연결 뒤 service URL은 유지되지만
       로그인 상태는 없어 새 Sign In이 필요하다.
@@ -112,6 +124,7 @@ filesystem, network, process/UID와 kernel 격리를 제공하지 않습니다.
 - [ ] 마감·비활성·다른 course assignment 제출이 durable receipt 없이 거부된다.
 - [ ] Server 재시작 후 accepted/queued/running recovery 정책이 문서와 일치한다.
 - [ ] 기본 profile의 Dashboard 수치가 SQLite submission/result 원장과 일치한다.
+- [ ] Dashboard의 교과목/학생/수락/다운로드 집계와 QR link가 SQLite·public URL과 일치한다.
 
 ## 6. 자동 시험
 
@@ -120,6 +133,7 @@ Repository root에서 실행합니다.
 ```bash
 .venv/bin/python -m pytest -q
 .venv/bin/python -m pytest -q tests/integration/test_bundle_platform_25_load.py
+.venv/bin/python -m pytest -q tests/integration/test_assignment_claim_25_load.py
 ```
 
 Extension에서 실행합니다.
@@ -132,7 +146,7 @@ shasum -a 256 -c SHA256SUMS
 ```
 
 - [ ] Python 전체 test가 통과했다.
-- [ ] 25명 integration test가 유실·소유권 오류 없이 통과했다.
+- [ ] 25명 제출 및 QR 수령 integration test가 유실·소유권 오류 없이 통과했다.
 - [ ] Extension test와 checksum이 통과했다.
 - [ ] Docker smoke test가 파일럿 완료 조건에 포함되지 않았음을 확인했다.
 
@@ -141,13 +155,19 @@ shasum -a 256 -c SHA256SUMS
 
 ## 7. 대상 OS 수동 시험
 
-- [ ] Linux native VS Code에서 로그인→다운로드→제출→결과를 완료했다.
+- [ ] Linux native VS Code에서 QR→수령→다운로드→제출→결과를 완료했다.
 - [ ] macOS native VS Code에서 같은 흐름을 완료했다.
 - [ ] Windows에서는 WSL2 filesystem과 WSL extension host에서 완료했다.
 - [ ] Windows native workspace 제출은 지원되지 않는다는 안내가 보인다.
 - [ ] Extension과 config의 service base URL이 정확히 일치한다.
 - [ ] 기본 profile의 Server는 `127.0.0.1`에서만 listen한다. LAN profile이면 config에 명시한
       실제 사설 interface 하나에서만 listen하며 `0.0.0.0`을 사용하지 않는다.
+- [ ] HTTPS profile이면 외부에서 인증서 경고 없이 접속되고 proxy upstream은 loopback이며
+      HTTP downgrade, origin 변경과 password page의 cache가 없다.
+- [ ] 실제 교실의 공용 NAT에서 25명이 QR 수령을 동시에 시작해도 정상 흐름에 `429`가 없고,
+      반복적인 인증 요청에는 rate limit의 `429`가 발생한다.
+- [ ] 첫 파일럿의 HSTS는 짧은 `max-age`로 확인하고 인증서 자동 갱신·HTTPS 상시 운영을 검증한
+      뒤에만 1년으로 늘리며 임시 domain에는 `includeSubDomains`/preload를 쓰지 않는다.
 - [ ] 전용 수업 폴더를 workspace root로 연 상태에서 bundle 과제가 직접 하위 폴더로
       다운로드된다.
 - [ ] 다운로드 뒤 새 창, workspace reload 또는 workspace folder 추가 없이 같은 로그인으로

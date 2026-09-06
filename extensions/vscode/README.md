@@ -8,28 +8,37 @@ Linux, macOS 또는 Windows WSL2의 학생 workspace에서 과제를 내려받�
 
 1. 빈 수업 폴더를 만들고, Linux/macOS에서는 일반 VS Code window로, Windows에서는 Remote
    WSL2 window로 그 폴더를 엽니다. Workspace Trust를 확인합니다.
-2. 왼쪽 Activity Bar의 **Autograde** 아이콘을 열고, **Assignments** 영역의
-   **지금 로그인** 또는 제목 표시줄의 **로그인** 버튼을 누릅니다. Command Palette를 열
-   필요가 없습니다.
-3. 열린 웹사이트에서 담당자가 **이번 로그인에 새로 발급한** 학생 활성화 코드를 입력해
-   표시된 연결 코드를 승인합니다. GitHub OAuth 계정 로그인은 필요하지 않습니다.
-4. 승인이 끝나면 같은 Autograde 사이드바에 과제 목록이 자동으로 표시됩니다. 목록이
-   갱신되지 않으면 **Assignments** 제목 표시줄의 **과제 새로고침** 버튼을 누릅니다.
-5. 받을 과제를 펼쳐 **과제 파일 다운로드**를 선택합니다. 과제 행에 마우스를 올렸을 때
-   오른쪽에 나타나는 다운로드 아이콘이나 제목 표시줄의 **과제 파일 다운로드** 버튼도 같은
-   기능을 실행합니다. `bundle` 과제는 서버에서 starter를 현재 수업 폴더 바로 아래의 개별
-   과제 폴더로 안전하게 내려받고, GitHub 과제는 repository를 clone합니다.
+2. 담당자가 안내한 **HTTPS** Autograde 웹사이트에서 과제를 선택하고 학번과 전용 비밀번호를
+   입력합니다. 웹사이트가 한 번만 보여 주는 **과제 수령 코드(과제 키)**
+   `AK1-XXXX-XXXX-XXXX`를 확인합니다. GitHub OAuth 계정 로그인은 필요하지 않습니다.
+3. 왼쪽 Activity Bar의 **Autograde** 아이콘을 열고 **Assignments** 영역의
+   **수령 코드 입력 및 다운로드**를 누릅니다. 같은 기능의 열쇠 아이콘도 제목 표시줄에 항상
+   표시되므로 Command Palette를 열 필요가 없습니다.
+4. 가려진 입력창에 수령 코드를 직접 입력합니다. 대소문자, 하이픈 위치와 ASCII 공백은 자동
+   보정하지만 `0`, `1`, `I`, `L`, `O`, `U`처럼 코드에 사용하지 않는 혼동 문자는 거부합니다.
+   Extension은 브라우저를 열지 않고 임시 device authorization을 만든 뒤 코드를 그 device에
+   연결하고, 기존의 bounded token polling으로 로그인 token을 받습니다.
+5. 성공하면 수령한 과제가 사이드바에 표시되고 다운로드가 바로 시작됩니다. `bundle` 과제는
+   starter를 현재 수업 폴더 바로 아래의 개별 과제 폴더로 안전하게 내려받고, GitHub 과제는
+   repository를 clone합니다. 아직 준비 중이면 **과제 새로고침** 후 **과제 파일 다운로드**를
+   누릅니다.
 6. 문제를 해결합니다. `bundle` 과제에는 commit이나 GitHub push가 필요하지 않습니다.
 7. 과제 폴더 안의 파일을 연 상태에서 `Autograde: Submit Assignment`을 실행하거나,
    Autograde 과제 목록에서 제출할 과제를 선택해 실행합니다.
 8. `Autograde: View Latest Result`에서 상태, 점수, rubric과 공개 가능한 feedback을 봅니다.
 9. 공용 실습 PC를 떠나기 전에 `Autograde: Sign Out`을 실행합니다.
 
-로그인은 현재 Extension Host가 실행되는 동안에만 유지됩니다. VS Code window를 닫거나
-`Developer: Reload Window`를 실행하거나 WSL 연결을 다시 시작하면 로그인 정보가 사라지므로,
-다음 실습 자리에서는 Autograde 사이드바의 **지금 로그인**부터 다시 진행합니다.
-이때 이전 활성화 코드를 재사용하지 않고 담당자가 새로 발급한 코드를 입력합니다. 새 로그인
-성공 시 같은 학생·과정의 이전 server session은 폐기되고 최신 session 하나만 남습니다.
+수령 코드는 과제별·학생별·단기 1회용입니다. 다른 과제를 받을 때마다 웹사이트에서 새 코드를
+받아 Extension 입력창에 직접 입력합니다. raw 코드와 보정된 코드는 설정, 파일,
+`globalState`, `workspaceState`, `SecretStorage`, log 또는 controller field에 저장하지 않고
+redeem 요청이 끝나는 즉시 메모리 참조도 지웁니다. 반환된 access/refresh token도 현재
+Extension Host 메모리에만 있습니다. VS Code window를 닫거나 `Developer: Reload Window`를
+실행하거나 WSL 연결을 다시 시작하면 token이 사라지므로 웹사이트에서 새 수령 코드를 발급받아
+다시 시작합니다. 이미 소비된 코드는 재사용할 수 없습니다.
+
+기존 **지금 로그인** 및 제목 표시줄의 **로그인** 버튼을 이용한 학생 활성화 코드/device
+로그인도 호환 경로로 유지됩니다. 수령 코드 흐름은 해당 과제에 scope된 새 session을 만들며,
+기존 session이 있으면 현재 Extension Host가 새 token으로 전환합니다.
 
 `bundle` 다운로드는 새 VS Code window를 열거나 현재 workspace를 교체하지 않습니다. 안전한
 최상위 `README.md`, `README.txt` 또는 `README`가 있으면 현재 editor에서 미리 열고, 없으면
@@ -65,18 +74,20 @@ GitHub 과제에서는 제출 전에 다음 조건을 모두 확인합니다.
 
 ## 사이드바와 명령
 
-일반적인 로그인과 다운로드는 Activity Bar의 Autograde 사이드바에서 바로 실행합니다.
-로그인 전에는 **Assignments** 영역의 **지금 로그인** 또는 제목 표시줄의 **로그인** 버튼을
-사용합니다. 로그인 후에는 과제를 펼쳐 **과제 파일 다운로드**를 선택할 수 있습니다. 과제 행
-오른쪽의 다운로드 아이콘과 제목 표시줄의 **과제 파일 다운로드** 버튼도 제공됩니다. 목록이
-비어 있으면 **과제 새로고침**을 누릅니다. 다운로드 동작은 신뢰한 workspace에서만 표시되거나
-활성화됩니다.
+과제 수령과 다운로드는 Activity Bar의 Autograde 사이드바에서 바로 실행합니다. 로그인 여부와
+관계없이 **Assignments** 영역의 **수령 코드 입력 및 다운로드** 또는 제목 표시줄의 열쇠
+아이콘을 사용할 수 있습니다. 로그인 전에는 기존 device 로그인용 **지금 로그인** 링크와
+제목 표시줄의 **로그인** 버튼도 표시됩니다. 로그인 후에는 과제를 펼쳐 **과제 파일 다운로드**를
+선택할 수 있으며, 과제 행 오른쪽의 다운로드 아이콘과 제목 표시줄의 **과제 파일 다운로드**
+버튼도 같은 기능을 제공합니다. 목록이 비어 있으면 **과제 새로고침**을 누릅니다. 수령 코드
+입력과 모든 다운로드 동작은 신뢰한 workspace에서만 표시되거나 활성화됩니다.
 
 사이드바 버튼이 보이지 않거나 키보드로 실행해야 할 때에는 Command Palette에서 아래 명령을
 대체 경로로 사용할 수 있습니다.
 
 - `Autograde: Sign In`
 - `Autograde: Sign Out`
+- `Autograde: Enter Assignment Claim Code and Download`
 - `Autograde: Refresh Assignments`
 - `Autograde: Download or Clone Assignment`
 - `Autograde: Submit Assignment`
@@ -88,7 +99,7 @@ GitHub 과제에서는 제출 전에 다음 조건을 모두 확인합니다.
 파일럿 기본 주소는 `http://127.0.0.1:18080`입니다. Sign In 확인창은 실제로 열 서버의
 origin을 표시하며, 서버가 다른 origin의 인증 페이지를 반환하면 브라우저를 열지 않습니다.
 
-같은 신뢰 LAN에서 짧게 진행하는 외부 HTTP 기능 시험만 예외입니다. 이때
+기존 device 로그인은 같은 신뢰 LAN에서 짧게 진행하는 외부 HTTP 기능 시험만 예외입니다. 이때
 `autograde.allowInsecureHttpPilot=true`를 별도로 설정해야 하며 표준 점 표기의 RFC 1918
 사설 IPv4 주소만 허용됩니다. Hostname, 공인 IP, `0.0.0.0`과 legacy numeric IP 표기는
 거부합니다. Extension은 로그인할 때마다 token과 제출물이 노출·변조될 수 있음을 modal로
@@ -96,6 +107,11 @@ origin을 표시하며, 서버가 다른 origin의 인증 페이지를 반환하
 opt-in은 암호화를 제공하지 않으므로 인터넷, 공용 Wi-Fi, 실제 성적에는 사용할 수 없습니다.
 서버 설정과 전체 절차는 repository의
 `docs/operations/trusted-lan-pilot.md`를 따릅니다.
+
+학번·비밀번호로 수령 코드를 발급하는 웹 페이지와 Extension의 수령 코드 교환은 운영 환경에서
+반드시 HTTPS를 사용합니다. `autograde.allowInsecureHttpPilot`을 켜도 RFC 1918 HTTP 서버에는
+수령 코드를 입력하거나 전송하지 않습니다. 개발자 한 명의 같은 장비에서 사용하는
+`localhost`, `127.0.0.1` 또는 `::1` loopback HTTP만 개발 예외입니다.
 
 Access token, rotating refresh token과 token audience는 현재 Extension Host의 메모리에만
 보관합니다. VS Code 설정, `globalState`, `workspaceState`, `SecretStorage` 또는 파일에는
@@ -116,6 +132,11 @@ Autograde Output과 diagnostics를 모두 지웁니다.
 서비스 페이지에 한 번만 입력하며, 성공하면 즉시 소비됩니다. 9자리 `연결 코드`는 현재
 VS Code 장치를 식별하는 짧은 만료 코드이고 학생 활성화 코드와 다른 값입니다.
 
+과제 수령 코드는 매 과제마다 가려진 입력창에서 새로 받으며 입력값을 미리 채우지 않습니다.
+Extension은 raw 코드와 보정된 코드를 설정, 상태 저장소, `SecretStorage`, clipboard 또는 log에
+남기지 않습니다. 수령 코드로 받은 access/refresh token은 위와 같이 현재 Extension Host
+메모리에만 있으며 다음 VS Code 실행으로 복구하지 않습니다.
+
 ## API contract
 
 Extension은 현재 로그인·제출 흐름에서 다음 endpoint를 사용합니다. session 목록과 개별 폐기
@@ -124,6 +145,7 @@ endpoint도 server contract에 포함되지만 현재 Extension UI는 current-se
 
 ```text
 POST   /v1/device-authorizations
+POST   /v1/assignment-claims/redeem
 POST   /v1/device-authorizations/token
 POST   /v1/tokens/refresh
 DELETE /v1/sessions/current
@@ -136,6 +158,26 @@ POST   /v1/submissions
 GET    /v1/submissions/{id}
 GET    /v1/submissions/{id}/result
 ```
+
+수령 코드 흐름은 먼저 `POST /v1/device-authorizations`로 pending device를 만들고, 브라우저를
+열지 않은 채 다음 JSON으로 코드를 그 device에 연결합니다. 이 요청에는 bearer token을 보내지
+않습니다.
+
+```json
+{
+  "claim_code": "AK1-2345-6789-ABCD",
+  "device_code": "<pending device code>"
+}
+```
+
+성공 응답은 `course_key`, `assignment_id`, `delivery_mode`, `acceptance_id`를 포함하고 token은
+포함하지 않습니다. Extension은 이어서 기존 `POST /v1/device-authorizations/token`을 bounded
+polling해 일반 access/refresh token을 받은 뒤, `GET /v1/assignments`에서 응답의
+`assignment_id`를 찾아 자동 다운로드합니다. Redeem 응답이 network error, timeout 또는
+잘못된 응답 형식으로 유실되더라도 서버가 이미 코드를 소비하고 device를 승인했을 수 있으므로
+같은 `device_code`로 token polling을 계속합니다. 복구 성공 시 과제 목록을 다시 읽어 학생이
+다운로드 대상을 선택할 수 있게 하며, 명시적인 `assignment_claim_denied` 응답에는 polling하지
+않습니다.
 
 Device token endpoint의 오류 `authorization_pending`, `slow_down`, `access_denied`,
 `expired_token`을 구분합니다. 일시적인 network 오류와 `429`/`502`/`503`/`504`는
@@ -246,7 +288,7 @@ Node.js 22 이상이 설치된 환경에서 실행합니다.
 npm ci
 npm test
 shasum -a 256 -c SHA256SUMS
-code --install-extension autograde-vscode-0.1.2.vsix
+code --install-extension autograde-vscode-0.2.0.vsix
 ```
 
 이 저장소의 `SHA256SUMS`는 현재 배포 후보 VSIX의 SHA-256을 고정합니다. 배포자는
@@ -265,7 +307,7 @@ Windows 탐색기에서 `.vsix` 파일을 더블클릭하지 않습니다. 파�
 (대소문자는 무관) 비교합니다.
 
 ```powershell
-Get-FileHash .\autograde-vscode-0.1.2.vsix -Algorithm SHA256
+Get-FileHash .\autograde-vscode-0.2.0.vsix -Algorithm SHA256
 Get-Content .\SHA256SUMS
 ```
 
@@ -276,11 +318,11 @@ CLI로 설치를 재현해야 할 때는 설치 유형에 맞는 정확한 경�
 
 ```powershell
 & "$env:LOCALAPPDATA\Programs\Microsoft VS Code\bin\code.cmd" --version
-& "$env:LOCALAPPDATA\Programs\Microsoft VS Code\bin\code.cmd" --install-extension .\autograde-vscode-0.1.2.vsix --force
+& "$env:LOCALAPPDATA\Programs\Microsoft VS Code\bin\code.cmd" --install-extension .\autograde-vscode-0.2.0.vsix --force
 
 # 모든 사용자용으로 설치된 경우
 & "$env:ProgramFiles\Microsoft VS Code\bin\code.cmd" --version
-& "$env:ProgramFiles\Microsoft VS Code\bin\code.cmd" --install-extension .\autograde-vscode-0.1.2.vsix --force
+& "$env:ProgramFiles\Microsoft VS Code\bin\code.cmd" --install-extension .\autograde-vscode-0.2.0.vsix --force
 ```
 
 `--force`는 기존 설치 갱신과 확인 prompt 처리용이며, 패키지 서명 검증을 끄거나 우회하는

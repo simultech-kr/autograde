@@ -272,6 +272,74 @@ test("starter download stays on the authenticated assignment endpoint", async ()
   assert.equal(transport.calls.length, 1);
 });
 
+test("assignment claim redemption sends the one-time secret only in an unauthenticated JSON body", async () => {
+  const transport = new FakeTransport([{
+    assignment_id: "asn_observer_cpp",
+    course_key: "cse101-2026f",
+    delivery_mode: "bundle",
+    acceptance_id: "aac_01",
+  }]);
+  const client = new AutogradeClient(transport, new FakeTokens());
+  const controller = new AbortController();
+
+  const redemption = await client.redeemAssignmentClaim(
+    " ak1 2345-6789-abcd ",
+    "pending-device-code",
+    controller.signal,
+  );
+
+  assert.deepEqual(redemption, {
+    assignmentId: "asn_observer_cpp",
+    courseKey: "cse101-2026f",
+    deliveryMode: "bundle",
+    acceptanceId: "aac_01",
+  });
+  assert.equal(transport.calls.length, 1);
+  const call = transport.calls[0];
+  assert.equal(call?.endpoint, "/v1/assignment-claims/redeem");
+  assert.equal(call?.init.method, "POST");
+  assert.equal(call?.bearerToken, undefined);
+  assert.equal(call?.options?.signal, controller.signal);
+  assert.deepEqual(JSON.parse(String(call?.init.body)), {
+    claim_code: "AK1-2345-6789-ABCD",
+    device_code: "pending-device-code",
+  });
+  assert.doesNotMatch(call?.endpoint ?? "", /AK1/);
+  assert.equal(new Headers(call?.init.headers).get("Authorization"), null);
+});
+
+test("assignment claim redemption rejects malformed claim metadata responses", async () => {
+  for (const response of [
+    {
+      assignment_id: "asn_01",
+      course_key: "cse101",
+      acceptance_id: "aac_01",
+    },
+    {
+      assignment_id: "asn_01",
+      course_key: "cse101",
+      delivery_mode: "bundle",
+    },
+  ]) {
+    const client = new AutogradeClient(new FakeTransport([response]), new FakeTokens());
+    await assert.rejects(
+      client.redeemAssignmentClaim("AK1-2345-6789-ABCD", "pending-device-code"),
+      (error: unknown) => error instanceof ApiError && error.code === "invalid_response",
+    );
+  }
+});
+
+test("assignment claim redemption never sends a claim code over private-LAN HTTP", async () => {
+  const transport = new FakeTransport([], "http://192.168.50.34:18081");
+  const client = new AutogradeClient(transport, new FakeTokens());
+
+  await assert.rejects(
+    client.redeemAssignmentClaim("AK1-2345-6789-ABCD", "pending-device-code"),
+    (error: unknown) => error instanceof ApiError && error.code === "insecure_claim_redemption",
+  );
+  assert.equal(transport.calls.length, 0);
+});
+
 test("bundle submission retries the same bytes and idempotency key", async () => {
   const transport = new FakeTransport([
     new ApiError("unavailable", 503, "temporarily_unavailable"),

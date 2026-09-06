@@ -1,0 +1,9 @@
+key,value
+course_key,cse101-pilot
+data_root,.data-https
+public_base_url,https://grade.example.edu
+listen,127.0.0.1
+port,18080
+grading_runtime,pilot-local
+bundle_worker_count,4
+external_access_mode,disabled

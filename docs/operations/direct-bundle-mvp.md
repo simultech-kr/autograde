@@ -1,5 +1,9 @@
 # Local CSV 파일럿 실행 가이드
 
+> 이 문서의 교수자 발급 활성화 코드 흐름은 loopback·호환 시험용입니다. 학생이 QR에서
+> 학번과 Autograde 전용 비밀번호를 확인하고 과제를 받는 권장 외부 흐름은
+> [QR 과제 수령 파일럿 가이드](qr-assignment-claim-pilot.md)를 사용하세요.
+
 이 가이드는 한 컴퓨터에서 교수자 등록 → VS Code 다운로드 → 직접 제출 → 결과 조회 →
 교수자 dashboard까지 기능을 확인하는 파일럿 절차입니다. GitHub와 Docker/Podman을 사용하지
 않으며, shell 환경변수도 선언하지 않습니다. 설정과 roster는 서로 다른 local CSV 파일로

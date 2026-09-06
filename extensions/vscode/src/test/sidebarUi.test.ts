@@ -68,6 +68,13 @@ interface MenuContribution {
   readonly group?: string;
 }
 
+interface CommandContribution {
+  readonly command: string;
+  readonly title: string;
+  readonly shortTitle?: string;
+  readonly enablement?: string;
+}
+
 interface WelcomeContribution {
   readonly view: string;
   readonly contents: string;
@@ -75,7 +82,9 @@ interface WelcomeContribution {
 }
 
 interface ExtensionManifest {
+  readonly activationEvents?: readonly string[];
   readonly contributes?: {
+    readonly commands?: readonly CommandContribution[];
     readonly menus?: {
       readonly "view/title"?: readonly MenuContribution[];
       readonly "view/item/context"?: readonly MenuContribution[];
@@ -83,6 +92,33 @@ interface ExtensionManifest {
     readonly viewsWelcome?: readonly WelcomeContribution[];
   };
 }
+
+test("assignment claim code is directly reachable from every sidebar authentication state", async () => {
+  const manifest = await readManifest();
+  const commandId = "autograde.redeemAssignmentClaim";
+  assert.ok(manifest.activationEvents?.includes(`onCommand:${commandId}`));
+
+  const command = manifest.contributes?.commands?.find((item) => item.command === commandId);
+  assert.ok(command);
+  assert.match(command.shortTitle ?? "", /수령 코드/);
+  assert.match(command.enablement ?? "", /isWorkspaceTrusted/);
+
+  const titleMenu = manifest.contributes?.menus?.["view/title"]
+    ?.find((item) => item.command === commandId);
+  assert.ok(titleMenu);
+  assert.match(titleMenu.when ?? "", /view\s*==\s*autograde\.assignments/);
+  assert.match(titleMenu.when ?? "", /isWorkspaceTrusted/);
+  assert.doesNotMatch(titleMenu.when ?? "", /!?autograde\.authenticated/);
+  assert.match(titleMenu.group ?? "", /^navigation/);
+
+  const welcome = (manifest.contributes?.viewsWelcome ?? [])
+    .filter((item) => item.view === "autograde.assignments");
+  assert.ok(welcome.length >= 2);
+  for (const state of welcome) {
+    assert.match(state.contents, /\[[^\]]*수령 코드[^\]]*\]\(command:autograde\.redeemAssignmentClaim\)/);
+  }
+  assert.match(welcome.find((item) => item.when?.includes("!autograde.authenticated"))?.contents ?? "", /과제 수령 코드\(과제 키\)/);
+});
 
 test("sidebar title exposes direct signed-out and signed-in actions", async () => {
   const manifest = await readManifest();
@@ -164,6 +200,25 @@ test("extension keeps authentication and download availability contexts in sync"
     /"setContext",\s*"autograde\.hasDownloadableAssignments",\s*assignments\.some\(isAssignmentDownloadable\)/,
   );
   assert.match(source, /void updateAuthenticationUI\(false\)/);
+});
+
+test("a redeemed claim refreshes the authenticated list and targets the returned assignment", async () => {
+  const source = await readFile(path.resolve(__dirname, "../../src/extension.ts"), "utf8");
+  const claimStart = source.indexOf("const assignmentClaims = new AssignmentClaimController");
+  const registrationStart = source.indexOf("context.subscriptions.push", claimStart);
+
+  assert.ok(claimStart >= 0 && registrationStart > claimStart);
+  const wiring = source.slice(claimStart, registrationStart);
+  assert.match(wiring, /clearStudentSessionResidue/);
+  assert.match(wiring, /refreshAssignments\(false\)/);
+  assert.match(wiring, /assignment\.id\s*===\s*assignmentId/);
+  assert.match(wiring, /isAssignmentDownloadable\(accepted\)/);
+  assert.match(wiring, /cloneAssignment\([\s\S]*new AssignmentTreeItem\(accepted\)/);
+  assert.match(
+    wiring,
+    /if \(!assignmentId\)[\s\S]*cloneAssignment\(client, treeProvider, refreshAssignments\)/,
+    "a recovered token exchange must still let the student choose a downloadable assignment",
+  );
 });
 
 test("expanding an assignment exposes a visible file-download child action", () => {

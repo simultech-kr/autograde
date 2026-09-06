@@ -34,6 +34,16 @@ class FakeFacade:
         self.calls.append(("exchange_device_authorization", payload))
         return {"access_token": "issued-access-token"}
 
+    def redeem_assignment_claim(
+        self, payload: Mapping[str, Any]
+    ) -> Mapping[str, Any]:
+        self.calls.append(("redeem_assignment_claim", payload))
+        return {
+            "assignment_id": "asn_01",
+            "delivery_mode": "bundle",
+            "acceptance_id": "aac_01",
+        }
+
     def refresh_tokens(self, payload: Mapping[str, Any]) -> Mapping[str, Any]:
         self.calls.append(("refresh_tokens", payload))
         return {"access_token": "refreshed-access-token"}
@@ -102,6 +112,10 @@ class FakeFacade:
     ) -> HTTPResult:
         self.calls.append(("approve_activation", form, cookies))
         return HTTPResult(303, "", {"Location": "/activate?approved=1"})
+
+    def assignment_claim_page(self, query: Mapping[str, str]) -> HTTPResult:
+        self.calls.append(("assignment_claim_page", query))
+        return HTTPResult(200, "<h1>Assignment claim</h1>")
 
 
 @contextmanager
@@ -315,6 +329,25 @@ def test_api_routes_dispatch_to_the_facade_with_transport_context() -> None:
         assert facade.calls[-1] == (
             "exchange_device_authorization",
             {"device_code": "private"},
+        )
+
+        status, _, body = request(
+            server,
+            "POST",
+            "/v1/assignment-claims/redeem",
+            body={
+                "claim_code": "AK1-2345-6789-ABCD",
+                "device_code": "private",
+            },
+        )
+        assert status == 200
+        assert json_payload(body)["assignment_id"] == "asn_01"
+        assert facade.calls[-1] == (
+            "redeem_assignment_claim",
+            {
+                "claim_code": "AK1-2345-6789-ABCD",
+                "device_code": "private",
+            },
         )
 
         status, _, _ = request(
@@ -837,6 +870,42 @@ def test_optional_web_routes_support_html_redirect_form_and_cookies() -> None:
             },
             {"activation_session": "session-value"},
         )
+
+
+def test_assignment_claim_path_binds_the_assignment_without_query_override() -> None:
+    facade = FakeFacade()
+    with running_server(facade) as server:
+        status, headers, body = request(
+            server, "GET", "/assignment-claim/asn_lab01"
+        )
+        assert status == 200
+        assert headers["content-type"] == "text/html; charset=utf-8"
+        assert body == b"<h1>Assignment claim</h1>"
+        assert facade.calls[-1] == (
+            "assignment_claim_page",
+            {"assignment_id": "asn_lab01"},
+        )
+
+        status, _, body = request(
+            server,
+            "GET",
+            "/assignment-claim/asn_lab01?assignment_id=asn_other",
+        )
+        assert status == 400
+        assert json_payload(body)["error"]["code"] == "invalid_request"
+
+        status, _, body = request(
+            server, "GET", "/assignment-claim/not%2Fa%2Fsingle%2Fid"
+        )
+        assert status in {400, 404}
+        assert json_payload(body)["error"]["code"] in {
+            "invalid_request",
+            "not_found",
+        }
+
+    assert facade.calls == [
+        ("assignment_claim_page", {"assignment_id": "asn_lab01"})
+    ]
 
 
 def test_absent_optional_web_routes_are_not_advertised() -> None:

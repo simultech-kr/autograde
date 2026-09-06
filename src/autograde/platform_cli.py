@@ -7,6 +7,7 @@ from contextlib import contextmanager
 import csv
 import errno
 import fcntl
+import getpass
 import hashlib
 import json
 import math
@@ -212,6 +213,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     commands.add_parser("init", help="initialize private platform state")
 
+    course = commands.add_parser("course", help="inspect managed courses")
+    course_commands = course.add_subparsers(dest="course_command", required=True)
+    list_courses = course_commands.add_parser(
+        "list", help="list courses with roster, assignment, acceptance, and submission counts"
+    )
+    list_courses.add_argument("--limit", type=int, default=1_000)
+    show_course = course_commands.add_parser(
+        "show", help="show one course and its student and assignment status"
+    )
+    show_course.add_argument("managed_course_key", nargs="?")
+
     student = commands.add_parser("student", help="manage a roster student")
     student_commands = student.add_subparsers(dest="student_command", required=True)
     add_student = student_commands.add_parser(
@@ -232,6 +244,23 @@ def build_parser() -> argparse.ArgumentParser:
         "import", help="validate and import a course roster CSV"
     )
     import_students.add_argument("csv_file", type=Path)
+    list_students = student_commands.add_parser(
+        "list", help="list enrolled students and aggregate status"
+    )
+    list_students.add_argument("--limit", type=int, default=10_000)
+    show_student = student_commands.add_parser(
+        "show", help="show one enrolled student's aggregate status"
+    )
+    show_student.add_argument("student_key")
+    password_set = student_commands.add_parser(
+        "password-set", help="set a course-scoped dedicated Autograde password"
+    )
+    password_set.add_argument("student_key")
+    password_set.add_argument(
+        "--password-file",
+        type=Path,
+        help="read the password from a private mode-0600 UTF-8 file",
+    )
 
     assignment = commands.add_parser("assignment", help="manage student assignments")
     assignment_commands = assignment.add_subparsers(
@@ -451,6 +480,12 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--max-retained-sessions-per-student", type=int, default=1_000)
     serve.add_argument("--max-refresh-rotations-per-session", type=int, default=2_048)
     serve.add_argument("--max-activation-attempts", type=int, default=5)
+    serve.add_argument(
+        "--max-concurrent-password-verifications",
+        type=int,
+        default=4,
+        help="bound concurrent password hashing work (default: 4)",
+    )
     serve.add_argument("--session-list-limit", type=int, default=50)
     serve.add_argument(
         "--auth-history-retention-seconds",
@@ -472,7 +507,21 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         if args.pilot_config is not None:
             pilot_config = load_pilot_config(args.pilot_config)
             apply_pilot_config(args, pilot_config, argv=raw_argv)
-        course_key = _course_key(args, parser)
+        if args.command == "course" and args.course_command == "list":
+            course_key = (
+                args.course_key.strip()
+                if isinstance(args.course_key, str) and args.course_key.strip()
+                else ""
+            )
+        elif args.command == "course" and args.course_command == "show":
+            selected = args.managed_course_key or args.course_key
+            if not isinstance(selected, str) or not selected.strip():
+                parser.error(
+                    "course show requires COURSE_KEY or --course-key/AUTOGRADE_COURSE_KEY"
+                )
+            course_key = selected.strip()
+        else:
+            course_key = _course_key(args, parser)
         paths = AppPaths.from_value(args.data_root).ensure()
         state = PlatformStateStore(paths.database)
         secret = create_or_load_auth_secret(paths.platform_auth_secret)
@@ -747,6 +796,18 @@ def _dispatch(
     instructor_token: str,
     course_key: str,
 ) -> Optional[Mapping[str, Any]]:
+    if args.command == "course" and args.course_command == "list":
+        courses = state.list_course_summaries(limit=args.limit)
+        return {"count": len(courses), "courses": courses}
+    if args.command == "course" and args.course_command == "show":
+        summary = dict(state.get_course_summary(course_key=course_key))
+        students = state.list_course_student_summaries(course_key=course_key)
+        assignments = state.list_course_assignment_summaries(course_key=course_key)
+        return {
+            **summary,
+            "students": students,
+            "assignment_details": assignments,
+        }
     if args.command == "init":
         return {
             "course_key": course_key,
@@ -788,6 +849,26 @@ def _dispatch(
             "course_key": enrollment.course_key,
             "active": student.active and enrollment.active,
         }
+    if args.command == "student" and args.student_command == "list":
+        students = state.list_course_student_summaries(
+            course_key=course_key, limit=args.limit
+        )
+        return {"course_key": course_key, "count": len(students), "students": students}
+    if args.command == "student" and args.student_command == "show":
+        return state.get_course_student_summary(
+            course_key=course_key, student_key=args.student_key
+        )
+    if args.command == "student" and args.student_command == "password-set":
+        service = StudentPlatformService(
+            state=state,
+            server_secret=secret,
+            course_key=course_key,
+            public_base_url=args.public_base_url,
+        )
+        return service.set_student_password(
+            student_key=args.student_key,
+            password=_read_student_password(args.password_file),
+        )
     if args.command == "student" and args.student_command == "import":
         rows = _read_roster_csv(args.csv_file, state=state)
         imported = []
@@ -1889,6 +1970,9 @@ def _serve_locked(
                 max_retained_sessions=args.max_retained_sessions_per_student,
                 max_refresh_rotations=args.max_refresh_rotations_per_session,
                 max_activation_attempts=args.max_activation_attempts,
+                max_concurrent_password_verifications=(
+                    args.max_concurrent_password_verifications
+                ),
                 session_list_limit=args.session_list_limit,
                 auth_history_retention_seconds=(
                     args.auth_history_retention_seconds
@@ -2070,6 +2154,41 @@ def _course_key(args: argparse.Namespace, parser: argparse.ArgumentParser) -> st
     if not isinstance(value, str) or not value.strip():
         parser.error("--course-key or AUTOGRADE_COURSE_KEY is required")
     return value.strip()
+
+
+def _read_student_password(path: Optional[Path]) -> str:
+    """Read a password without accepting it in argv or roster CSV."""
+
+    if path is None:
+        password = getpass.getpass("Autograde 전용 비밀번호: ")
+        confirmation = getpass.getpass("Autograde 전용 비밀번호 확인: ")
+        if password != confirmation:
+            raise ValueError("Autograde 전용 비밀번호 확인이 일치하지 않습니다")
+        return password
+
+    source = path.expanduser().absolute()
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(source, flags)
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+            raise ValueError("password file must be one regular file")
+        if info.st_uid != os.getuid() or info.st_mode & 0o777 != 0o600:
+            raise ValueError("password file must be owned by the current user and mode 0600")
+        raw = os.read(descriptor, 1_025)
+        if len(raw) > 1_024:
+            raise ValueError("password file exceeds the 1024-byte limit")
+    finally:
+        os.close(descriptor)
+    try:
+        password = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError("password file must be UTF-8") from exc
+    if password.endswith("\r\n"):
+        password = password[:-2]
+    elif password.endswith("\n"):
+        password = password[:-1]
+    return password
 
 
 def _issue_student_activation_to_file(

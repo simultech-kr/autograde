@@ -10,13 +10,16 @@ from autograde.platform_auth import (
     InvalidSignedValue,
     create_or_load_auth_secret,
     create_or_load_instructor_token,
+    hash_student_password,
     new_activation_code,
     new_api_token,
+    new_assignment_claim_code,
     new_device_code,
     new_public_id,
     new_user_code,
     secret_digest,
     sign_browser_value,
+    verify_student_password,
     verify_browser_value,
 )
 
@@ -95,6 +98,52 @@ def test_student_activation_codes_are_high_entropy_and_human_transcribable() -> 
     assert secret_digest(b"k" * 32, "activation-code", next(iter(codes))) != (
         secret_digest(b"k" * 32, "user-code", next(iter(codes)))
     )
+
+
+def test_assignment_claim_codes_have_the_versioned_human_transcribable_shape() -> None:
+    codes = {new_assignment_claim_code() for _ in range(100)}
+
+    assert len(codes) == 100
+    assert all(
+        re.fullmatch(
+            r"AK1-[23456789ABCDEFGHJKLMNPQRSTUVWXYZ]{4}"
+            r"(?:-[23456789ABCDEFGHJKLMNPQRSTUVWXYZ]{4}){2}",
+            code,
+        )
+        for code in codes
+    )
+
+
+def test_student_password_hash_round_trip_uses_nfc_and_a_versioned_scrypt_format() -> None:
+    decomposed = "e\u0301" + ("a" * 14)
+    composed = "\u00e9" + ("a" * 14)
+
+    encoded = hash_student_password(decomposed, salt=b"s" * 16)
+
+    assert encoded.startswith("scrypt$v1$16384$8$1$")
+    assert decomposed not in encoded
+    assert composed not in encoded
+    assert verify_student_password(composed, encoded)
+    assert not verify_student_password(composed + "wrong", encoded)
+    assert not verify_student_password(composed, "not-a-supported-hash")
+
+
+def test_student_password_policy_counts_nfc_characters_and_caps_utf8_bytes() -> None:
+    with pytest.raises(ValueError, match="15"):
+        hash_student_password("a" * 14)
+
+    assert verify_student_password(
+        "a" * 15,
+        hash_student_password("a" * 15, salt=b"m" * 16),
+    )
+    assert verify_student_password(
+        "a" * 256,
+        hash_student_password("a" * 256, salt=b"x" * 16),
+    )
+    with pytest.raises(ValueError, match="256 UTF-8 bytes"):
+        hash_student_password("a" * 257)
+    with pytest.raises(ValueError, match="256 UTF-8 bytes"):
+        hash_student_password(("\uac00" * 85) + "ab")
 
 
 def test_signed_browser_value_round_trip_and_expiry() -> None:

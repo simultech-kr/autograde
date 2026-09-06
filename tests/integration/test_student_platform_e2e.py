@@ -255,3 +255,114 @@ def test_device_login_submit_exact_sha_and_read_result_over_http(tmp_path) -> No
         assert result["result"]["head_sha"] == commit_sha
         assert result["result"]["score"] == 10
         assert result["result"]["rubric"]["solution"]["feedback"] == "Passed"
+
+
+def test_password_claim_approves_device_and_scopes_assignment_over_http(
+    tmp_path,
+) -> None:
+    state = PlatformStateStore(tmp_path / "state.sqlite3")
+    student = state.upsert_student(
+        student_key="000123",
+        auth_subject="github:101",
+        github_user_id=101,
+        github_login="student-one",
+        at=NOW,
+    )
+    state.upsert_enrollment(student_id=student.id, course_key="cse101", at=NOW)
+    for index in (1, 2):
+        state.register_assignment(
+            assignment_id=f"asn_lab0{index}",
+            student_id=student.id,
+            course_key="cse101",
+            assignment_key=f"lab0{index}",
+            release_id="v1",
+            github_repository_id=9000 + index,
+            repository_owner="school",
+            repository_name=f"lab0{index}-student-one",
+            clone_url=f"https://github.example/school/lab0{index}-student-one.git",
+            submission_mode="branch",
+            target_ref="main",
+            result_policy="immediate",
+            assessment_path=f"/srv/autograde/lab0{index}",
+            assessment_digest="a" * 64,
+            runner_image=RUNNER,
+            rubric_version="v1",
+            max_score=10,
+            ready=True,
+            at=NOW,
+        )
+    password = "correct horse battery staple"
+    service = StudentPlatformService(
+        state=state,
+        server_secret=b"s" * 32,
+        course_key="cse101",
+        public_base_url="http://127.0.0.1:8000",
+        now=lambda: NOW,
+    )
+    service.set_student_password(student_key="000123", password=password)
+    server = create_server(("127.0.0.1", 0), service)
+
+    with running(server) as base_url:
+        with urlopen(base_url + "/assignment-claim/asn_lab01", timeout=10) as page:
+            page_body = page.read().decode("utf-8")
+            assert "학교 SSO 비밀번호가 아니라" in page_body
+            csrf = re.search(r'name="csrf" value="([^"]+)"', page_body).group(1)
+            claim_cookie = page.headers["Set-Cookie"].split(";", 1)[0]
+        status, issued = form(
+            base_url,
+            "/assignment-claim/issue",
+            {
+                "student_key": "000123",
+                "password": password,
+                "assignment_id": "asn_lab01",
+                "csrf": csrf,
+            },
+            cookie=claim_cookie,
+        )
+        assert status == 200
+        claim_code = re.search(r"<code>(AK1-[^<]+)</code>", issued).group(1)
+
+        status, device = api(
+            base_url,
+            "POST",
+            "/v1/device-authorizations",
+            payload={"device_name": "VS Code / WSL"},
+        )
+        assert status == 201
+        status, accepted = api(
+            base_url,
+            "POST",
+            "/v1/assignment-claims/redeem",
+            payload={"claim_code": claim_code, "device_code": device["device_code"]},
+        )
+        assert status == 200
+        assert accepted["assignment_id"] == "asn_lab01"
+        assert "access_token" not in accepted
+
+        status, tokens = api(
+            base_url,
+            "POST",
+            "/v1/device-authorizations/token",
+            payload={"device_code": device["device_code"]},
+        )
+        assert status == 200
+        status, assignments = api(
+            base_url, "GET", "/v1/assignments", token=tokens["access_token"]
+        )
+        assert status == 200
+        assert [
+            assignment["assignment_id"]
+            for assignment in assignments["assignments"]
+        ] == ["asn_lab01"]
+        status, denied = api(
+            base_url,
+            "GET",
+            "/v1/assignments/asn_lab02/repository",
+            token=tokens["access_token"],
+        )
+        assert status == 403
+        assert denied["error"]["code"] == "access_denied"
+
+    persisted = state.database.read_bytes()
+    assert password.encode("utf-8") not in persisted
+    assert claim_code.encode("ascii") not in persisted

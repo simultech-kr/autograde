@@ -385,6 +385,7 @@ instructor 역할을 확인하여 opaque ID를 아는 것만으로 다른 학생
 # Auth와 session
 POST   /v1/device-authorizations
 POST   /v1/device-authorizations/token
+POST   /v1/assignment-claims/redeem
 POST   /v1/tokens/refresh
 DELETE /v1/sessions/current
 GET    /v1/me/sessions
@@ -393,6 +394,8 @@ DELETE /v1/me/sessions/{session_id}
 # 브라우저 device 승인
 GET    /activate
 POST   /activate/approve
+GET    /assignment-claim/{assignment_id}
+POST   /assignment-claim/issue
 
 # 학생 workflow
 GET    /v1/me
@@ -429,11 +432,12 @@ repository reconciliation/deadline event를 플랫폼 PyJevSim stream으로 통�
 ## 구현 단계
 
 1. student platform schema와 course/assignment/repository ownership — 구현됨
-2. 학생별 1회용 활성화 코드, enrollment 확인, device authorization/session API — 구현됨
-3. Linux/macOS/WSL2 Extension의 로그인·bundle 다운로드/제출·diagnostics — 구현됨
+2. 학생별 전용 비밀번호, QR 수령 코드와 호환 활성화 코드, enrollment 확인,
+   device authorization/session API — 구현됨
+3. Linux/macOS/WSL2 Extension의 수령·자동 다운로드/제출·diagnostics — 구현됨
 4. direct bundle API와 existing exact-SHA collection 연결 — bundle과 branch mode 구현됨
 5. 파일럿 local-process grader와 result projection API — 파일럿 범위
-6. instructor read-only dashboard — 구현됨
+6. 교과목/학생 관리 CLI와 QR·수락 상태를 포함한 instructor read-only dashboard — 구현됨
 7. GitHub repository provisioning/reconciliation와 instructor release PR — 미구현
 8. PR submission remote 검증, session 관리 UI, 학생용 CLI fallback — 미구현
 9. Docker/Podman 또는 microVM worker, confidential-test child sandbox와 공식 성적 제출

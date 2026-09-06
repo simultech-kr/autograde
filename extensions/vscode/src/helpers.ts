@@ -50,6 +50,22 @@ function firstBoolean(record: JsonRecord, keys: readonly string[]): boolean | un
 }
 
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
+const MAX_CLAIM_CODE_INPUT_LENGTH = 256;
+const CLAIM_CODE = /^AK1([23456789ABCDEFGHJKLMNPQRSTUVWXYZ]{12})$/;
+
+/** Canonicalize a human-transcribed one-time assignment claim code. */
+export function normalizeClaimCode(value: string): string | undefined {
+  if (value.length > MAX_CLAIM_CODE_INPUT_LENGTH || /[^\x00-\x7f]/.test(value)) {
+    return undefined;
+  }
+  const compact = value.toUpperCase().replace(/[\t\n\v\f\r -]/g, "");
+  const matched = CLAIM_CODE.exec(compact);
+  if (!matched) {
+    return undefined;
+  }
+  const payload = matched[1] as string;
+  return `AK1-${payload.slice(0, 4)}-${payload.slice(4, 8)}-${payload.slice(8, 12)}`;
+}
 
 function canonicalIpv4Hostname(rawUrl: string, parsed: URL): string | undefined {
   // WHATWG URL parsing accepts legacy numeric spellings such as 0xc0a80114.

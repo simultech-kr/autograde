@@ -487,24 +487,10 @@ def _validate_local_http_binding(values: Mapping[str, Any]) -> None:
             raise PilotConfigError(
                 "pilot config public_base_url must use HTTPS or loopback HTTP"
             )
-    if values.get("grading_runtime") == "pilot-local" and parsed.scheme != "http":
-        raise PilotConfigError(
-            "pilot-local requires a loopback HTTP public_base_url"
-        )
-    if (
-        external_access_mode == "disabled"
-        and values.get("grading_runtime") == "pilot-local"
-        and (
-            parsed.hostname is None
-            or parsed.hostname.casefold() not in {"127.0.0.1", "localhost"}
-        )
-    ):
-        raise PilotConfigError(
-            "pilot-local public_base_url must use 127.0.0.1 or localhost"
-        )
     if parsed.scheme != "http":
-        # A future deployment may terminate HTTPS at a reverse proxy while the
-        # built-in server remains on loopback, potentially on another port.
+        # HTTPS is terminated by a reverse proxy while the built-in server and
+        # even a pilot-local grader remain loopback-only.  The public port does
+        # not need to match the private listener in this topology.
         return
     expected_port = url_port if url_port is not None else 80
     try:

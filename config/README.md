@@ -1,5 +1,11 @@
 # Configuration
 
+- `nginx-autograde-pilot.conf.example`: QR/password 외부 HTTPS 파일럿의 loopback reverse proxy,
+  HSTS, 연결 제한과 25명 NAT burst를 고려한 인증 endpoint rate-limit 예제. Domain과 인증서
+  경로를 바꾸고 `nginx -t`를 통과한 뒤에만 사용합니다. 처음에는 5분 HSTS로 실제 교실
+  회선을 검증하고, 인증서 자동 갱신과 HTTPS 상시 운영을 확인한 뒤에만 1년으로 늘립니다.
+  임시 파일럿 domain에는 `includeSubDomains`나 preload를 적용하지 않습니다.
+
 ## Local 파일럿
 
 파일럿은 environment file이나 운영 설정용 shell 환경변수를 선언하지 않습니다. 운영자가
@@ -21,8 +27,10 @@ bundle_worker_count,4
 Config는 한 course/server process의 설정입니다. `course_key`, `data_root`,
 `public_base_url`, `listen`, `port`는 필수이고 `grading_runtime`과
 `bundle_worker_count`는 생략 시 각각 `pilot-local`, `4`입니다. 중복 key, 빈 필수 값, 알 수
-없는 key를 허용하지 않습니다. `public_base_url`, `listen`과 `port`는 같은 loopback
-endpoint를 나타내야 합니다. `grading_runtime=pilot-local`만 파일럿 범위입니다. `data_root`는
+없는 key를 허용하지 않습니다. 이 local HTTP profile에서는 `public_base_url`, `listen`과
+`port`가 같은 loopback endpoint를 나타내야 합니다. HTTPS profile은 공개 URL을 reverse
+proxy origin으로 두되 built-in `listen`은 loopback으로 유지합니다.
+`grading_runtime=pilot-local`만 파일럿 범위입니다. `data_root`는
 config 파일 디렉터리의 전용 하위 디렉터리여야 하며, config 디렉터리 자체·상위 경로·외부
 절대 경로·symlink는 거부됩니다.
 

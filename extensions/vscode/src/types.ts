@@ -80,3 +80,11 @@ export interface TokenResponse {
   readonly expires_in: number;
   readonly token_type?: string;
 }
+
+/** Metadata returned after a claim code approves one pending device. */
+export interface AssignmentClaim {
+  readonly assignmentId: string;
+  readonly courseKey: string;
+  readonly deliveryMode: string;
+  readonly acceptanceId: string;
+}

@@ -1,0 +1,83 @@
+# Install this file inside nginx's `http { ... }` context (commonly conf.d),
+# then replace the server name and certificate paths before running `nginx -t`.
+# The burst values allow a 25-seat classroom behind one NAT while sustained
+# password/device guessing is throttled. Rehearse from the classroom's actual
+# egress address: all phones and PCs sharing one address consume the same zone.
+
+limit_req_zone $binary_remote_addr zone=autograde_password:10m rate=5r/s;
+limit_req_zone $binary_remote_addr zone=autograde_device:10m rate=10r/s;
+limit_req_zone $binary_remote_addr zone=autograde_general:10m rate=20r/s;
+limit_conn_zone $binary_remote_addr zone=autograde_connections:10m;
+
+upstream autograde_loopback {
+    server 127.0.0.1:18080;
+    keepalive 16;
+}
+
+server {
+    listen 80;
+    server_name grade.example.edu;
+    return 308 https://$host$request_uri;
+}
+
+server {
+    # The listen-form HTTP/2 flag works on both older pilot distributions and
+    # newer nginx releases (newer releases may print a deprecation warning).
+    listen 443 ssl http2;
+    server_name grade.example.edu;
+
+    ssl_certificate /etc/letsencrypt/live/grade.example.edu/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/grade.example.edu/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    # Keep the first pilot HSTS window short. Raise max-age to 31536000 only
+    # after certificate renewal and permanent HTTPS operation are verified.
+    # Do not add includeSubDomains or preload for a temporary pilot hostname.
+    add_header Strict-Transport-Security "max-age=300" always;
+
+    client_max_body_size 26m;
+    # A student can briefly use a phone and VS Code at the same time. This is
+    # deliberately above 2 * 25 so one shared NAT does not reject the class.
+    limit_conn autograde_connections 60;
+    limit_req_status 429;
+
+    location = /assignment-claim/issue {
+        limit_req zone=autograde_password burst=30 nodelay;
+        proxy_pass http://autograde_loopback;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto https;
+    }
+
+    location = /v1/device-authorizations {
+        limit_req zone=autograde_device burst=100 nodelay;
+        proxy_pass http://autograde_loopback;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto https;
+    }
+
+    location = /v1/assignment-claims/redeem {
+        limit_req zone=autograde_device burst=100 nodelay;
+        proxy_pass http://autograde_loopback;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto https;
+    }
+
+    location = /v1/device-authorizations/token {
+        limit_req zone=autograde_device burst=100 nodelay;
+        proxy_pass http://autograde_loopback;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto https;
+    }
+
+    location / {
+        limit_req zone=autograde_general burst=80 nodelay;
+        proxy_pass http://autograde_loopback;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_connect_timeout 5s;
+        proxy_read_timeout 120s;
+        proxy_send_timeout 120s;
+        proxy_buffering off;
+    }
+}

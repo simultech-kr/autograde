@@ -11,6 +11,7 @@ import {
   isRetryableApiError,
   TokenManager,
 } from "./api";
+import { AssignmentClaimController } from "./assignmentClaim";
 import { AuthenticationController } from "./auth";
 import {
   createSubmissionBundle,
@@ -99,7 +100,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     ]);
     treeView.message = authenticated
       ? "과제를 펼쳐 파일 다운로드 버튼을 선택하세요."
-      : "위의 로그인 버튼을 누르면 할당된 과제를 확인할 수 있습니다.";
+      : "위의 로그인 또는 수령 코드 버튼으로 과제를 시작하세요.";
     return authenticated;
   };
 
@@ -130,6 +131,44 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       void refreshAssignments(false).catch(showCommandError);
     }
   });
+  const assignmentClaims = new AssignmentClaimController(client, extensionVersion, async (assignmentId) => {
+    studentState = clearStudentSessionResidue(studentState, treeProvider, output, diagnostics);
+    await updateAuthenticationUI(true);
+    const assignments = await refreshAssignments(false);
+    const accepted = assignmentId
+      ? assignments.find((assignment) => assignment.id === assignmentId)
+      : undefined;
+    if (assignmentId && !accepted) {
+      throw new Error(
+        "수령 코드는 확인되었지만 과제 목록에서 찾을 수 없습니다. 잠시 후 과제 새로고침을 실행하세요.",
+      );
+    }
+    if (!assignmentId) {
+      if (!assignments.some(isAssignmentDownloadable)) {
+        void vscode.window.showInformationMessage(
+          "과제 승인과 로그인은 복구했지만 지금 다운로드 가능한 과제가 없습니다. 잠시 후 새로고침하세요.",
+        );
+        return;
+      }
+      await cloneAssignment(client, treeProvider, refreshAssignments);
+      return;
+    }
+    if (!accepted) {
+      return;
+    }
+    if (!isAssignmentDownloadable(accepted)) {
+      void vscode.window.showInformationMessage(
+        `${accepted.title} 과제를 수락했습니다. 다운로드 준비가 끝나면 과제 새로고침 후 받으세요.`,
+      );
+      return;
+    }
+    await cloneAssignment(
+      client,
+      treeProvider,
+      refreshAssignments,
+      new AssignmentTreeItem(accepted),
+    );
+  });
 
   context.subscriptions.push(
     treeView,
@@ -137,6 +176,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     diagnostics,
     vscode.commands.registerCommand("autograde.signIn", () => runCommand(() => auth.signIn())),
     vscode.commands.registerCommand("autograde.signOut", () => runCommand(() => auth.signOut())),
+    vscode.commands.registerCommand(
+      "autograde.redeemAssignmentClaim",
+      () => runCommand(async () => {
+        if (!vscode.workspace.isTrusted) {
+          throw new Error("수령 코드로 파일을 받으려면 현재 workspace를 신뢰해야 합니다.");
+        }
+        ensureSupportedWorkspacePlatform("수령 코드 입력 및 다운로드");
+        await assignmentClaims.redeem();
+      }),
+    ),
     vscode.commands.registerCommand("autograde.refreshAssignments", () => runCommand(() => refreshAssignments())),
     vscode.commands.registerCommand(
       "autograde.cloneAssignment",
