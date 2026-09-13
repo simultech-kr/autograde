@@ -1,0 +1,38 @@
+<Project>
+  <Import Project="Sdk.props" Sdk="Microsoft.NET.Sdk.WindowsDesktop" />
+  <PropertyGroup>
+    <TargetFramework>net472</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>Autograde.VisualStudio</RootNamespace>
+    <AssemblyName>Autograde.VisualStudio</AssemblyName>
+    <Version>0.2.0</Version>
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+    <GeneratePkgDefFile>true</GeneratePkgDefFile>
+    <IncludeAssemblyInVSIXContainer>true</IncludeAssemblyInVSIXContainer>
+    <IncludeDebugSymbolsInVSIXContainer>false</IncludeDebugSymbolsInVSIXContainer>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    <UseCodebase>true</UseCodebase>
+    <CreateVsixContainer>true</CreateVsixContainer>
+    <DeployExtension>false</DeployExtension>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="System.Design" />
+    <PackageReference Include="Microsoft.VisualStudio.SDK" Version="17.0.32112.339" ExcludeAssets="runtime" />
+    <PackageReference Include="Microsoft.VSSDK.BuildTools" Version="17.14.2142" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+    <ProjectReference Include="../Autograde.Core/Autograde.Core.csproj" />
+    <VSCTCompile Include="Commands.vsct"><ResourceName>Menus.ctmenu</ResourceName></VSCTCompile>
+    <None Update="source.extension.vsixmanifest"><SubType>Designer</SubType></None>
+  </ItemGroup>
+  <Import Project="Sdk.targets" Sdk="Microsoft.NET.Sdk.WindowsDesktop" />
+  <Import Project="$(VSToolsPath)/VSSDK/Microsoft.VsSDK.targets" Condition="'$(AutogradeCompileOnly)' != 'true' and Exists('$(VSToolsPath)/VSSDK/Microsoft.VsSDK.targets')" />
+  <Target Name="RequireWindowsForVsix" BeforeTargets="PrepareForBuild" Condition="'$(OS)' != 'Windows_NT' and '$(AutogradeCompileOnly)' != 'true'">
+    <Error Text="VSIX packaging requires Windows Visual Studio MSBuild. Use AutogradeCompileOnly=true only for a non-installable compile check." />
+  </Target>
+  <Target Name="RequireVsSdkTargets" BeforeTargets="PrepareForBuild" Condition="'$(AutogradeCompileOnly)' != 'true' and '$(VsSdkTargetsImported)' != 'true'">
+    <Error Text="VS SDK build targets are missing. Restore NuGet packages and install the Visual Studio extension development workload." />
+  </Target>
+</Project>

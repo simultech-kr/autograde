@@ -1,0 +1,10 @@
+key,value
+course_key,come2201
+data_root,.data-portal
+public_base_url,http://127.0.0.1:20000
+listen,127.0.0.1
+port,20000
+web_public_base_url,http://127.0.0.1:20010
+web_port,20010
+grading_runtime,pilot-local
+bundle_worker_count,4

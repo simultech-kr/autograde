@@ -12,6 +12,7 @@ Thumbs.db
 .env.*
 !.env.example
 *.local
+student_roster.csv
 *-github-app.pem
 github-app*.pem
 app.private-key.pem
@@ -48,5 +49,7 @@ workspace/
 submissions/
 .autograde-data/
 .platform-data/
+.data/
+.data-*/
 !examples/submissions/
 !examples/submissions/**

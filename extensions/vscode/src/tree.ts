@@ -58,6 +58,11 @@ export class AssignmentsTreeProvider implements vscode.TreeDataProvider<Assignme
 
     const assignment = element.assignment;
     const details: DetailTreeItem[] = [];
+    if (isBundleAssignment(assignment)) {
+      const historyItem = new DetailTreeItem("제출 기록 / 이전 코드 복원", undefined, "history");
+      historyItem.command = { command: "autograde.submissionHistory", title: "제출 기록", arguments: [element] };
+      details.push(historyItem);
+    }
     if (isAssignmentDownloadable(assignment)) {
       const downloadItem = new DetailTreeItem(
         "과제 파일 다운로드",

@@ -117,7 +117,7 @@ test("assignment claim code is directly reachable from every sidebar authenticat
   for (const state of welcome) {
     assert.match(state.contents, /\[[^\]]*수령 코드[^\]]*\]\(command:autograde\.redeemAssignmentClaim\)/);
   }
-  assert.match(welcome.find((item) => item.when?.includes("!autograde.authenticated"))?.contents ?? "", /과제 수령 코드\(과제 키\)/);
+  assert.match(welcome.find((item) => item.when?.includes("!autograde.authenticated"))?.contents ?? "", /수령 코드/);
 });
 
 test("service address setup is directly reachable from every sidebar state", async () => {
@@ -182,10 +182,7 @@ test("sidebar title exposes direct signed-out and signed-in actions", async () =
   const titleMenus = manifest.contributes?.menus?.["view/title"] ?? [];
 
   const signIn = titleMenus.find((item) => item.command === "autograde.signIn");
-  assert.ok(signIn, "the Assignments title must provide a visible Sign In action");
-  assert.match(signIn.when ?? "", /view\s*==\s*autograde\.assignments/);
-  assert.match(signIn.when ?? "", /!autograde\.authenticated/);
-  assert.match(signIn.group ?? "", /^navigation/);
+  assert.equal(signIn, undefined, "the pilot uses claim codes instead of the legacy activation login");
 
   for (const command of [
     "autograde.signOut",
@@ -222,7 +219,8 @@ test("sidebar welcome content offers authentication-aware clickable controls", a
   );
 
   assert.ok(signedOut, "signed-out students need a dedicated welcome state");
-  assert.match(signedOut.contents, /\[[^\]]*(?:Sign In|로그인)[^\]]*\]\(command:autograde\.signIn\)/i);
+  assert.match(signedOut.contents, /command:autograde\.redeemAssignmentClaim/);
+  assert.doesNotMatch(signedOut.contents, /command:autograde\.signIn/);
 
   assert.ok(signedIn, "signed-in students need a dedicated welcome state");
   assert.match(signedIn.contents, /\[[^\]]+\]\(command:autograde\.refreshAssignments\)/);

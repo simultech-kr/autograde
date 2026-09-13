@@ -2695,7 +2695,7 @@ def test_bundle_assignment_cli_creates_immutable_release_and_manages_visibility(
     assert created["grading_runtime"] == "pilot-local"
     assert created["runner_image"] == platform_cli.PILOT_LOCAL_RUNNER
     assert created["starter_digest"].startswith("sha256:")
-    assert created["ready"] is True
+    assert created["ready"] is False
 
     state = PlatformStateStore(data_root / "state.sqlite3")
     assignment = state.get_bundle_assignment("basn_lab01")
@@ -2719,6 +2719,10 @@ def test_bundle_assignment_cli_creates_immutable_release_and_manages_visibility(
         invoke(data_root, "assignment", "bundle-list", "--ready-only") == 0
     )
     assert output(capsys)["result"]["count"] == 0
+    # Visibility test: seed a synthetic successful check. Real grading checks
+    # are exercised by test_course_operations_cli, not this catalog fixture.
+    check = state.begin_bundle_release_check("basn_lab01", course_key=COURSE)
+    state.finish_bundle_release_check(check, passed=True, details={"fixture": "catalog"})
     assert invoke(data_root, "assignment", "bundle-ready", "basn_lab01") == 0
     assert output(capsys)["result"]["ready"] is True
 
@@ -2769,11 +2773,11 @@ def test_bundle_assignment_publish_failure_keeps_release_hidden(
             "--max-score",
             "10",
         )
-        == 1
+        == 0
     )
-    assert json.loads(capsys.readouterr().err)["error"]["code"] == (
-        "runner_image_missing"
-    )
+    assert output(capsys)["result"]["ready"] is False
+    assert invoke(data_root, "assignment", "bundle-ready", "basn_lab01", "--grading-runtime", "docker") == 1
+    assert json.loads(capsys.readouterr().err)["error"]["code"] == "runner_image_missing"
     assert PlatformStateStore(data_root / "state.sqlite3").get_bundle_assignment(
         "basn_lab01"
     ).ready is False

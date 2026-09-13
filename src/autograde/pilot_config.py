@@ -30,7 +30,7 @@ _REQUIRED_KEYS = frozenset(
     {"course_key", "data_root", "public_base_url", "listen", "port"}
 )
 _OPTIONAL_KEYS = frozenset(
-    {"grading_runtime", "bundle_worker_count", "external_access_mode"}
+    {"grading_runtime", "bundle_worker_count", "external_access_mode", "web_public_base_url", "web_port"}
 )
 _ALLOWED_KEYS = _REQUIRED_KEYS | _OPTIONAL_KEYS
 _SECRET_KEY_PARTS = frozenset(
@@ -108,6 +108,16 @@ def load_pilot_config(path: str | Path) -> PilotConfig:
             )
         ),
     }
+    if "web_public_base_url" in raw_values or "web_port" in raw_values:
+        if not {"web_public_base_url", "web_port"} <= raw_values.keys():
+            raise PilotConfigError("web_public_base_url and web_port must be provided together")
+        values["web_public_base_url"] = _public_base_url(raw_values["web_public_base_url"])
+        values["web_port"] = _bounded_integer(raw_values["web_port"], key="web_port", minimum=1, maximum=65535)
+        _validate_local_http_binding({**values, "public_base_url": values["web_public_base_url"], "port": values["web_port"]})
+        if values["web_port"] == values["port"] or values["web_public_base_url"] == values["public_base_url"]:
+            raise PilotConfigError("web and API must use separate ports and origins")
+        if urlsplit(values["web_public_base_url"]).scheme != urlsplit(values["public_base_url"]).scheme:
+            raise PilotConfigError("web and API must use the same transport scheme")
     _validate_local_http_binding(values)
     return PilotConfig(source=source, values=MappingProxyType(values))
 

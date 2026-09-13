@@ -1,5 +1,14 @@
 # 옵저버 패턴 Java/C++ 과제 파일럿
 
+> 이전 Java/C++ 비교 실습을 보존한 문서입니다. 현재 파일럿은 **C17·C++17** 기준이며
+> Java/JDK는 필요하지 않습니다. 새 운영은 [독립 웹 파일럿 실행](independent-web-pilot.md)의
+> C Hello World·C++ 옵저버 등록 절차를 사용하세요.
+
+2026-09-11부터 `bundle-ready` 전에 `bundle-check --solution <모범답안 폴더>
+--negative-solution <오답 폴더> --negative-score <기대점수>`를 통과해야 합니다.
+아래 공개 단계에도 이 검증을 먼저 적용하세요. 교수자가 신뢰하는 예제를 준비해야 하며
+현재 C/C++ 파일럿의 완성된 실행 예는 [새 과제 운영 절차](course-assignment-management.md)에 있습니다.
+
 이 문서는 교수자가 동일한 소프트웨어 설계 주제를 Java와 C++ 과제로 등록하고, 학생 역할로
 다운로드·제출한 뒤 자동 채점 결과와 dashboard를 확인하는 파일럿 절차입니다. 모든 명령은
 `pilot/course.csv`를 직접 지정합니다. Shell 환경변수, GitHub, Docker/Podman은 사용하지

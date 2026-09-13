@@ -1,0 +1,44 @@
+# Load inside http {}. Replace domain/certificate paths before applying.
+# Both backend listeners are loopback only; publish TCP 20000 and 20010.
+limit_req_zone $binary_remote_addr zone=portal_web:10m rate=10r/s;
+limit_req_zone $binary_remote_addr zone=portal_api:10m rate=20r/s;
+limit_conn_zone $binary_remote_addr zone=portal_connections:10m;
+
+server {
+    listen 20010 ssl;
+    server_name grade.example.edu;
+    ssl_certificate /etc/letsencrypt/live/grade.example.edu/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/grade.example.edu/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    client_max_body_size 64k;
+    limit_req_status 429;
+    limit_conn portal_connections 100;
+    location / {
+        limit_req zone=portal_web burst=100 nodelay;
+        proxy_pass http://127.0.0.1:18081;
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Forwarded-Proto https;
+        # This site issues credentials. Do not put query strings or cookies in logs.
+        access_log off;
+        proxy_read_timeout 30s;
+    }
+}
+
+server {
+    listen 20000 ssl;
+    server_name grade.example.edu;
+    ssl_certificate /etc/letsencrypt/live/grade.example.edu/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/grade.example.edu/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    client_max_body_size 26m;
+    limit_req_status 429;
+    limit_conn portal_connections 100;
+    location / {
+        limit_req zone=portal_api burst=200 nodelay;
+        proxy_pass http://127.0.0.1:18080;
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Forwarded-Proto https;
+        access_log off;
+        proxy_read_timeout 60s;
+    }
+}

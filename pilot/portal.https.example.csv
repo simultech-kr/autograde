@@ -1,0 +1,10 @@
+key,value
+course_key,come3105
+data_root,.data-portal
+public_base_url,https://grade.example.edu:20000
+listen,127.0.0.1
+port,18080
+web_public_base_url,https://grade.example.edu:20010
+web_port,18081
+grading_runtime,pilot-local
+bundle_worker_count,4

@@ -1,5 +1,10 @@
 # Local CSV 파일럿 MVP 요구사항
 
+> 현재 실행 기준(2026-09-09): 학생 웹 20010번에서 `come3105`, `come2201`을 선택하고
+> VS Code는 API 20000번으로 연결합니다. [실행 절차](../operations/independent-web-pilot.md)와
+> [구현 설계](../architecture/independent-web-auth-mvp.md)를 참고하세요. 아래 공통 요구사항은
+> 유지하며, 기존 단일 교과목·활성화 로그인은 별도 호환 모드입니다.
+
 ## 목적
 
 기본적으로 교수자 과제 등록, 학생 역할의 QR 수령과 VS Code 다운로드·제출, 자동 결과 반환과
@@ -10,6 +15,10 @@ reverse proxy를 사용합니다. 별도 신뢰 LAN HTTP profile은 비밀번호
 
 ## 전제
 
+- 실습 언어는 C17·C++17이며 Java/JDK는 기본 파일럿 범위에서 제외합니다.
+- Windows 시스템 프로그래밍은 VS2022 Community, Linux 실습은 Linux/WSL2를 목표로 합니다.
+  VS2022/VS2026 확장 소스·공통 서버 통신 시험을 제공하며 Windows VSIX 빌드·설치 검증은 남아 있습니다.
+  [확장 안내](../../extensions/visualstudio/README.md)를 따릅니다. Windows 원격 작업자는 후속 구현입니다.
 - 학생의 학교 식별자인 `student_key`, 수강 활성 상태와 초기 숫자 6자리 전용 비밀번호가
   local roster CSV에 있습니다.
 - 학교 계정과 분리한 ASCII 숫자 6자리 Autograde 전용 비밀번호를 교과목 enrollment에
@@ -21,7 +30,7 @@ reverse proxy를 사용합니다. 별도 신뢰 LAN HTTP profile은 비밀번호
   사용하지만 비밀번호 기반 수령은 허용하지 않습니다.
 - 공용 실습 장비의 VS Code 설정에는 서비스 주소만 유지합니다. 학생 access/refresh token은
   Extension Host 메모리에서만 유지하고 disk 또는 VS Code SecretStorage에 저장하지 않습니다.
-- Linux/macOS는 native workspace, Windows는 WSL2 workspace를 사용합니다.
+- 현재 VS Code 제출 경로는 Linux/macOS native workspace와 Windows WSL2 workspace를 사용합니다.
 - Starter와 제출 source는 deterministic bundle로 전달합니다.
 - `pilot-local` 채점에 합성 또는 사전 검토한 신뢰된 코드만 사용합니다.
 - 숫자 6자리 단일 인증은 감독되는 20~25명 단기 HTTPS 파일럿에만 사용합니다. 무인·장기 운영,
@@ -29,6 +38,15 @@ reverse proxy를 사용합니다. 별도 신뢰 LAN HTTP profile은 비밀번호
 - Docker/Podman, image registry, microVM과 외부 배포는 이번 MVP 범위가 아닙니다.
 
 ## 기능 요구사항
+
+2026-09-11 추가: 신규 bundle 과제는 초안으로 등록하고 정답·오답의 기대 점수 시험에 통과한 뒤
+별도로 공개합니다. 마감 연장은 제출 원본·과제 ID를 보존하고 변경 이력을 기록합니다.
+[과제 운영 1차 구현 범위](../operations/course-assignment-management.md).
+
+2026-09-10 추가: 서버가 접수한 제출 원본의 학생별 이력 조회, 공개 정책에 따른 이전 결과 조회,
+새 폴더로 코드 복원을 두 IDE 확장에서 제공합니다. 최근 100건 조회·파일 무결성 검증·로그인 경계
+정리를 포함하며 로컬 미제출 초안 백업과 Git 이력 조작은 제외합니다.
+[사용·검증 범위](../operations/submission-history-mvp.md).
 
 1. Pilot config CSV는 course key, data root, public URL, bind address, port, network 접근 mode,
    grading runtime과 bundle worker 수를 한 번에 제공합니다.

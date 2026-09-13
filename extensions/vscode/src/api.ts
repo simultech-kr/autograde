@@ -7,6 +7,7 @@ import {
   normalizeSubmission,
 } from "./helpers";
 import { shouldDiscardTokensAfterRefreshError } from "./authPolicy";
+import { parseSubmissionHistory, verifySubmissionSource, type SubmissionVersion } from "./submissionHistory";
 import type {
   Assignment,
   AssignmentClaim,
@@ -567,18 +568,34 @@ export class AutogradeClient {
     private readonly retrySleep: (milliseconds: number) => Promise<void> = delay,
   ) {}
 
-  public createDeviceAuthorization(
+  public async createDeviceAuthorization(
     deviceName: string,
     extensionVersion: string,
     signal?: AbortSignal,
     expectedBaseUrl?: string,
+    claimCode?: string,
   ): Promise<DeviceAuthorization> {
+    if (claimCode !== undefined) {
+      const baseUrl = this.transport.getBaseUrl();
+      if (expectedBaseUrl !== undefined && baseUrl !== expectedBaseUrl) {
+        throw new ApiError("Autograde 서비스 주소가 변경되었습니다.", 401, "login_required");
+      }
+      if (isInsecureHttpPilotUrl(baseUrl)) {
+        throw new ApiError("과제 수령 코드는 HTTPS 서버에서만 사용할 수 있습니다.", 0, "insecure_claim_redemption");
+      }
+      claimCode = normalizeClaimCode(claimCode);
+      if (!claimCode) {
+        throw new ApiError("수령 코드 형식이 올바르지 않습니다.", 0, "invalid_claim_code");
+      }
+      expectedBaseUrl = baseUrl;
+    }
     return this.transport.request<DeviceAuthorization>("/v1/device-authorizations", {
       method: "POST",
       body: JSON.stringify({
         client: "vscode-extension",
         extension_version: extensionVersion,
         device_name: deviceName,
+        ...(claimCode ? { claim_code: claimCode } : {}),
       }),
     }, undefined, { signal, expectedBaseUrl });
   }
@@ -638,8 +655,36 @@ export class AutogradeClient {
   }
 
   public async getAssignments(): Promise<Assignment[]> {
-    const payload = await this.authorizedRequest<unknown>("/v1/assignments", { method: "GET" });
-    return normalizeAssignments(payload);
+    // Do not fall back to the course catalog on an older server.
+    try {
+      const payload = await this.authorizedRequest<unknown>("/v1/accepted-assignments", { method: "GET" });
+      return normalizeAssignments(payload);
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 404) {
+        throw new ApiError("서버가 수락 과제 전용 목록을 지원하지 않습니다. 교수자에게 서버 업데이트를 요청하세요.",
+          404, "server_upgrade_required");
+      }
+      throw error;
+    }
+  }
+
+  public getBaseUrl(): string { return this.transport.getBaseUrl(); }
+
+  public async getSubmissionHistory(assignmentId: string) {
+    return parseSubmissionHistory(await this.authorizedRequest<unknown>(
+      `/v1/assignments/${encodeURIComponent(assignmentId)}/history`, { method: "GET" },
+    ), assignmentId);
+  }
+
+  public async getSubmissionSource(version: SubmissionVersion, signal?: AbortSignal): Promise<Uint8Array> {
+    const bytes = await this.authorizedBytesRequest(
+      `/v1/submissions/${encodeURIComponent(version.id)}/source`,
+      { method: "GET", headers: { Accept: "application/gzip" } },
+      { timeoutMs: STARTER_REQUEST_TIMEOUT_MS, maxResponseBytes: MAX_STARTER_RESPONSE_BYTES,
+        acceptedContentTypes: ["application/gzip", "application/x-gzip", "application/octet-stream"], signal },
+    );
+    verifySubmissionSource(bytes, version);
+    return bytes;
   }
 
   public async getStarter(

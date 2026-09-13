@@ -2,9 +2,14 @@
   "name": "autograde-vscode",
   "displayName": "Autograde",
   "description": "Download, submit, and review Autograde assignments from Linux, macOS, or WSL2.",
-  "version": "0.2.2",
+  "version": "0.4.1",
   "private": true,
   "publisher": "autograde",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/simultech-kr/autograde.git",
+    "directory": "extensions/vscode"
+  },
   "license": "UNLICENSED",
   "engines": {
     "vscode": "^1.92.0"
@@ -43,6 +48,13 @@
   ],
   "contributes": {
     "commands": [
+      {
+        "command": "autograde.submissionHistory",
+        "title": "Autograde: Submission History and Restore",
+        "shortTitle": "제출 기록 / 코드 복원",
+        "enablement": "autograde.authenticated",
+        "icon": "$(history)"
+      },
       {
         "command": "autograde.configureServiceAddress",
         "title": "Autograde: Configure Service Address",
@@ -110,7 +122,7 @@
       "properties": {
         "autograde.serviceBaseUrl": {
           "type": "string",
-          "default": "http://127.0.0.1:18080",
+          "default": "http://127.0.0.1:20000",
           "scope": "machine",
           "markdownDescription": "Autograde 서비스의 기본 URL입니다. 사이드바의 **서버 주소 설정**에서 IP와 선택적인 port도 입력할 수 있습니다. 주소만 이 컴퓨터에 저장되며 로그인 token은 저장되지 않습니다. 기본적으로 로컬 개발 주소가 아니면 HTTPS만 허용됩니다."
         },
@@ -135,7 +147,7 @@
       "autograde": [
         {
           "id": "autograde.assignments",
-          "name": "Assignments"
+          "name": "내가 수락한 실습"
         }
       ]
     },
@@ -143,12 +155,12 @@
       {
         "view": "autograde.assignments",
         "when": "!autograde.authenticated",
-        "contents": "먼저 Autograde 서버 주소를 확인한 뒤 로그인하거나 과제 수령 코드(과제 키)로 시작하세요.\n[서버 주소 설정](command:autograde.configureServiceAddress)\n[서버 연결 확인](command:autograde.checkServerConnection)\n[지금 로그인](command:autograde.signIn)\n[수령 코드 입력 및 다운로드](command:autograde.redeemAssignmentClaim)"
+        "contents": "학생 웹(20010번)에서 학번과 전용 비밀번호로 수령 코드를 받으세요. VS Code 서버 주소는 20000번입니다.\n[서버 주소 설정](command:autograde.configureServiceAddress)\n[서버 연결 확인](command:autograde.checkServerConnection)\n[수령 코드 입력 및 다운로드](command:autograde.redeemAssignmentClaim)"
       },
       {
         "view": "autograde.assignments",
         "when": "autograde.authenticated",
-        "contents": "현재 표시할 과제가 없습니다.\n[서버 주소 설정](command:autograde.configureServiceAddress)\n[서버 연결 확인](command:autograde.checkServerConnection)\n[수령 코드 입력 및 다운로드](command:autograde.redeemAssignmentClaim)\n[과제 새로고침](command:autograde.refreshAssignments)"
+        "contents": "현재 인증에서 표시할 수락 과제가 없습니다. 학생 웹에서 수령 코드를 발급받아 입력하세요. 다른 과제는 새 수령 코드로 전환합니다.\n[서버 주소 설정](command:autograde.configureServiceAddress)\n[서버 연결 확인](command:autograde.checkServerConnection)\n[수령 코드 입력 및 다운로드](command:autograde.redeemAssignmentClaim)\n[과제 새로고침](command:autograde.refreshAssignments)"
       }
     ],
     "menus": {
@@ -162,11 +174,6 @@
           "command": "autograde.checkServerConnection",
           "when": "view == autograde.assignments",
           "group": "navigation@0.5"
-        },
-        {
-          "command": "autograde.signIn",
-          "when": "view == autograde.assignments && !autograde.authenticated",
-          "group": "navigation@1"
         },
         {
           "command": "autograde.redeemAssignmentClaim",
@@ -217,7 +224,7 @@
     "clean": "node -e \"require('fs').rmSync('out',{recursive:true,force:true})\"",
     "compile": "tsc -p ./",
     "test": "npm run clean && npm run compile && node --test out/test/*.test.js",
-    "package:vsix": "vsce package --dependencies",
+    "package:vsix": "vsce package --dependencies --baseContentUrl https://github.com/simultech-kr/autograde/blob/main/extensions/vscode/ --baseImagesUrl https://github.com/simultech-kr/autograde/raw/main/extensions/vscode/",
     "vscode:prepublish": "npm run clean && npm run compile"
   },
   "dependencies": {

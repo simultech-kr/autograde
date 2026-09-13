@@ -22,7 +22,7 @@ import math
 import os
 import sqlite3
 import stat
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import Enum
@@ -1460,6 +1460,56 @@ END;
 """
 
 
+_MIGRATION_9 = """
+CREATE TABLE platform_roster_bootstrap (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    enrollment_count INTEGER NOT NULL CHECK (enrollment_count > 0),
+    initialized_at TEXT NOT NULL
+);
+"""
+
+# Keep every v6 grading-input immutability check. Only the operational deadline
+# moves to its own audited, extension-only guard; accepted receipts stay frozen.
+_BUNDLE_RELEASE_GUARD_V10 = (
+    "CREATE TRIGGER trg_bundle_assignment_release_immutable"
+    + _MIGRATION_6.split("CREATE TRIGGER trg_bundle_assignment_release_immutable", 1)[1]
+    .split("CREATE TABLE bundle_download_events", 1)[0]
+    .replace("  OR NEW.due_at IS NOT OLD.due_at\n", "")
+)
+
+_MIGRATION_10 = """
+CREATE TABLE bundle_release_checks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    assignment_id TEXT NOT NULL REFERENCES bundle_assignment_releases(assignment_id),
+    status TEXT NOT NULL CHECK(status IN ('pending', 'passed', 'failed')),
+    details_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    completed_at TEXT
+);
+CREATE INDEX idx_bundle_release_checks ON bundle_release_checks(assignment_id, id);
+CREATE TABLE bundle_deadline_changes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    assignment_id TEXT NOT NULL REFERENCES bundle_assignment_releases(assignment_id),
+    old_due_at TEXT NOT NULL,
+    new_due_at TEXT NOT NULL,
+    actor TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+DROP TRIGGER trg_bundle_assignment_release_immutable;
+""" + _BUNDLE_RELEASE_GUARD_V10 + """
+CREATE TRIGGER trg_bundle_deadline_extension
+BEFORE UPDATE OF due_at ON bundle_assignment_releases
+WHEN NEW.due_at IS NOT OLD.due_at
+BEGIN
+    SELECT CASE WHEN OLD.due_at IS NULL OR NEW.due_at IS NULL OR NEW.due_at <= OLD.due_at
+      OR NOT EXISTS (SELECT 1 FROM bundle_deadline_changes AS c
+        WHERE c.assignment_id = OLD.assignment_id AND c.old_due_at = OLD.due_at
+          AND c.new_due_at = NEW.due_at)
+      THEN RAISE(ABORT, 'deadline extension requires audit record') END;
+END;
+"""
+
 _MIGRATIONS = {
     1: _MIGRATION_1,
     2: _MIGRATION_2,
@@ -1469,6 +1519,8 @@ _MIGRATIONS = {
     6: _MIGRATION_6,
     7: _MIGRATION_7,
     8: _MIGRATION_8,
+    9: _MIGRATION_9,
+    10: _MIGRATION_10,
 }
 _LATEST_SCHEMA_VERSION = max(_MIGRATIONS)
 
@@ -1995,6 +2047,34 @@ class PlatformStateStore:
         entries: Sequence[CourseRosterImportEntry],
         at: Optional[DatetimeValue] = None,
     ) -> Tuple[Tuple[PlatformStudent, PlatformEnrollment], ...]:
+        return self._import_course_roster(course_key=course_key, entries=entries, at=at)
+
+    def roster_bootstrap_status(self) -> Optional[dict[str, Any]]:
+        with self._connection() as connection:
+            row = connection.execute("SELECT enrollment_count, initialized_at FROM platform_roster_bootstrap WHERE singleton = 1").fetchone()
+        return dict(row) if row is not None else None
+
+    def initialize_course_rosters(self, rosters: Mapping[str, Sequence[CourseRosterImportEntry]]) -> bool:
+        """Import every course and the one-time marker in one transaction."""
+        if not rosters or not all(rosters.values()):
+            raise ValueError("initial roster must contain students")
+        with self._write() as connection:
+            if connection.execute("SELECT 1 FROM platform_roster_bootstrap WHERE singleton = 1").fetchone():
+                return False
+            count = 0
+            for course, entries in rosters.items():
+                count += len(self._import_course_roster(course_key=course, entries=entries, _connection=connection))
+            connection.execute("INSERT INTO platform_roster_bootstrap VALUES (1, ?, ?)", (count, utc_iso()))
+        return True
+
+    def _import_course_roster(
+        self,
+        *,
+        course_key: str,
+        entries: Sequence[CourseRosterImportEntry],
+        at: Optional[DatetimeValue] = None,
+        _connection: Optional[sqlite3.Connection] = None,
+    ) -> Tuple[Tuple[PlatformStudent, PlatformEnrollment], ...]:
         """Atomically apply a prevalidated roster with password-hash CAS.
 
         Password hashing intentionally happens before this call.  For managed
@@ -2095,7 +2175,7 @@ class PlatformStateStore:
             raise ValueError("roster must contain at least one student")
 
         now = utc_iso(at)
-        with self._write() as connection:
+        with (nullcontext(_connection) if _connection is not None else self._write()) as connection:
             existing_rows: dict[str, Optional[sqlite3.Row]] = {}
             # Recheck every identity and credential snapshot before the first
             # write so any failure rolls back the roster as a unit.
@@ -2400,6 +2480,35 @@ class PlatformStateStore:
         )
         assert row is not None
         return row
+
+    def resolve_auth_course(self, kind: str, verifier: str) -> str:
+        """Resolve routing from a full secret digest, never a client course hint.
+
+        This is routing only. Services must still validate expiration, ownership,
+        revocation and enrollment. Used refresh tokens remain routable so the
+        existing reuse detector can revoke their family.
+        """
+        queries = {
+            "device": "SELECT course_key FROM device_authorizations WHERE device_code_hash = ?",
+            "access": "SELECT course_key FROM platform_sessions WHERE access_token_hash = ?",
+            "refresh": (
+                "SELECT s.course_key FROM platform_refresh_tokens r "
+                "JOIN platform_sessions s ON s.token_family_id = r.token_family_id "
+                "WHERE r.refresh_token_hash = ?"
+            ),
+            "assignment-claim-code": (
+                "SELECT e.course_key FROM platform_assignment_grants g "
+                "JOIN platform_enrollments e ON e.id = g.enrollment_id "
+                "WHERE g.claim_code_hmac = ?"
+            ),
+        }
+        if kind not in queries:
+            raise ValueError("unsupported authentication routing kind")
+        with self._connection() as connection:
+            row = connection.execute(queries[kind], (verifier,)).fetchone()
+        if row is None:
+            raise PlatformNotFound("authentication was not found")
+        return str(row["course_key"])
 
     def get_student_password_credential(
         self, *, student_key: str, course_key: str
@@ -5844,6 +5953,78 @@ class PlatformStateStore:
             ).fetchone()
         return self._bundle_assignment(row)
 
+    def begin_bundle_release_check(self, assignment_id: str, *, course_key: str) -> int:
+        with self._write() as connection:
+            row = connection.execute("SELECT * FROM bundle_assignment_releases WHERE assignment_id = ? AND course_key = ?",
+                                     (assignment_id, course_key)).fetchone()
+            if row is None:
+                raise PlatformNotFound("assignment was not found in this course")
+            if row["ready"]:
+                raise PlatformConflict("hide the release before validating it")
+            cursor = connection.execute("INSERT INTO bundle_release_checks(assignment_id, status, created_at) VALUES (?, 'pending', ?)",
+                                        (assignment_id, utc_iso()))
+            return int(cursor.lastrowid)
+
+    def finish_bundle_release_check(self, check_id: int, *, passed: bool, details: Mapping[str, Any]) -> None:
+        with self._write() as connection:
+            changed = connection.execute(
+                "UPDATE bundle_release_checks SET status = ?, details_json = ?, completed_at = ? WHERE id = ? AND status = 'pending'",
+                ("passed" if passed else "failed", _json_object(details, "details"), utc_iso(), check_id),
+            ).rowcount
+            if changed != 1:
+                raise PlatformConflict("validation attempt is no longer pending")
+
+    def publish_validated_bundle_assignment(self, assignment_id: str, *, course_key: str) -> BundleAssignmentRelease:
+        with self._write() as connection:
+            row = connection.execute("SELECT * FROM bundle_assignment_releases WHERE assignment_id = ? AND course_key = ?",
+                                     (assignment_id, course_key)).fetchone()
+            if row is None:
+                raise PlatformNotFound("assignment was not found in this course")
+            check = connection.execute("SELECT status FROM bundle_release_checks WHERE assignment_id = ? ORDER BY id DESC LIMIT 1",
+                                       (assignment_id,)).fetchone()
+            if check is None or check["status"] != "passed":
+                raise PlatformConflict("run assignment bundle-check successfully before publishing")
+            other = connection.execute("SELECT 1 FROM bundle_assignment_releases WHERE course_key = ? AND assignment_key = ? AND assignment_id != ? AND active = 1 AND ready = 1",
+                                       (course_key, row["assignment_key"], assignment_id)).fetchone()
+            if other is not None:
+                raise PlatformConflict("another release is public; explicitly hide it before publishing this release")
+            if not row["active"]:
+                raise PlatformConflict("inactive assignment cannot be published")
+            connection.execute("UPDATE bundle_assignment_releases SET ready = 1, updated_at = ? WHERE assignment_id = ?", (utc_iso(), assignment_id))
+            result = connection.execute("SELECT * FROM bundle_assignment_releases WHERE assignment_id = ?", (assignment_id,)).fetchone()
+        return self._bundle_assignment(result)
+
+    def extend_bundle_deadline(self, assignment_id: str, *, course_key: str, due_at: DatetimeValue,
+                               reason: str, actor: str, at: Optional[DatetimeValue] = None) -> BundleAssignmentRelease:
+        due, now = utc_iso(due_at), utc_iso(at)
+        reason, actor = _required_text(reason, "reason"), _required_text(actor, "actor")
+        if len(reason) > 1000 or len(actor) > 255:
+            raise ValueError("deadline audit text is too long")
+        with self._write() as connection:
+            row = connection.execute("SELECT * FROM bundle_assignment_releases WHERE assignment_id = ? AND course_key = ?",
+                                     (assignment_id, course_key)).fetchone()
+            if row is None:
+                raise PlatformNotFound("assignment was not found in this course")
+            if row["due_at"] is None or due <= row["due_at"] or due <= now:
+                raise PlatformConflict("new deadline must extend an existing deadline into the future")
+            if row["result_policy"] == "after_deadline" and connection.execute(
+                "SELECT 1 FROM bundle_submission_requests WHERE assignment_id = ? AND state = 'published' LIMIT 1", (assignment_id,)
+            ).fetchone():
+                raise PlatformConflict("cannot extend after-deadline assignment once results are public")
+            connection.execute("INSERT INTO bundle_deadline_changes(assignment_id, old_due_at, new_due_at, actor, reason, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                               (assignment_id, row["due_at"], due, actor, reason, now))
+            connection.execute("UPDATE bundle_assignment_releases SET due_at = ?, updated_at = ? WHERE assignment_id = ?", (due, now, assignment_id))
+            result = connection.execute("SELECT * FROM bundle_assignment_releases WHERE assignment_id = ?", (assignment_id,)).fetchone()
+        return self._bundle_assignment(result)
+
+    def bundle_operation_history(self, assignment_id: str, *, course_key: str) -> Mapping[str, Any]:
+        with self._connection() as connection:
+            if connection.execute("SELECT 1 FROM bundle_assignment_releases WHERE assignment_id = ? AND course_key = ?", (assignment_id, course_key)).fetchone() is None:
+                raise PlatformNotFound("assignment was not found in this course")
+            checks = [dict(row) for row in connection.execute("SELECT * FROM bundle_release_checks WHERE assignment_id = ? ORDER BY id DESC LIMIT 100", (assignment_id,))]
+            changes = [dict(row) for row in connection.execute("SELECT * FROM bundle_deadline_changes WHERE assignment_id = ? ORDER BY id DESC LIMIT 100", (assignment_id,))]
+        return {"checks": checks, "deadline_changes": changes, "limit_per_list": 100}
+
     def set_bundle_assignment_availability(
         self,
         assignment_id: str,
@@ -5965,6 +6146,31 @@ class PlatformStateStore:
                 f"bundle assignment {assignment_id!r} was not found"
             )
         return self._bundle_assignment(row)
+
+    def bundle_runner_images_in_use(self, *, course_key: str) -> tuple[str, ...]:
+        """All deliverable releases and immutable receipts that may execute.
+
+        Do not limit this to visible assignments: a hidden release may still
+        have queued submissions accepted under its original runner contract.
+        """
+        course_key = _required_text(course_key, "course_key")
+        with self._connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT runner_image FROM bundle_assignment_releases
+                WHERE course_key = ? AND active = 1 AND ready = 1
+                UNION
+                SELECT receipt.runner_image FROM bundle_submission_receipts AS receipt
+                JOIN bundle_submission_requests AS request USING (submission_id)
+                JOIN bundle_assignment_releases AS assignment
+                  ON assignment.assignment_id = request.assignment_id
+                WHERE assignment.course_key = ?
+                  AND request.state IN ('accepted', 'queued', 'running')
+                ORDER BY runner_image
+                """,
+                (course_key, course_key),
+            ).fetchall()
+        return tuple(row[0] for row in rows)
 
     def list_operator_bundle_assignments(
         self,
@@ -6537,6 +6743,9 @@ class PlatformStateStore:
                 raise PlatformInvalidTransition(
                     f"bundle submission cannot be published from {request['state']}"
                 )
+            assignment = connection.execute("SELECT * FROM bundle_assignment_releases WHERE assignment_id = ?", (request["assignment_id"],)).fetchone()
+            if assignment["result_policy"] == "after_deadline" and assignment["due_at"] > now:
+                raise PlatformInvalidTransition("result cannot be published before the current deadline")
             changed = connection.execute(
                 "UPDATE bundle_submission_results SET published_at = ? "
                 "WHERE submission_id = ? AND published_at IS NULL",
@@ -6622,6 +6831,30 @@ class PlatformStateStore:
                 "bundle submission was not found for this student"
             )
         return self._bundle_submission(row)
+
+    def list_owned_bundle_submissions(
+        self, *, access_token_hash: str, course_key: str, assignment_id: str,
+        at: Optional[DatetimeValue] = None,
+    ) -> tuple[BundleSubmissionRequest, ...]:
+        """Latest 101 accepted receipts; the extra row signals a truncated history."""
+        _, student = self.authorize_access_token(
+            access_token_hash=access_token_hash, course_key=course_key, at=at
+        )
+        with self._connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT r.* FROM bundle_submission_requests AS r
+                JOIN bundle_assignment_releases AS a ON a.assignment_id = r.assignment_id
+                JOIN bundle_submission_receipts AS receipt ON receipt.submission_id = r.submission_id
+                WHERE r.assignment_id = ? AND r.student_id = ? AND a.course_key = ?
+                  AND EXISTS (SELECT 1 FROM platform_enrollments AS e
+                    WHERE e.student_id = r.student_id AND e.course_key = a.course_key AND e.active = 1)
+                ORDER BY r.received_at DESC, r.submission_id DESC LIMIT 101
+                """,
+                (_required_text(assignment_id, "assignment_id"), student.id,
+                 _required_text(course_key, "course_key")),
+            ).fetchall()
+        return tuple(self._bundle_submission(row) for row in rows)
 
     def get_latest_owned_bundle_submission(
         self,

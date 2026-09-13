@@ -1,5 +1,21 @@
 # Documentation
 
+- [옵저버·데코레이터 실습 문제](../examples/pattern-workshops/README.md): C++17 문제 → 학생 코드 작성 → 실행 검사 → 프롬프트 검토.
+
+- [학생·교수자 화면과 수락 과제](operations/student-instructor-views.md): 학생 웹/교수자 웹 분리, VS Code 0.4.1의 수락 전용 목록과 서버 권한 검사.
+
+- [일반 학생 제출 배포 준비](operations/student-deployment-preparation.md): 격리 staging 모드, readiness, 공개 전 필수 통과 조건. 아직 일반 학생 공개는 No-Go.
+
+- [과제 등록·검증·공개와 마감 연장](operations/course-assignment-management.md): 2026-09-11부터 등록 기본값은 초안. 모범답안·오답 검사, 감사 기록, DB 업데이트 주의사항.
+
+- [제출 기록·코드 복원 MVP](operations/submission-history-mvp.md): 두 확장의 서버 접수 원본 조회·새 폴더 복원·학생별 격리와 직접 시험 절차.
+
+- [C/C++ Hello World 실습](../examples/hello-world/README.md): Linux/WSL2 서버 등록, Windows/VS2022 로컬 시험과 배점.
+- [Visual Studio 2022/2026 확장](../extensions/visualstudio/README.md): Windows VSIX 빌드·설치·학생 흐름과 미검증 항목.
+- [Visual Studio 예외 점검](operations/visualstudio-exception-review.md): 인증·네트워크·제출·파일 처리의 수정 사항과 남은 현장 시험.
+- [독립 웹 파일럿 실행](operations/independent-web-pilot.md): 현재 권장 절차. 학생 웹 20010,
+  VS Code API 20000, `come3105`·`come2201` 학생 등록부터 서버 실행까지.
+- [독립 웹 인증 MVP 설계](architecture/independent-web-auth-mvp.md): 구현 구조와 보안·운영 경계.
 - `requirements/mvp.md`: local CSV 파일럿의 전제, 기능·안전 요구사항과 성공 기준
 - `requirements/student-platform.md`: WSL2, 학생별 주차 repository, Extension 제출,
   device authorization과 결과 제공 목표 요구사항
@@ -18,11 +34,12 @@
 - [operations/trusted-lan-pilot.md](operations/trusted-lan-pilot.md): 동일한 신뢰 LAN의 외부
   시험 PC에서 암호화되지 않은 HTTP로 기능 흐름만 단기 검증하고 즉시 session/code와 firewall
   허용을 폐기하는 명시적 opt-in 절차
-- [operations/observer-pattern-pilot.md](operations/observer-pattern-pilot.md): Java/C++ 옵저버
+- [operations/observer-pattern-pilot.md](operations/observer-pattern-pilot.md): 이전 Java/C++ 비교 예제 보존용. 옵저버
   패턴 과제를 등록하고 행동 기반 rubric, 학생 제출, dashboard와 오류 시나리오까지 검증하는
   교수자용 파일럿 절차
 - `operations/go-live-checklist.md`: 합성·신뢰 코드 local 파일럿의 Go/No-Go와 복구 drill
 
-`requirements/mvp.md`와 `qr-assignment-claim-pilot.md`가 현재 권장 파일럿 기준입니다.
+`requirements/mvp.md`와 `operations/independent-web-pilot.md`가 현재 파일럿 기준입니다.
+`operations/qr-assignment-claim-pilot.md`는 기존 단일 교과목 실행 모드의 참고 문서입니다.
 `direct-bundle-mvp.md`의 활성화 코드 흐름은 loopback·호환 시험 기준입니다. `student-platform`
 문서는 구현된 제출 vertical slice와 production용 repository/container 목표를 함께 설명합니다.

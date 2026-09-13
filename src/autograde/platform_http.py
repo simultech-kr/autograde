@@ -53,7 +53,7 @@ from dataclasses import dataclass, field
 from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Mapping, MutableMapping, Optional, Sequence, Tuple
+from typing import Any, Callable, Mapping, MutableMapping, Optional, Sequence, Tuple
 from urllib.parse import parse_qsl, unquote, urlsplit
 
 from .platform_events import emit_operator_event
@@ -191,6 +191,7 @@ class PlatformHTTPServer(ThreadingHTTPServer):
         max_form_bytes: int,
         max_concurrent_requests: int,
         request_timeout_seconds: float,
+        readiness_check: Optional[Callable[[], bool]] = None,
     ) -> None:
         _positive_limit(max_request_bytes, "max_request_bytes")
         _positive_limit(max_response_bytes, "max_response_bytes")
@@ -203,6 +204,7 @@ class PlatformHTTPServer(ThreadingHTTPServer):
             raise ValueError("request_timeout_seconds must be positive")
 
         self.facade = facade
+        self.readiness_check = readiness_check
         self.max_request_bytes = max_request_bytes
         self.max_response_bytes = max_response_bytes
         self.max_bundle_request_bytes = max_bundle_request_bytes
@@ -478,6 +480,10 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
         self, path: str
     ) -> tuple[Optional[str], Mapping[str, str], frozenset[str]]:
         facade = self.platform_server.facade
+        if callable(getattr(facade, "portal_request", None)) and path not in {"/healthz", "/readyz"}:
+            if path in {"/", "/courses"} or path.startswith("/courses/"):
+                return "portal", {"path": path}, frozenset({"GET", "POST"})
+            return None, {}, frozenset()
         if (
             self.platform_server.external_access_mode == "insecure-http"
             and path in {"/instructor", "/v1/instructor/dashboard"}
@@ -486,6 +492,7 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
             # explicitly plaintext trusted-LAN pilot channel.
             return None, {}, frozenset()
         exact: Mapping[str, tuple[str, frozenset[str], Optional[str]]] = {
+            "/readyz": ("readiness", frozenset({"GET"}), None),
             "/healthz": (
                 "health",
                 frozenset({"GET"}),
@@ -526,6 +533,9 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
                 "assignments",
                 frozenset({"GET"}),
                 "list_assignments",
+            ),
+            "/v1/accepted-assignments": (
+                "accepted_assignments", frozenset({"GET"}), "list_accepted_assignments",
             ),
             "/v1/submissions": (
                 "submit",
@@ -604,6 +614,8 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
                 )
         if len(parts) == 5 and parts[:3] == ["", "v1", "assignments"]:
             identifier = self._identifier(parts[3])
+            if identifier is not None and parts[4] == "history" and callable(getattr(facade, "get_bundle_history", None)):
+                return ("bundle_history", {"assignment_id": identifier}, frozenset({"GET"}))
             if identifier is not None and parts[4] == "repository":
                 return (
                     "assignment_repository",
@@ -638,6 +650,10 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
                     {"session_id": identifier},
                     frozenset({"DELETE"}),
                 )
+        if len(parts) == 5 and parts[:3] == ["", "v1", "submissions"] and parts[4] == "source":
+            identifier = self._identifier(parts[3])
+            if identifier is not None and callable(getattr(facade, "get_bundle_source", None)):
+                return ("bundle_source", {"submission_id": identifier}, frozenset({"GET"}))
         if len(parts) == 4 and parts[:3] == ["", "v1", "submissions"]:
             identifier = self._identifier(parts[3])
             if identifier is not None:
@@ -673,9 +689,30 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
         query: Mapping[str, str],
     ) -> tuple[Any, int]:
         facade = self.platform_server.facade
+        if route == "portal":
+            if query:
+                raise PlatformHTTPError(400, "invalid_request", "Unexpected query parameter")
+            if self.command == "POST":
+                form = self._read_form()
+            else:
+                self._ensure_no_body()
+                form = {}
+            return facade.portal_request(
+                self.command, parameters["path"], form, self._cookies(),
+                self.headers.get("Origin"), self.headers.get("Authorization"),
+            ), 200
         if route == "health":
             self._ensure_no_body()
             return {"status": "ok"}, 200
+        if route == "readiness":
+            self._ensure_no_body()
+            check = self.platform_server.readiness_check
+            try:
+                ready = check is not None and check() is True
+            except Exception:
+                # Never expose database paths, runtime errors or credentials.
+                ready = False
+            return {"status": "ready" if ready else "not_ready"}, 200 if ready else 503
         if route == "device_authorizations":
             payload = self._read_json_object()
             return (
@@ -710,6 +747,9 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
         if route == "assignments":
             self._ensure_no_body()
             return facade.list_assignments(self._bearer_token()), 200
+        if route == "accepted_assignments":
+            self._ensure_no_body()
+            return facade.list_accepted_assignments(self._bearer_token()), 200
         if route == "assignment_repository":
             self._ensure_no_body()
             return (
@@ -726,6 +766,12 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
                 ),
                 200,
             )
+        if route == "bundle_history":
+            self._ensure_no_body()
+            return facade.get_bundle_history(self._bearer_token(), parameters["assignment_id"]), 200
+        if route == "bundle_source":
+            self._ensure_no_body()
+            return facade.get_bundle_source(self._bearer_token(), parameters["submission_id"]), 200
         if route == "bundle_submit":
             token = self._bearer_token()
             idempotency_key = self._idempotency_key()
@@ -1115,6 +1161,8 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
 
         self.send_response(status)
         for name, value in _SECURITY_HEADERS.items():
+            if name == "Content-Security-Policy" and callable(getattr(self.platform_server.facade, "portal_request", None)):
+                value += "; style-src 'unsafe-inline'"
             self.send_header(name, value)
         self.send_header("Connection", "close")
         self.send_header("Content-Length", str(len(body)))
@@ -1209,6 +1257,7 @@ def create_server(
     max_form_bytes: int = DEFAULT_MAX_FORM_BYTES,
     max_concurrent_requests: int = DEFAULT_MAX_CONCURRENT_REQUESTS,
     request_timeout_seconds: float = DEFAULT_REQUEST_TIMEOUT_SECONDS,
+    readiness_check: Optional[Callable[[], bool]] = None,
 ) -> PlatformHTTPServer:
     """Create, but do not start, a configured platform HTTP server."""
 
@@ -1225,6 +1274,7 @@ def create_server(
         max_form_bytes=max_form_bytes,
         max_concurrent_requests=max_concurrent_requests,
         request_timeout_seconds=request_timeout_seconds,
+        readiness_check=readiness_check,
     )
 
 

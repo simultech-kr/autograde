@@ -161,6 +161,25 @@ class BundleFixture:
         )
 
 
+def test_owned_submission_history_is_bounded_ordered_and_isolated(store):
+    fixture = BundleFixture(store)
+    fixture.assignment()
+    other = BundleFixture(store, student_key="s002", token_character="a", suffix="2")
+    for index in range(102):
+        fixture.submit(submission_id=f"bsub_history_{index:03d}", receipt_id=f"brcp_history_{index:03d}",
+                       key=f"history-{index}", request_hash=hashlib.sha256(f"req{index}".encode()).hexdigest(),
+                       source_digest=hashlib.sha256(f"src{index}".encode()).hexdigest(),
+                       max_outstanding=200, max_daily=200,
+                       at=NOW + timedelta(minutes=1, seconds=index))
+    rows = store.list_owned_bundle_submissions(access_token_hash=fixture.token, course_key=COURSE,
+        assignment_id="bundle_asn_01", at=NOW + timedelta(minutes=4))
+    assert len(rows) == 101
+    assert rows[0].submission_id == "bsub_history_101"
+    assert rows[-1].submission_id == "bsub_history_001"
+    assert store.list_owned_bundle_submissions(access_token_hash=other.token, course_key=COURSE,
+        assignment_id="bundle_asn_01", at=NOW + timedelta(minutes=4)) == ()
+
+
 def test_v6_migrates_existing_students_and_creates_bundle_tables(
     database: Path,
 ) -> None:
@@ -190,7 +209,7 @@ def test_v6_migrates_existing_students_and_creates_bundle_tables(
 
     migrated = PlatformStateStore(database)
 
-    assert migrated.schema_version() == 8
+    assert migrated.schema_version() == 10
     assert migrated.get_student_by_key("legacy").identity_kind == (
         StudentIdentityKind.GITHUB
     )

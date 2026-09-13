@@ -14,6 +14,53 @@ import {
   TokenManager,
 } from "../api";
 import type { TokenResponse } from "../types";
+import { sha256Hex } from "../bundle";
+
+test("student assignment list uses accepted-only endpoint and never falls back to catalog", async () => {
+  const transport = new FakeTransport([{ assignments: [] }, new ApiError("Missing endpoint", 404, "not_found")]);
+  const client = new AutogradeClient(transport, new FakeTokens());
+  assert.deepEqual(await client.getAssignments(), []);
+  await assert.rejects(client.getAssignments(), (error: unknown) => error instanceof ApiError && error.status === 404
+    && error.code === "server_upgrade_required");
+  assert.equal(transport.calls.length, 2);
+  for (const call of transport.calls) {
+    assert.equal(call.endpoint, "/v1/accepted-assignments");
+    assert.equal(call.bearerToken, "access-token");
+  }
+});
+
+test("history and source use authenticated same-origin endpoints and verify source hash", async () => {
+  const bytes = Buffer.from("archived source");
+  const transport = new FakeTransport([{ submissions: [{ submission_id: "bsub_1", assignment_id: "asn_1",
+    state: "queued", received_at: "2026-09-10T00:00:00Z", source_sha256: `sha256:${sha256Hex(bytes)}`,
+    source_size_bytes: bytes.length }], has_more: false }, bytes, Buffer.alloc(bytes.length)]);
+  const client = new AutogradeClient(transport, new FakeTokens());
+  const version = (await client.getSubmissionHistory("asn_1")).submissions[0];
+  assert.ok(version);
+  assert.deepEqual(await client.getSubmissionSource(version), bytes);
+  assert.equal(transport.calls[0]?.endpoint, "/v1/assignments/asn_1/history");
+  assert.equal(transport.calls[1]?.endpoint, "/v1/submissions/bsub_1/source");
+  for (const call of transport.calls) {
+    assert.equal(call.bearerToken, "access-token");
+    assert.equal(call.options?.expectedBaseUrl, transport.baseUrl);
+  }
+  assert.equal(transport.calls[1]?.options?.maxResponseBytes, 25 * 1024 * 1024);
+  await assert.rejects(client.getSubmissionSource(version), /SHA-256/);
+});
+
+test("device preparation sends the normalized course-routing secret with an origin binding", async () => {
+  const transport = new FakeTransport([{}]);
+  const client = new AutogradeClient(transport, new FakeTokens());
+  await client.createDeviceAuthorization("seat", "0.3.0", undefined, undefined, "ak1 2345 6789 abcd");
+  assert.equal(transport.calls[0]?.options?.expectedBaseUrl, transport.baseUrl);
+  assert.equal(transport.calls[0]?.bearerToken, undefined);
+  assert.equal(JSON.parse(String(transport.calls[0]?.init.body)).claim_code, "AK1-2345-6789-ABCD");
+  transport.baseUrl = "http://192.168.1.10:20000";
+  await assert.rejects(client.createDeviceAuthorization("seat", "0.3.0", undefined, undefined, "AK1-2345-6789-ABCD"), /HTTPS/);
+  transport.baseUrl = "https://other.example.edu:20000";
+  await assert.rejects(client.createDeviceAuthorization("seat", "0.3.0", undefined, "https://grade.example.edu", "AK1-2345-6789-ABCD"), /변경/);
+  assert.equal(transport.calls.length, 1);
+});
 
 class FakeTokens implements SessionTokenStore {
   public cleared = false;

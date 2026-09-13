@@ -174,7 +174,15 @@ def test_zero_env_csv_pilot_downloads_submits_and_grades_without_docker(
         "10",
     )
     assert assignment["grading_runtime"] == "pilot-local"
-    assert assignment["ready"] is True
+    assert assignment["ready"] is False
+    solution = tmp_path / "solution"
+    solution.mkdir()
+    (solution / "main.py").write_text("print(int(input()) * 2)\n", encoding="utf-8")
+    checked = _cli(repository, config, environment, "assignment", "bundle-check", "basn_pilot_lab01",
+        "--solution", str(solution), "--negative-solution", str(example / "starter"), "--negative-score", "2")
+    assert checked["status"] == "passed"
+    published = _cli(repository, config, environment, "assignment", "bundle-ready", "basn_pilot_lab01")
+    assert published["ready"] is True
 
     code_directory = tmp_path / "activation-codes"
     code_directory.mkdir(mode=0o700)

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<CommandTable xmlns="http://schemas.microsoft.com/VisualStudio/2005-10-18/CommandTable">
+  <Extern href="stdidcmd.h" /><Extern href="vsshlids.h" />
+  <Commands package="guidPackage">
+    <Groups><Group guid="guidCommands" id="ToolsGroup" priority="0x0600"><Parent guid="guidSHLMainMenu" id="IDM_VS_MENU_TOOLS" /></Group></Groups>
+    <Buttons><Button guid="guidCommands" id="OpenAutograde" priority="0x0100" type="Button"><Parent guid="guidCommands" id="ToolsGroup" /><Strings><ButtonText>Autograde 과제</ButtonText></Strings></Button></Buttons>
+  </Commands>
+  <Symbols>
+    <GuidSymbol name="guidPackage" value="{74db5571-a3ad-4451-a5f4-e8cc28d20536}" />
+    <GuidSymbol name="guidCommands" value="{cd754a3d-73d8-47f1-bddc-429f9211fb89}"><IDSymbol name="ToolsGroup" value="0x1020" /><IDSymbol name="OpenAutograde" value="0x0100" /></GuidSymbol>
+  </Symbols>
+</CommandTable>

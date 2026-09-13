@@ -58,6 +58,25 @@ def test_loads_typed_config_and_anchors_relative_data_root_at_csv_parent(
     }
 
 
+@pytest.mark.parametrize("extra", [
+    "web_port,18081\n",
+    "web_public_base_url,http://127.0.0.1:18081\n",
+    "web_public_base_url,http://127.0.0.1:18080\nweb_port,18080\n",
+    "web_public_base_url,http://127.0.0.1:18081\nweb_port,18082\n",
+    "web_public_base_url,http://public.example:20010\nweb_port,18081\n",
+    "web_public_base_url,https://grade.example:20010\nweb_port,18081\n",
+])
+def test_portal_rejects_incomplete_or_conflicting_origins(tmp_path, extra):
+    with pytest.raises(PilotConfigError):
+        load_pilot_config(write_config(tmp_path / "pilot.csv", extra=extra))
+
+
+def test_portal_accepts_distinct_loopback_listeners(tmp_path):
+    config = load_pilot_config(write_config(tmp_path / "pilot.csv", extra=
+        "web_public_base_url,http://127.0.0.1:18081\nweb_port,18081\n"))
+    assert config.values["web_port"] == 18081
+
+
 def test_optional_pilot_values_have_local_defaults(tmp_path: Path) -> None:
     config = load_pilot_config(write_config(tmp_path / "pilot.csv"))
 

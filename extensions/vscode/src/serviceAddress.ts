@@ -3,7 +3,7 @@ import * as vscode from "vscode";
 import type { AutogradeClient } from "./api";
 import { normalizeServiceAddressInput } from "./helpers";
 
-const DEFAULT_SERVICE_ADDRESS = "http://127.0.0.1:18080";
+const DEFAULT_SERVICE_ADDRESS = "http://127.0.0.1:20000";
 const CHANGE_ADDRESS_ACTION = "로그아웃하고 주소 변경";
 
 /** Prompts for, validates, and machine-locally stores one service origin. */

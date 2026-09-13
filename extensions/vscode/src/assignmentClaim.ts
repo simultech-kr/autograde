@@ -50,7 +50,7 @@ export class AssignmentClaimController {
       title: "수령 코드로 과제 받기",
       prompt:
         `접속할 서버: ${new URL(serviceBaseUrl).origin}\n` +
-        "Autograde 웹사이트에서 받은 과제 수령 코드(과제 키)를 입력하세요. 수령 코드는 이 기기에 저장되지 않습니다.",
+        "학생 웹(20010번)에서 받은 과제 수령 코드를 입력하세요. VS Code 서버는 20000번입니다.",
       placeHolder: "AK1-XXXX-XXXX-XXXX",
       password: true,
       ignoreFocusOut: true,
@@ -89,6 +89,7 @@ export class AssignmentClaimController {
               this.extensionVersion,
               controller.signal,
               serviceBaseUrl,
+              ephemeralClaimCode,
             );
             validatePendingDeviceAuthorization(authorization);
             if (this.client.transport.getBaseUrl() !== serviceBaseUrl) {

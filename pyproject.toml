@@ -21,6 +21,7 @@ dev = [
 [project.scripts]
 autograde = "autograde.cli:main"
 autograde-platform = "autograde.platform_cli:main"
+autograde-pilot = "autograde.pilot_portal_cli:main"
 autograde-git-askpass = "autograde.platform_github_app:askpass_main"
 
 [tool.setuptools]

@@ -87,7 +87,7 @@ test("claim code approves a pending device then bootstraps the existing in-memor
   resetUi();
   inputResponses = ["  ak1 2345-6789-abcd  "];
   const events: string[] = [];
-  const createCalls: Array<{ deviceName: string; extensionVersion: string; signal?: AbortSignal; expectedBaseUrl?: string }> = [];
+  const createCalls: Array<{ deviceName: string; extensionVersion: string; signal?: AbortSignal; expectedBaseUrl?: string; claimCode?: string }> = [];
   const redeemCalls: Array<{ claimCode: string; deviceCode: string; signal?: AbortSignal; expectedBaseUrl?: string }> = [];
   const exchangeCalls: Array<{ deviceCode: string; expectedBaseUrl?: string }> = [];
   const stored: Array<{ tokens: TokenResponse; expectedBaseUrl: string }> = [];
@@ -105,9 +105,10 @@ test("claim code approves a pending device then bootstraps the existing in-memor
       extensionVersion: string,
       signal?: AbortSignal,
       expectedBaseUrl?: string,
+      claimCode?: string,
     ) => {
       events.push("create");
-      createCalls.push({ deviceName, extensionVersion, signal, expectedBaseUrl });
+      createCalls.push({ deviceName, extensionVersion, signal, expectedBaseUrl, claimCode });
       return DEVICE;
     },
     redeemAssignmentClaim: async (
@@ -143,11 +144,12 @@ test("claim code approves a pending device then bootstraps the existing in-memor
   assert.equal(inputCalls[0]?.password, true);
   assert.equal(inputCalls[0]?.ignoreFocusOut, true);
   assert.equal("value" in (inputCalls[0] ?? {}), false);
-  assert.match(String(inputCalls[0]?.prompt ?? ""), /과제 수령 코드\(과제 키\)/);
-  assert.match(String(inputCalls[0]?.prompt ?? ""), /저장되지 않습니다/);
+  assert.match(String(inputCalls[0]?.prompt ?? ""), /과제 수령 코드/);
+  assert.match(String(inputCalls[0]?.prompt ?? ""), /20010/);
   assert.match(String(inputCalls[0]?.prompt ?? ""), /접속할 서버: https:\/\/grade\.example\.edu/);
   assert.equal(createCalls.length, 1);
   assert.equal(createCalls[0]?.extensionVersion, "0.2.0");
+  assert.equal(createCalls[0]?.claimCode, "AK1-2345-6789-ABCD");
   assert.equal(createCalls[0]?.expectedBaseUrl, "https://grade.example.edu");
   assert.match(createCalls[0]?.deviceName ?? "", /wsl/);
   assert.ok(createCalls[0]?.signal instanceof AbortSignal);

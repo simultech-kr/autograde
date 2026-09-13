@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from autograde.platform_cli import main
+from autograde.platform_state import PlatformStateStore
 
 
 def _invoke(config: Path, *arguments: str) -> int:
@@ -97,6 +98,12 @@ def test_instructor_can_review_and_publish_both_observer_assignments(
         assert created["grading_runtime"] == "pilot-local"
         assert created["runner_image"] == "pilot-local:v1"
         assert created["ready"] is False
+
+        # This is a catalog/visibility test without a Java runtime. The actual
+        # positive/negative check path is covered by the C integration test.
+        state = PlatformStateStore(tmp_path / "state/state.sqlite3")
+        check = state.begin_bundle_release_check(assignment_id, course_key="observer-pattern-pilot")
+        state.finish_bundle_release_check(check, passed=True, details={"fixture": "catalog"})
 
         assert (
             _invoke(config, "assignment", "bundle-ready", assignment_id) == 0

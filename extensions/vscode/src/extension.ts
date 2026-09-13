@@ -1,4 +1,5 @@
 import { lstat, rm } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import * as path from "node:path";
 
 import * as vscode from "vscode";
@@ -16,6 +17,7 @@ import { AuthenticationController } from "./auth";
 import {
   createSubmissionBundle,
   extractStarterBundle,
+  extractSubmissionBundle,
   readWorkspaceMarker,
   sha256Hex,
   writeWorkspaceMarker,
@@ -72,7 +74,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const transport = new HttpTransport(
     () => vscode.workspace
       .getConfiguration("autograde")
-      .get<string>("serviceBaseUrl", "http://127.0.0.1:18080"),
+      .get<string>("serviceBaseUrl", "http://127.0.0.1:20000"),
     globalThis.fetch.bind(globalThis),
     () => vscode.workspace
       .getConfiguration("autograde")
@@ -114,8 +116,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         : []),
     ]);
     treeView.message = authenticated
-      ? "과제를 펼쳐 파일 다운로드 버튼을 선택하세요."
-      : "위의 로그인 또는 수령 코드 버튼으로 과제를 시작하세요.";
+      ? "현재 수령 코드로 수락한 과제만 표시합니다. 과제를 펼쳐 다운로드·제출 기록을 확인하세요."
+      : "학생 웹에서 받은 수령 코드를 입력해 과제를 시작하세요.";
     return authenticated;
   };
 
@@ -134,7 +136,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     await mergeServerSubmissionIds(activeStudentState, client.transport.getBaseUrl(), assignments);
     await updateAuthenticationUI(true);
     if (showSuccess) {
-      void vscode.window.showInformationMessage(`과제 ${assignments.length}개를 불러왔습니다.`);
+      void vscode.window.showInformationMessage(`수락한 실습과제 ${assignments.length}개를 불러왔습니다.`);
     }
     return assignments;
   };
@@ -228,6 +230,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand(
       "autograde.submitCurrentCommit",
       (item?: AssignmentTreeItem) => runCommand(() => submitCurrentCommit(studentState, client, refreshAssignments, item)),
+    ),
+    vscode.commands.registerCommand(
+      "autograde.submissionHistory",
+      (item?: AssignmentTreeItem) => runCommand(() => viewSubmissionHistory(studentState, client, treeProvider, output, diagnostics, item)),
     ),
     vscode.commands.registerCommand(
       "autograde.viewLatestResult",
@@ -553,6 +559,72 @@ async function submitCurrentBundle(
     );
   }
   await refreshAssignments(false);
+}
+
+async function viewSubmissionHistory(
+  studentState: EphemeralStudentState, client: AutogradeClient,
+  tree: AssignmentsTreeProvider, output: vscode.OutputChannel,
+  diagnostics: vscode.DiagnosticCollection, item?: AssignmentTreeItem,
+): Promise<void> {
+  const origin = client.getBaseUrl();
+  const checkSession = () => {
+    if (!studentState.isActive() || client.getBaseUrl() !== origin) {
+      throw new Error("로그인 또는 서버가 변경되었습니다. 제출 기록을 다시 여세요.");
+    }
+  };
+  const assignment = item?.assignment ?? await pickAssignment(tree.getAssignments().filter(isBundleAssignment));
+  if (!assignment || !isBundleAssignment(assignment)) return;
+  checkSession();
+  const history = await client.getSubmissionHistory(assignment.id);
+  checkSession();
+  if (!history.submissions.length) {
+    void vscode.window.showInformationMessage("서버가 접수한 제출 기록이 없습니다."); return;
+  }
+  const selection = await vscode.window.showQuickPick(history.submissions.map(version => ({
+    label: new Date(version.receivedAt).toLocaleString(),
+    description: `${version.state} · ${version.sourceDigest.slice(0, 12)}`,
+    detail: version.id, version,
+  })), { title: history.hasMore ? "제출 기록 (최근 100건만 표시)" : "제출 기록 (최신순)", ignoreFocusOut: true });
+  if (!selection) return;
+  checkSession();
+  const action = await vscode.window.showQuickPick(["이 제출의 채점 결과", "새 폴더로 코드 복원"], { title: selection.detail });
+  if (!action) return;
+  checkSession();
+  if (action === "이 제출의 채점 결과") {
+    try {
+      const result = await client.getResult(selection.version.id);
+      checkSession();
+      if (result.sourceDigest !== selection.version.sourceDigest) throw new Error("채점 결과의 제출 파일 정보가 일치하지 않습니다.");
+      diagnostics.clear(); renderResult(output, assignment, result); output.show(true);
+    } catch (error) {
+      checkSession();
+      if (error instanceof ApiError && error.status === 404 && error.code === "result_not_available") {
+        void vscode.window.showInformationMessage("아직 공개된 채점 결과가 없습니다."); return;
+      }
+      throw error;
+    }
+    return;
+  }
+  if (!vscode.workspace.isTrusted) throw new Error("코드 복원은 신뢰하는 workspace에서 실행하세요.");
+  ensureSupportedWorkspacePlatform("제출 코드 복원");
+  const folders = await vscode.window.showOpenDialog({ canSelectFolders: true, canSelectFiles: false,
+    canSelectMany: false, openLabel: "이 폴더 아래 새 폴더에 복원" });
+  if (!folders?.[0]) return;
+  checkSession();
+  const target = path.join(folders[0].fsPath, `autograde-restore-${randomUUID()}`);
+  const bytes = await client.getSubmissionSource(selection.version);
+  checkSession();
+  let created = false;
+  try {
+    await extractSubmissionBundle(bytes, target); created = true;
+    checkSession();
+    await writeWorkspaceMarker(target, { schemaVersion: 1, serviceBaseUrl: origin, assignmentId: assignment.id });
+    checkSession();
+  } catch (error) {
+    if (created) await rm(target, { recursive: true, force: true });
+    throw error;
+  }
+  void vscode.window.showInformationMessage(`복원 완료: ${target}. 자동 제출 또는 빌드는 실행하지 않았습니다.`);
 }
 
 async function cloneAssignment(

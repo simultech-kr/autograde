@@ -1,5 +1,7 @@
 # Examples
 
+- [pattern-workshops/](pattern-workshops/README.md): C++17 옵저버·데코레이터 문제 상황, 학생 TODO 코드, 공개 검사와 AI 검토 프롬프트. 참고 정답은 별도 교수자 폴더.
+
 - `assignments/`: 공개 가능한 최소 예제 과제와 채점 규칙
 - `direct-bundle/`: GitHub 없는 starter 배포·직접 제출·파일럿 채점 예제
 - `observer-java/`: Java로 구독·알림·해제를 구현하는 Observer 패턴 과제

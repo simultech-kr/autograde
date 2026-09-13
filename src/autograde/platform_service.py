@@ -377,7 +377,7 @@ class StudentPlatformService:
         del base_url  # Never trust Host-derived URLs; use the configured public origin.
         _strict_object(
             payload,
-            allowed={"client", "extension_version", "device_name"},
+            allowed={"client", "extension_version", "device_name", "claim_code"},
             required={"device_name"},
         )
         device_label = _required_string(payload.get("device_name"), "device_name", maximum=128)
@@ -709,6 +709,27 @@ class StudentPlatformService:
             # Do not reveal whether a session belongs to another student.
             raise PlatformAPIError(404, "not_found", "session was not found") from exc
         return None
+
+    def require_assignment_acceptance(self, access_token: str) -> tuple[str, str]:
+        """Student portal credentials must come from an accepted assignment."""
+        session, _student = self._authorize(access_token)
+        scope = self.state.get_session_assignment_scope(
+            session_id=session.session_id, course_key=self.course_key
+        )
+        if scope is None:
+            raise PlatformAPIError(403, "assignment_acceptance_required",
+                                   "학생 웹에서 수령 코드를 발급받아 과제를 수락해 주세요.")
+        return scope
+
+    def list_accepted_assignments(self, access_token: str) -> Mapping[str, Any]:
+        """Only the current claim session's accepted assignment, never a catalog."""
+        try:
+            self.require_assignment_acceptance(access_token)
+        except PlatformAPIError as exc:
+            if exc.code != "assignment_acceptance_required":
+                raise
+            return {"assignments": []}
+        return self.list_assignments(access_token)
 
     def list_assignments(self, access_token: str) -> Mapping[str, Any]:
         session, _student = self._authorize(access_token)
@@ -1201,6 +1222,39 @@ class StudentPlatformService:
 
         return {"submission": self._submission_projection(outcome.request), "replayed": outcome.replayed}
 
+    def get_bundle_history(self, access_token: str, assignment_id: str) -> Mapping[str, Any]:
+        assignment = self._owned_bundle_assignment(access_token, assignment_id)
+        requests = self.state.list_owned_bundle_submissions(
+            access_token_hash=self._access_verifier(access_token), course_key=self.course_key,
+            assignment_id=assignment.assignment_id, at=self._aware_now(),
+        )
+        # Grades remain behind get_result's disclosure policy.
+        return {"submissions": [self._bundle_submission_projection(row) for row in requests[:100]],
+                "has_more": len(requests) > 100, "limit": 100}
+
+    def get_bundle_source(self, access_token: str, submission_id: str) -> PlatformFileResponse:
+        submission = self.get_submission(access_token, submission_id)["submission"]
+        if submission.get("delivery_mode") != "bundle":
+            raise PlatformAPIError(404, "not_found", "submission source was not found")
+        try:
+            self.state.get_owned_bundle_receipt(
+                access_token_hash=self._access_verifier(access_token), course_key=self.course_key,
+                submission_id=submission["submission_id"], at=self._aware_now(),
+            )
+        except PlatformNotFound as exc:
+            raise PlatformAPIError(404, "not_found", "accepted source was not found") from exc
+        if self.bundle_store is None:
+            raise PlatformAPIError(503, "bundle_delivery_unavailable", "submission source is unavailable")
+        try:
+            artifact = self.bundle_store.get(submission["source_sha256"])
+        except (BundleStorageError, OSError) as exc:
+            raise PlatformAPIError(503, "bundle_delivery_unavailable", "submission source is unavailable") from exc
+        return PlatformFileResponse(200, artifact.path, "application/gzip", {
+            "Content-Disposition": f'attachment; filename="{submission["submission_id"]}.tar.gz"',
+            "ETag": f'"{artifact.archive_sha256}"',
+            "X-Autograde-SHA256": artifact.archive_sha256,
+        })
+
     def get_submission(self, access_token: str, submission_id: str) -> Mapping[str, Any]:
         session, _student = self._authorize(access_token)
         safe_id = self._safe_identifier(submission_id, "submission_id")
@@ -1412,7 +1466,17 @@ class StudentPlatformService:
         body = (
             "<!doctype html><html lang=\"ko\"><head><meta charset=\"utf-8\">"
             "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
-            f"<title>{html.escape(self.course_key)} 채점 현황</title></head><body>"
+            f"<title>{html.escape(self.course_key)} 교수자 관리</title>"
+            "<style>body{margin:0;background:#f3f5f8;color:#18283a;font:15px/1.6 system-ui}"
+            "body>nav{padding:14px 24px;background:#16384c;color:white}body>nav a{color:white;margin-right:18px}"
+            "main{max-width:1180px;margin:24px auto;padding:24px;background:white;border-radius:12px}"
+            ".audience{color:#17615b;font-weight:600}h1{margin:6px 0 12px}h2{margin-top:28px;font-size:18px}"
+            "a{color:#185b94}table{display:block;max-width:100%;overflow-x:auto;border-collapse:collapse}"
+            "th,td{text-align:left;padding:10px 14px;border-bottom:1px solid #dce4ec;white-space:nowrap}"
+            "th{background:#eef3f7;font-weight:500}"
+            "@media(max-width:600px){main{padding:16px;margin:12px}body>nav{padding:12px}}"
+            "</style></head><body><main data-audience=\"instructor\">"
+            "<div class=\"audience\">교수자 관리 · 교과목 전체 현황</div>"
             f"<h1>{html.escape(self.course_key)} 채점 현황</h1>"
             f"<p>갱신 시각: {html.escape(str(dashboard['generated_at']))} · "
             "<a href=\"/instructor\">새로 고침</a></p>"
@@ -1441,7 +1505,7 @@ class StudentPlatformService:
             + "".join(table_rows)
             + "</tbody></table>"
             + ("<p>등록된 학생 또는 과제가 없습니다.</p>" if not table_rows else "")
-            + "</body></html>"
+            + "</main></body></html>"
         )
         return PlatformResponse(
             200, body, {"Content-Type": "text/html; charset=utf-8"}
@@ -1642,6 +1706,12 @@ class StudentPlatformService:
                 "assignment claim could not be issued",
             ) from exc
 
+        credential = self.authenticate_student_password(student_key, password)
+        return self.issue_authenticated_assignment_claim(credential, assignment_id)
+
+    def authenticate_student_password(self, student_key: str, password: str):
+        """Shared password verification for the direct page and course portal."""
+        self._require_secure_password_claim_transport()
         credential = None
         try:
             credential = self.state.get_student_password_credential(
@@ -1690,6 +1760,12 @@ class StudentPlatformService:
                 "assignment claim could not be issued",
             )
 
+        return credential
+
+    def create_authenticated_assignment_claim(self, credential, assignment_id: str):
+        """Issue after a verified web session; the store rechecks the credential."""
+        self._require_secure_password_claim_transport()
+        now = self._aware_now()
         grant = None
         claim_code = ""
         for _attempt in range(5):
@@ -1726,6 +1802,11 @@ class StudentPlatformService:
                 "assignment_claim_unavailable",
                 "assignment claim is temporarily unavailable",
             )
+
+        return grant, claim_code
+
+    def issue_authenticated_assignment_claim(self, credential, assignment_id: str):
+        grant, claim_code = self.create_authenticated_assignment_claim(credential, assignment_id)
 
         body = self._html_page(
             "과제 수령 코드",

@@ -1,5 +1,8 @@
 # QR 과제 수령 파일럿 가이드
 
+**2026-09-11 변경:** 신규 과제는 초안으로 등록되므로 검증·공개 전에는 학생 수령 목록에 나타나지 않습니다.
+[과제 운영 절차](course-assignment-management.md)에 따라 `bundle-check` → `bundle-ready`를 먼저 실행하세요.
+
 이 문서는 **교수자 로컬 서버 + 외부 HTTPS reverse proxy + VS Code Extension**으로 20명 이상
 파일럿을 진행하는 기준 절차입니다. GitHub OAuth, GitHub App, Docker와 shell 환경변수는
 사용하지 않습니다. 학생의 제출 코드는 여전히 `pilot-local`에서 실행되므로 합성·사전 검토

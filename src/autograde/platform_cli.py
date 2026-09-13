@@ -347,6 +347,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     bundle_ready.add_argument("assignment_id")
     _add_runner_image_options(bundle_ready)
+    bundle_check = assignment_commands.add_parser("bundle-check", help="test a draft with a trusted full-score solution and a lower-score negative example")
+    bundle_check.add_argument("assignment_id")
+    bundle_check.add_argument("--solution", required=True, type=Path)
+    bundle_check.add_argument("--negative-solution", required=True, type=Path)
+    bundle_check.add_argument("--negative-score", type=float, default=0.0, help="expected negative-example score; must be below max-score (default 0)")
+    _add_runner_image_options(bundle_check)
+    extend = assignment_commands.add_parser("bundle-extend", help="extend the current deadline without replacing the submission identity")
+    extend.add_argument("assignment_id")
+    extend.add_argument("--due-at", required=True)
+    extend.add_argument("--reason", required=True)
+    history = assignment_commands.add_parser("bundle-history", help="show validation and deadline audit history")
+    history.add_argument("assignment_id")
     bundle_hide = assignment_commands.add_parser(
         "bundle-hide", help="hide a direct-download assignment release"
     )
@@ -1024,6 +1036,14 @@ def _dispatch(
             return _add_assignment(args, paths, state, course_key)
         if args.assignment_command == "bundle-add":
             return _add_bundle_assignment(args, paths, state, course_key)
+        if args.assignment_command == "bundle-check":
+            return _check_bundle_assignment(args, paths, state, course_key)
+        if args.assignment_command == "bundle-extend":
+            assignment = state.extend_bundle_deadline(args.assignment_id, course_key=course_key,
+                due_at=args.due_at, reason=args.reason, actor=f"cli:{getpass.getuser()}")
+            return _bundle_assignment_summary(assignment)
+        if args.assignment_command == "bundle-history":
+            return state.bundle_operation_history(args.assignment_id, course_key=course_key)
         if args.assignment_command == "bundle-list":
             assignments = state.list_operator_bundle_assignments(
                 course_key=course_key,
@@ -1039,18 +1059,12 @@ def _dispatch(
                 ],
             }
         if args.assignment_command == "bundle-ready":
-            assignment = state.set_bundle_assignment_availability(
-                args.assignment_id,
-                course_key=course_key,
-                ready=False,
-            )
+            assignment = state.get_bundle_assignment(args.assignment_id)
+            if assignment.course_key != course_key:
+                raise PlatformNotFound("assignment was not found in this course")
             _validate_bundle_assignment(paths, assignment)
             _check_runner_images(args, (assignment.runner_image,))
-            assignment = state.set_bundle_assignment_availability(
-                args.assignment_id,
-                course_key=course_key,
-                ready=True,
-            )
+            assignment = state.publish_validated_bundle_assignment(args.assignment_id, course_key=course_key)
             return _bundle_assignment_summary(assignment)
         if args.assignment_command == "bundle-hide":
             assignment = state.set_bundle_assignment_availability(
@@ -1488,20 +1502,48 @@ def _add_bundle_assignment(
         due_at=args.due_at,
         ready=False,
     )
-    assignment = state.set_bundle_assignment_availability(
-        assignment.assignment_id,
-        course_key=course_key,
-        ready=False,
-    )
-    if not args.not_ready:
-        _validate_bundle_assignment(paths, assignment, store=store)
-        _check_runner_images(args, (assignment.runner_image,))
-        assignment = state.set_bundle_assignment_availability(
-            assignment.assignment_id,
-            course_key=course_key,
-            ready=True,
-        )
+    # Registration is always a draft. Replaying an existing registration must
+    # not silently hide a release that is already public.
     return _bundle_assignment_summary(assignment)
+
+
+def _check_bundle_assignment(args, paths, state, course_key):
+    assignment = state.get_bundle_assignment(args.assignment_id)
+    if assignment.course_key != course_key:
+        raise PlatformNotFound("assignment was not found in this course")
+    if not math.isfinite(args.negative_score) or not 0 <= args.negative_score < assignment.max_score:
+        raise ValueError("negative-score must be finite, nonnegative and below max-score")
+    check_id = state.begin_bundle_release_check(assignment.assignment_id, course_key=course_key)
+    details = {"cases": []}
+    grader = None
+    try:
+        _validate_bundle_assignment(paths, assignment)
+        _check_runner_images(args, (assignment.runner_image,))
+        grader = _new_grader(args, paths, course_key)
+        store = _bundle_store(paths)
+        for label, source, expected in (("solution", args.solution, assignment.max_score),
+                                        ("negative", args.negative_solution, args.negative_score)):
+            artifact = store.create_from_directory(source, kind="submission")
+            workspace = WorkspaceBuilder(paths.workspaces).prepare(
+                new_public_id("validation"), artifact.path, assignment.assessment_path, assignment.data_path,
+                expected_source_sha256=artifact.digest, expected_assessment_sha256=assignment.assessment_digest,
+                expected_data_sha256=assignment.dataset_digest or None,
+            )
+            result = grader.grade(workspace=workspace, runner_image=assignment.runner_image, max_score=assignment.max_score)
+            passed = math.isclose(result.score, expected, rel_tol=0, abs_tol=1e-9) and result.max_score == assignment.max_score
+            details["cases"].append({"case": label, "source_sha256": artifact.digest, "expected_score": expected,
+                                     "score": result.score, "passed": passed})
+            if not passed:
+                raise ValueError(f"{label} test did not receive its expected score")
+        state.finish_bundle_release_check(check_id, passed=True, details=details)
+        return {"assignment_id": assignment.assignment_id, "check_id": check_id, "status": "passed", **details}
+    except BaseException as exc:
+        details["error_type"] = type(exc).__name__
+        state.finish_bundle_release_check(check_id, passed=False, details=details)
+        raise
+    finally:
+        if grader is not None:
+            grader.close()
 
 
 def _bundle_store(
@@ -1571,6 +1613,9 @@ def _validate_bundle_assignment(
     assessment_root = (paths.instructor_inputs / "assessment").resolve(strict=True)
     if not assessment_path.is_relative_to(assessment_root):
         raise WorkspaceError("registered assessment is outside managed storage")
+    entrypoint = assessment_path / "grade.py"
+    if entrypoint.is_symlink() or not entrypoint.is_file():
+        raise WorkspaceError("assessment must contain a regular grade.py entrypoint")
     assessment = builder.digest_instructor_tree(
         assessment_path, label="assessment"
     )

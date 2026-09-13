@@ -302,6 +302,16 @@ class BundleSubmissionWorker:
         self._lock = threading.Lock()
         self._enqueued: set[str] = set()
 
+    @property
+    def healthy(self) -> bool:
+        """Pool liveness only; this does not prove a successful assessment."""
+        with self._lock:
+            return (
+                not self._stopping.is_set()
+                and len(self._threads) == self.worker_count
+                and all(thread.is_alive() for thread in self._threads)
+            )
+
     def start(self) -> None:
         with self._lock:
             if any(thread.is_alive() for thread in self._threads):

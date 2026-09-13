@@ -1,5 +1,8 @@
 # Local CSV 파일럿 실행 가이드
 
+**2026-09-11 변경:** `bundle-add`는 초안만 등록합니다. 아래 다운로드 시험 전에
+`bundle-check`와 `bundle-ready`를 완료하세요. [등록·검증·공개 절차](course-assignment-management.md).
+
 > 이 문서의 교수자 발급 활성화 코드 흐름은 loopback·호환 시험용입니다. 학생이 QR에서
 > 학번과 Autograde 전용 비밀번호를 확인하고 과제를 받는 권장 외부 흐름은
 > [QR 과제 수령 파일럿 가이드](qr-assignment-claim-pilot.md)를 사용하세요.

@@ -1,0 +1,187 @@
+"""Optional cross-language contract checks. .NET 8 SDK must be on PATH."""
+import io
+import json
+import re
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import tarfile
+import xml.etree.ElementTree as ET
+
+import pytest
+
+from autograde.platform_bundle import BundleStore
+from autograde.platform_bundle_worker import BundleSubmissionProcessor
+from autograde.platform_grader import PilotLocalGrader
+from autograde.workspace import WorkspaceBuilder
+from test_course_portal import portal, claim, login, request, cookie, csrf, WEB
+
+ROOT = Path(__file__).resolve().parents[2]
+PROJECT = ROOT / "extensions/visualstudio/Autograde.Checks/Autograde.Checks.csproj"
+
+
+def test_vsix_registration_and_packaging_contract():
+    directory = ROOT / "extensions/visualstudio/Autograde.VisualStudio"
+    manifest = ET.parse(directory / "source.extension.vsixmanifest")
+    ns = {"v": "http://schemas.microsoft.com/developer/vsx-schema/2011"}
+    target = manifest.find("v:Installation/v:InstallationTarget", ns)
+    assert target.attrib == {"Id": "Microsoft.VisualStudio.Community", "Version": "[17.0,)"}
+    assert target.find("v:ProductArchitecture", ns).text == "amd64"
+    assert manifest.find("v:Assets/v:Asset", ns).attrib["Type"] == "Microsoft.VisualStudio.VsPackage"
+    commands = ET.parse(directory / "Commands.vsct")
+    c = {"c": "http://schemas.microsoft.com/VisualStudio/2005-10-18/CommandTable"}
+    guid = commands.find("c:Symbols/c:GuidSymbol[@name='guidPackage']", c).attrib["value"].strip("{}")
+    assert f'Guid("{guid}")' in (directory / "AutogradePackage.cs").read_text()
+    project = ET.parse(directory / "Autograde.VisualStudio.csproj")
+    assert any("Microsoft.VsSDK.targets" in item.attrib.get("Project", "") for item in project.findall("Import"))
+    assert project.find("ItemGroup/VSCTCompile/ResourceName").text == "Menus.ctmenu"
+    assert 'ProvideMenuResource("Menus.ctmenu", 1)' in (directory / "AutogradePackage.cs").read_text()
+
+
+def test_logout_ui_does_not_require_valid_address():
+    """Source contract only; Windows WPF interaction remains a manual test."""
+    source = (ROOT / "extensions/visualstudio/Autograde.VisualStudio/AssignmentControl.cs").read_text()
+    action = source.split('AddButton(panel, "로그아웃 / 자리 비우기"', 1)[1].split('var cancel =', 1)[0]
+    assert "RequireClient()" not in action
+    assert "client.LogoutAsync(ct)" in action
+    assert "finally { ClearScreen();" in action
+
+
+@pytest.fixture(scope="module")
+def dotnet_client():
+    dotnet = shutil.which("dotnet")
+    if not dotnet:
+        pytest.skip("Visual Studio protocol tests require the .NET 8 SDK on PATH")
+    build = subprocess.run([dotnet, "build", str(PROJECT), "--nologo"], capture_output=True, text=True, timeout=180)
+    assert build.returncode == 0, build.stdout + build.stderr
+    return [dotnet, str(PROJECT.parent / "bin/Debug/net8.0/Autograde.Checks.dll")]
+
+
+def run(client, *args):
+    return subprocess.run([*client, *map(str, args)], capture_output=True, text=True, timeout=40)
+
+
+def test_visualstudio_client_self_checks(dotnet_client):
+    result = run(dotnet_client)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "checks passed" in result.stdout
+
+
+def test_csharp_submission_accepted_by_python(dotnet_client, tmp_path):
+    root = tmp_path.resolve() / "source"
+    root.mkdir()
+    (root / "main.cpp").write_text("int main(){return 0;}\n")
+    (root / "한글").mkdir()
+    (root / "한글" / "header.hpp").write_text("// unicode PAX\n")
+    (root / ".vs").mkdir()
+    (root / ".vs" / "secret.txt").write_text("excluded")
+    archive = tmp_path / "submission.tar.gz"
+    result = run(dotnet_client, "pack", root, archive)
+    assert result.returncode == 0, result.stderr
+    artifact = BundleStore(tmp_path / "bundles").ingest(archive, expected_kind="submission")
+    assert artifact.metadata.file_count == 2
+    assert {entry.path for entry in artifact.metadata.files} == {"main.cpp", "한글/header.hpp"}
+
+
+def test_python_starter_accepted_by_csharp(dotnet_client, tmp_path):
+    root = tmp_path / "source"
+    root.mkdir()
+    (root / "main.c").write_text("int main(void){return 0;}\n")
+    (root / "한글").mkdir()
+    (root / "한글" / "설명.txt").write_text("Hello, World!")
+    (root / "empty").mkdir()
+    artifact = BundleStore(tmp_path / "bundles").create_from_directory(root, kind="starter")
+    target = tmp_path.resolve() / "download"
+    result = run(dotnet_client, "extract", artifact.path, target)
+    assert result.returncode == 0, result.stderr
+    assert (target / "한글" / "설명.txt").read_text() == "Hello, World!"
+    assert (target / "empty").is_dir()
+    assert json.loads((target / ".autograde/assignment.json").read_text())["assignmentId"] == "asn_test"
+    # A repeated download must never replace the student's work.
+    (target / "main.c").write_text("student edit")
+    assert run(dotnet_client, "extract", artifact.path, target).returncode != 0
+    assert (target / "main.c").read_text() == "student edit"
+
+
+@pytest.mark.parametrize("attack", ["traversal", "symlink", "hardlink", "collision", "corrupt", "manifest", "reserved", "parent_collision"])
+def test_hostile_starter_never_written(dotnet_client, tmp_path, attack):
+    root = tmp_path / "source"
+    root.mkdir()
+    (root / "main.c").write_text("int main(void){return 0;}\n")
+    artifact = BundleStore(tmp_path / "bundles").create_from_directory(root, kind="starter")
+    archive = tmp_path / "malicious.tar.gz"
+    with tarfile.open(artifact.path, "r:gz") as good, tarfile.open(archive, "w:gz", format=tarfile.PAX_FORMAT) as bad:
+        for entry in good:
+            content = good.extractfile(entry).read() if entry.isfile() else None
+            if attack == "manifest" and entry.name == "main.c":
+                content = b"tampered"
+                entry.size = len(content)
+            bad.addfile(entry, io.BytesIO(content) if content is not None else None)
+        extra = tarfile.TarInfo({"traversal": "../outside.c", "reserved": "CON.txt", "collision": "MAIN.c", "parent_collision": "main.c/nested.c"}.get(attack, "evil.c"))
+        if attack in ("symlink", "hardlink"):
+            extra.type = tarfile.SYMTYPE if attack == "symlink" else tarfile.LNKTYPE
+            extra.linkname = "../outside.c"
+        if attack != "manifest":
+            bad.addfile(extra, io.BytesIO(b""))
+    if attack == "corrupt":
+        archive.write_bytes(archive.read_bytes()[:20])
+    target = tmp_path.resolve() / "download"
+    assert run(dotnet_client, "extract", archive, target).returncode != 0
+    assert not target.exists()
+    assert not (tmp_path / "outside.c").exists()
+
+
+def test_real_portal_csharp_login_download_submit_grade_logout(dotnet_client, portal, tmp_path):
+    web, api, services, _, store = portal
+    example = ROOT / "examples/hello-world"
+    probe = subprocess.run([sys.executable, str(example / "assessment/grade.py"),
+        "--submission", str(example / "c/solution"), "--data", str(example / "c/data")], capture_output=True, timeout=30)
+    if probe.returncode == 78:
+        pytest.skip("C17 toolchain is unavailable")
+    assert probe.returncode == 0
+    starter = store.create_from_directory(example / "c/windows/starter", kind="starter")
+    builder = WorkspaceBuilder(tmp_path / "digests")
+    services["come3105"].state.register_bundle_assignment_release(
+        assignment_id="asn_hello_c", course_key="come3105", assignment_key="hello-c", release_id="c-v1", title="Hello World C17",
+        starter_path=str(starter.path), starter_digest=starter.digest, starter_size_bytes=starter.compressed_bytes,
+        assessment_path=str(example / "assessment"), assessment_digest=builder.digest_instructor_tree(example / "assessment").sha256,
+        data_path=str(example / "c/data"), dataset_digest=builder.digest_instructor_tree(example / "c/data").sha256,
+        runner_image="pilot-local:v1", rubric_version="c-v1", max_score=10, result_policy="immediate", ready=True)
+    status, headers, body = login(web, "come3105")
+    assert status == 200
+    status, _, body = request(web, "/courses/come3105/claims", method="POST", cookie=cookie(headers), origin=WEB,
+        data={"csrf": csrf(body), "assignment_id": "asn_hello_c"})
+    assert status == 200
+    code = re.search(rb"<code>(AK1-[A-Z0-9-]+)</code>", body)[1].decode()
+    setup = {"url": f"http://127.0.0.1:{api.server_address[1]}", "claim": code,
+             "target": str(tmp_path.resolve() / "download")}
+    process = subprocess.Popen([*dotnet_client, "live"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE, text=True)
+    try:
+        process.stdin.write(json.dumps(setup) + "\n")
+        process.stdin.flush()
+        # Bound the complete interaction, including a client that never produces its receipt.
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            receipt_future = pool.submit(process.stdout.readline)
+            try:
+                receipt_line = receipt_future.result(timeout=40)
+            except TimeoutError:
+                process.kill()
+                raise
+        if not receipt_line:
+            _, stderr = process.communicate(timeout=5)
+            pytest.fail("C# client did not return a receipt: " + stderr)
+        receipt = json.loads(receipt_line)
+        with PilotLocalGrader() as grader:
+            processor = BundleSubmissionProcessor(state=services["come3105"].state, course_key="come3105",
+                workspace_builder=WorkspaceBuilder(tmp_path / "graded"), grader=grader)
+            processor.process(receipt["submission_id"])
+        stdout, stderr = process.communicate("graded\n", timeout=40)
+        assert process.returncode == 0, stderr
+        assert "LIVE PASS" in stdout
+    finally:
+        if process.poll() is None:
+            process.kill()
+        process.wait(timeout=5)

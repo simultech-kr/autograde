@@ -158,6 +158,19 @@ export async function extractStarterBundle(
   archive: Uint8Array,
   targetDirectory: string,
 ): Promise<ExtractedStarter> {
+  return extractBundle(archive, targetDirectory, "starter");
+}
+
+export async function extractSubmissionBundle(
+  archive: Uint8Array,
+  targetDirectory: string,
+): Promise<ExtractedStarter> {
+  return extractBundle(archive, targetDirectory, "submission");
+}
+
+async function extractBundle(
+  archive: Uint8Array, targetDirectory: string, expectedKind: "starter" | "submission",
+): Promise<ExtractedStarter> {
   if (archive.byteLength === 0 || archive.byteLength > MAX_STARTER_ARCHIVE_BYTES) {
     throw new Error(`starter archive는 1 byte 이상 ${formatMiB(MAX_STARTER_ARCHIVE_BYTES)} 이하여야 합니다.`);
   }
@@ -179,7 +192,7 @@ export async function extractStarterBundle(
     throw new Error("starter archive가 올바른 gzip 파일이 아닙니다.");
   }
 
-  const parsed = await parseTar(tarBytes);
+  const parsed = await parseTar(tarBytes, expectedKind);
   const temp = path.join(
     path.dirname(target),
     `.${path.basename(target)}.autograde-partial-${randomUUID()}`,
@@ -371,7 +384,7 @@ async function collectWorkspaceFiles(
   }
 }
 
-async function parseTar(tarBytes: Buffer): Promise<ParsedArchive> {
+async function parseTar(tarBytes: Buffer, expectedKind: "starter" | "submission"): Promise<ParsedArchive> {
   const extract = tar.extract();
   const claims = new Map<string, ClaimedPath>();
   const entries: ParsedEntry[] = [];
@@ -464,7 +477,7 @@ async function parseTar(tarBytes: Buffer): Promise<ParsedArchive> {
   if (!manifest) {
     throw new Error(`안전하지 않거나 손상된 starter archive입니다: ${BUNDLE_MANIFEST_NAME}이 없습니다.`);
   }
-  const expectedManifest = createManifest("starter", directories.sort(compareUtf8), entries.sort(
+  const expectedManifest = createManifest(expectedKind, directories.sort(compareUtf8), entries.sort(
     (left, right) => compareUtf8(left.relativePath, right.relativePath),
   ));
   if (!manifest.equals(expectedManifest)) {

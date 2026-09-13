@@ -1,5 +1,7 @@
 # Design
 
+- [독립 웹 인증 MVP 설계](../docs/architecture/independent-web-auth-mvp.md): `come3105`,
+  `come2201` 교과목 선택, 학생별 비밀번호 확인과 과제 수령 코드 발급의 구현 설계
 - `adr/0001-pyjevsim-scheduler.md`: PyJevSim을 workflow clock으로 사용하는 결정
 - `adr/0002-fetch-exact-sha.md`: pull 대신 bare fetch와 exact-SHA snapshot을 사용하는 결정
 - `adr/0003-wsl-extension-device-authorization.md`: WSL workspace Extension, OAuth-free

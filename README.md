@@ -3,7 +3,39 @@
 교수자가 등록한 실습을 학생이 VS Code Extension으로 내려받고, 제출한 결과를 로컬
 서버에서 채점해 다시 보여주는 파일럿 MVP입니다. 기본 흐름에는 GitHub 계정, GitHub OAuth,
 GitHub App, container registry가 필요하지 않습니다. Linux와 macOS는 native workspace,
-Windows는 WSL2 workspace를 사용합니다.
+Windows에서 Linux 실습을 할 때는 WSL2 workspace를 사용합니다.
+
+실습 기본 언어는 **C17·C++17**이며 Java/JDK는 필요하지 않습니다. Windows 시스템 프로그래밍은
+VS2022 Community, Linux 시스템 프로그래밍은 VS Code/Linux·WSL2를 목표로 합니다.
+VS2022/VS2026용 [별도 Visual Studio 확장](extensions/visualstudio/README.md)의 소스와 빌드 절차를
+제공합니다. C# 컴파일·서버 통신은 검증했으며 Windows VSIX 패키징·설치 시험은 남아 있습니다.
+Windows 원격 채점 작업자는 후속 구현입니다.
+
+VS Code 0.4.0 / Visual Studio 0.2.0 소스에는 [제출 기록·이전 코드 복원](docs/operations/submission-history-mvp.md)이
+추가되었습니다. 서버 접수본을 학생별로 조회하고 현재 작업을 덮어쓰지 않는 새 폴더에 복원합니다.
+
+## 현재 권장 실행 흐름
+
+학생 웹·교수자 관리 화면을 구분하고, VS Code **0.4.1**부터 `내가 수락한 실습`에는 현재 수령
+코드로 수락한 과제만 표시합니다. [화면별 범위와 업데이트 안내](docs/operations/student-instructor-views.md).
+
+일반 학생 제출을 위한 [배포 준비 1차](docs/operations/student-deployment-preparation.md)를 추가했습니다.
+명시적인 `--isolated` 모드로 HTTPS·OCI staging을 실행하고 `/readyz`로 DB·저장소·작업자 상태를 확인합니다.
+기존 파일럿 기본값은 유지하며 **실제 격리·성적 무결성·인증 검증 전 일반 학생 공개는 아직 No-Go**입니다.
+
+과제 등록은 이제 **초안 → 모범답안·오답 검증 → 명시적 공개** 순서입니다.
+기존 과제의 제출 ID를 유지하는 마감 연장도 제공합니다.
+[업데이트·교수자 명령 안내](docs/operations/course-assignment-management.md)를 먼저 확인하세요.
+
+**학생 웹 20010 → 교과목 선택 → 학번·6자리 전용 비밀번호 → 수령 코드 발급 →
+VS Code API 20000 → 다운로드·제출·결과 확인**입니다. 교과목은 `come3105`, `come2201`입니다.
+[독립 웹 파일럿 실행 안내](docs/operations/independent-web-pilot.md)에 설치, 명단·과제 등록,
+두 포트 동시 실행과 외부 HTTPS 설정을 정리했습니다. VS Code 확장은 0.3.0 이상을 사용합니다.
+아래 기존 단일 교과목 실행 절차와 활성화 로그인은 호환 모드 참고용입니다.
+
+첫 서버 실행은 설정 CSV 옆의 `student_roster.csv`에서 명단을 한 번 초기화합니다.
+[Hello World 과제](examples/hello-world/README.md)로 Linux/WSL2 제출·채점과
+Windows/VS2022·VS2026의 로컬 빌드를 시험할 수 있습니다. Windows 원격 채점은 후속 구현입니다.
 
 이번 파일럿은 운영 설정용 shell 환경변수를 선언하지 않습니다. 운영자가 관리하는 local CSV
 두 개를 입력으로 사용합니다.
@@ -80,8 +112,8 @@ python3 -m venv .venv
 `data_root`는 config 파일 디렉터리의 전용 하위 경로여야 하므로 `.data`는
 `pilot/.data`가 됩니다. 전체 절차는
 [local CSV 파일럿 실행 가이드](docs/operations/direct-bundle-mvp.md)에 있습니다.
-Java와 C++로 같은 설계 개념을 출제하고 채점 결과까지 확인하는 예제는
-[옵저버 패턴 과제 파일럿](docs/operations/observer-pattern-pilot.md)을 따릅니다.
+[C/C++ Hello World](examples/hello-world/README.md)로 시작하고, 설계 패턴 실습은
+[C++ 옵저버 과제](examples/observer-cpp/README.md)를 사용합니다.
 같은 신뢰 LAN의 다른 컴퓨터에서 HTTP로 짧게 기능을 시험할 때만
 [신뢰 LAN 외부 접속 파일럿](docs/operations/trusted-lan-pilot.md)의 별도 config와 위험 수락
 절차를 따릅니다.
