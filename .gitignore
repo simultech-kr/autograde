@@ -53,3 +53,5 @@ submissions/
 .data-*/
 !examples/submissions/
 !examples/submissions/**
+
+.data-https
