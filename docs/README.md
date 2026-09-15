@@ -1,5 +1,9 @@
 # Documentation
 
+- [교수자 웹 관리 MVP 사용 안내](operations/instructor-web-mvp.md): 설정 활성화 → 수업·학생 등록 → 6단계 과제 등록·검증·공개. 2026-09-16 구현, 운영 배포는 별도.
+
+- [교수자 웹 관리 시험 기록](testing/instructor-web-mvp.md): HTTP·실제 컴파일·25명 동시 제출·마이그레이션과 미실시 환경 구분.
+
 - [학생 전체 초기화 실제 실행 절차](operations/course-student-reset.md): 서버 중지 → 영향 확인 → 자동 백업·come2201 초기화 → CLI 재등록. 과제·다른 수업·파일 보존.
 
 - [수업별 학생 초기화·재등록 설계](architecture/course-student-reset-mvp.md): 초기화 위험 작업·백업·영향 확인·재등록 UX. 웹 기능은 설계 단계, 별도 오프라인 도구 제공.
@@ -8,9 +12,9 @@
 
 - [과제 제출·검증 단계별 UX](architecture/submission-validation-ux.md): 학생 제출 5단계, 접수/채점 구분·오류 복구·공통 화면 계약. 교수자 화면은 별도 6단계 설계 참조.
 
-- [수업·학생 등록 웹 MVP 설계](architecture/course-student-web-mvp.md): MVC·공통 디자인, 학기/분반별 수업, 학생 개별/CSV 등록, 비밀번호 초기화·수강 관리와 기존 데이터 보존. 설계 단계.
+- [수업·학생 등록 웹 MVP 설계](architecture/course-student-web-mvp.md): MVC·공통 디자인, 학기/분반별 수업, 학생 개별/CSV 등록, 비밀번호 초기화·수강 관리와 기존 데이터 보존. 구현 범위는 위 사용 안내 참조.
 
-- [교수자 웹 과제 등록 MVP 계획](architecture/instructor-assignment-web-mvp.md): 실제 HTTPS 서버에서 예제/직접 과제 등록·검증·공개, 업로드 보안, 구현 순서와 인수 기준. 계획 단계.
+- [교수자 웹 과제 등록 MVP 계획](architecture/instructor-assignment-web-mvp.md): 예제/직접 과제 등록·검증·공개, 업로드 보안과 운영 인수 기준. 로컬 구현·시험과 실제 HTTPS 운영 승인은 구분.
 
 - [옵저버·데코레이터 실습 문제](../examples/pattern-workshops/README.md): C++17 문제 → 학생 코드 작성 → 실행 검사 → 프롬프트 검토.
 

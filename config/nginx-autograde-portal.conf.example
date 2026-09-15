@@ -20,6 +20,28 @@ server {
     # repeat those directives here too (nginx add_header inheritance rules).
     proxy_hide_header Referrer-Policy;
     add_header Referrer-Policy "same-origin" always;
+    # ZIP body limits apply only to authenticated instructor upload endpoints.
+    location ~ ^/courses/[a-z0-9_-]+/instructor/drafts/[A-Za-z0-9_-]+/uploads/(starter|solution|negative)$ {
+        client_max_body_size 6m;
+        # Send headers to the application's auth gate before buffering uploads.
+        proxy_request_buffering off;
+        limit_req zone=portal_web burst=20 nodelay;
+        proxy_pass http://127.0.0.1:18081;
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Forwarded-Proto https;
+        access_log off;
+        proxy_read_timeout 30s;
+    }
+    location ~ ^/courses/[a-z0-9_-]+/instructor/students/import/preview$ {
+        client_max_body_size 1100k;
+        proxy_request_buffering off;
+        limit_req zone=portal_web burst=20 nodelay;
+        proxy_pass http://127.0.0.1:18081;
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Forwarded-Proto https;
+        access_log off;
+        proxy_read_timeout 30s;
+    }
     location / {
         limit_req zone=portal_web burst=100 nodelay;
         proxy_pass http://127.0.0.1:18081;

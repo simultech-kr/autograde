@@ -356,7 +356,7 @@ def test_repository_example_assessment_scores_a_correct_submission(tmp_path: Pat
     assert result.diagnostics == ()
 
 
-def test_four_concurrent_pilot_grades_are_thread_safe_and_cleaned(tmp_path: Path) -> None:
+def test_four_concurrent_pilot_grades_are_thread_safe_and_cleaned(tmp_path: Path, monkeypatch) -> None:
     source = r'''
 import json, time
 time.sleep(0.15)
@@ -367,7 +367,11 @@ print(json.dumps({"score": 1, "max_score": 1}))
         for index in range(4)
     ]
     grader = PilotLocalGrader(limits=_limits())
-    temp_root = Path(tempfile.gettempdir()).resolve()
+    # Other pytest/validation processes may legitimately create pilot folders
+    # concurrently. Measure only this test's runtimes, not the host-wide /tmp.
+    temp_root = tmp_path / "isolated-runtime-temp"
+    temp_root.mkdir(mode=0o700)
+    monkeypatch.setattr(tempfile, "tempdir", str(temp_root))
     before = {path.resolve() for path in temp_root.glob("autograde-pilot-*")}
 
     with ThreadPoolExecutor(max_workers=4) as pool:

@@ -9,8 +9,7 @@ import re
 import stat
 
 from .platform_auth import hash_student_password, validate_student_password, verify_student_password
-from .platform_portal import COURSES
-from .platform_state import CourseRosterImportEntry, StudentIdentityKind
+from .platform_state import CourseRosterImportEntry, StudentIdentityKind, utc_iso
 
 
 class RosterBootstrapError(ValueError):
@@ -56,14 +55,16 @@ def initialize_student_roster(state, path: Path):
     parsed = []
     seen = set()
     passwords = set()
+    from .course_admin import CourseAdminService
+    registered = {course["course_key"] for course in CourseAdminService(state).list_courses()}
     for line, row in enumerate(_read_rows(path), start=2):
         def fail(message):
             raise RosterBootstrapError(f"student_roster.csv {line}행: {message}")
         if None in row or any(value is None for value in row.values()):
             fail("열 개수가 맞지 않습니다.")
         course, student = row["course_key"].strip(), row["student_key"].strip()
-        if course not in COURSES:
-            fail("교과목은 come3105 또는 come2201이어야 합니다.")
+        if course not in registered:
+            fail("교과목이 등록되어 있지 않습니다. 교과목 코드를 확인하세요.")
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", student):
             fail("student_key는 영문·숫자로 시작하며 영문·숫자·점·밑줄·하이픈만 허용합니다.")
         if student.startswith("REPLACE_STUDENT_"):
@@ -105,3 +106,14 @@ def initialize_student_roster(state, path: Path):
     except (ValueError, RuntimeError):
         raise RosterBootstrapError("기존 학생 정보와 CSV가 충돌합니다. 명단 전체를 적용하지 않았습니다.") from None
     return {"status": "initialized" if imported else "already_initialized", "enrollment_count": len(parsed)}
+
+
+def initialize_web_roster(state):
+    """Opt-in only: never silently ignore an invalid CSV or change an old mark."""
+    with state._write() as connection:
+        if connection.execute("SELECT 1 FROM platform_roster_bootstrap").fetchone():
+            return {"status": "already_initialized"}
+        if connection.execute("SELECT 1 FROM platform_enrollments LIMIT 1").fetchone():
+            raise RosterBootstrapError("웹 초기화는 학생이 없는 새 설치에만 사용할 수 있습니다.")
+        connection.execute("INSERT INTO platform_roster_bootstrap VALUES (1,0,?)", (utc_iso(),))
+    return {"status": "web_initialized", "enrollment_count": 0}

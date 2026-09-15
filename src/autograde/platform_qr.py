@@ -8,6 +8,7 @@ display a QR code without a remote request or a writable temporary file.
 from __future__ import annotations
 
 from urllib.parse import urlsplit
+import re
 
 import segno
 
@@ -38,3 +39,14 @@ def assignment_claim_qr_svg(claim_url: str) -> str:
         light="#ffffff",
         omitsize=False,
     )
+
+
+def course_login_qr_svg(url: str) -> str:
+    """Encode only the public login address, never a student code or credential."""
+    parsed = urlsplit(url)
+    if (parsed.scheme not in {"http", "https"} or not parsed.netloc
+            or parsed.username is not None or parsed.password is not None
+            or parsed.query or parsed.fragment
+            or not re.fullmatch(r"/courses/[A-Za-z0-9][A-Za-z0-9_-]{0,127}/login", parsed.path)):
+        raise ValueError("course QR requires a secret-free course login URL")
+    return segno.make_qr(url, error="m").svg_inline(scale=4, border=4, dark="#111827", light="#ffffff")

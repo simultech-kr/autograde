@@ -9,6 +9,7 @@
 - [수업·학생 등록 웹 MVP 설계](../docs/architecture/course-student-web-mvp.md): MVC + Service, 공통 디자인 시스템, 동적 수업 레지스트리와 학생·수강 정보 분리.
 
 - [교수자 웹 과제 등록 MVP 계획](../docs/architecture/instructor-assignment-web-mvp.md): CLI 없는 교수자 등록 흐름, 공통 서비스·비동기 검증·안전한 업로드와 운영 배포 계획.
+- [구현된 교수자 웹 관리 사용 안내](../docs/operations/instructor-web-mvp.md): 수업·학생 등록, 과제 등록 6단계, 설정 활성화와 파일럿 제약.
 
 - [독립 웹 인증 MVP 설계](../docs/architecture/independent-web-auth-mvp.md): `come3105`,
   `come2201` 교과목 선택, 학생별 비밀번호 확인과 과제 수령 코드 발급의 구현 설계

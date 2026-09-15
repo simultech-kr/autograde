@@ -29,7 +29,7 @@ def test_upgrade_from_v9_preserves_public_release_and_receipt(tmp_path, monkeypa
         receipt = legacy.store.get_bundle_receipt(submission.request.submission_id)
         assert legacy.store.schema_version() == 9
     upgraded = PlatformStateStore(database)
-    assert upgraded.schema_version() == 10
+    assert upgraded.schema_version() == 11
     assert upgraded.get_bundle_assignment(assignment.assignment_id) == assignment
     assert upgraded.get_bundle_receipt(receipt.submission_id) == receipt
     assert upgraded.bundle_operation_history(assignment.assignment_id, course_key=COURSE)["checks"] == []

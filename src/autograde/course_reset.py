@@ -70,8 +70,17 @@ def _digest(connection, excluded=None):
 
 
 def _preflight(connection, course):
-    if connection.execute("SELECT MAX(version) FROM platform_schema_migrations").fetchone()[0] != 10:
-        raise ValueError("reset supports schema 10 only; do not modify the database manually")
+    version = connection.execute("SELECT MAX(version) FROM platform_schema_migrations").fetchone()[0]
+    if version not in (10, 11):
+        raise ValueError("reset supports schema 10/11 only; do not modify the database manually")
+    if version == 11:
+        if not connection.execute("SELECT 1 FROM admin_courses WHERE course_key=?", (course,)).fetchone():
+            raise ValueError("course must already be registered")
+        if connection.execute("SELECT 1 FROM instructor_assignment_jobs WHERE course_key=? "
+                              "AND status IN ('queued','running') LIMIT 1", (course,)).fetchone():
+            raise ValueError("unfinished assignment validation exists; resolve it before reset")
+    elif course not in COURSES:
+        raise ValueError("schema 10 reset supports the two legacy pilot courses only")
     if connection.execute("PRAGMA integrity_check").fetchall() != [("ok",)]:
         raise ValueError("database integrity check failed")
     if connection.execute("PRAGMA foreign_key_check").fetchone():
@@ -93,9 +102,10 @@ def _preflight(connection, course):
     guard = connection.execute("SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = ?", (GUARD,)).fetchone()
     if not guard:
         raise ValueError("expected acceptance immutability guard is missing")
+    definitions = TARGETS + ((('admin_roster_previews', 'course_key = ?'),) if version == 11 else ())
     targets = {table: {row[0] for row in connection.execute(
         f"SELECT rowid FROM {_quote(table)} WHERE {where}", (course,)
-    )} for table, where in TARGETS}
+    )} for table, where in definitions}
     return targets, guard[0]
 
 
@@ -136,8 +146,6 @@ def _backup(paths, connection):
 
 
 def reset_course(paths, course, *, apply=False, expected_state=None, confirm_course=None):
-    if course not in COURSES:
-        raise ValueError("only existing pilot courses come2201/come3105 are supported")
     if apply and (confirm_course != course or not expected_state):
         raise ValueError("apply requires --confirm-course and --expected-state from the preview")
     if paths.root.is_symlink() or not paths.root.is_dir():
@@ -146,10 +154,15 @@ def reset_course(paths, course, *, apply=False, expected_state=None, confirm_cou
     if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
         raise ValueError("existing regular database required")
     with ExitStack() as stack:
+        stack.enter_context(_exclusive_course_service_lock(paths, "portal-runtime"))
         # Both portal listeners/worker pools must be stopped, not only target web.
         courses = set(COURSES)
         with closing(sqlite3.connect(paths.database.as_uri() + "?mode=ro", uri=True)) as probe:
             courses.update(row[0] for row in probe.execute("SELECT DISTINCT course_key FROM platform_enrollments"))
+            if probe.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='admin_courses'").fetchone():
+                courses.update(row[0] for row in probe.execute("SELECT course_key FROM admin_courses"))
+        if course not in courses:
+            raise ValueError("course must already be registered")
         for item in sorted(courses):
             stack.enter_context(_exclusive_course_service_lock(paths, item))
         connection = stack.enter_context(closing(sqlite3.connect(
@@ -179,7 +192,7 @@ def reset_course(paths, course, *, apply=False, expected_state=None, confirm_cou
             # Temporarily lift only this guard inside the same transaction and
             # restore its exact SQL before commit. Rollback restores it on error.
             connection.execute(f"DROP TRIGGER {_quote(GUARD)}")
-            for table, _ in TARGETS:
+            for table in targets:
                 connection.executemany(f"DELETE FROM {_quote(table)} WHERE rowid = ?", ((key,) for key in targets[table]))
             connection.execute(guard)
             if connection.execute("PRAGMA foreign_key_check").fetchone() or _digest(connection) != protected:
@@ -194,7 +207,7 @@ def reset_course(paths, course, *, apply=False, expected_state=None, confirm_cou
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Offline course student reset; default is preview, no deletion")
     parser.add_argument("--pilot-config", required=True)
-    parser.add_argument("--course-key", required=True, choices=COURSES)
+    parser.add_argument("--course-key", required=True)
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--expected-state")
     parser.add_argument("--confirm-course")
