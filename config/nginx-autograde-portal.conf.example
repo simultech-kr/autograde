@@ -13,6 +13,13 @@ server {
     client_max_body_size 64k;
     limit_req_status 429;
     limit_conn portal_connections 100;
+    # Keep the real Origin on same-origin login form POSTs. The backend's
+    # no-referrer policy can make browsers send Origin: null and fail CSRF checks.
+    # Replace only this response header; do not rewrite the request's Origin.
+    # If adding this block to a site with parent-level add_header directives,
+    # repeat those directives here too (nginx add_header inheritance rules).
+    proxy_hide_header Referrer-Policy;
+    add_header Referrer-Policy "same-origin" always;
     location / {
         limit_req zone=portal_web burst=100 nodelay;
         proxy_pass http://127.0.0.1:18081;

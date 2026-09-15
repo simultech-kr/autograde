@@ -18,7 +18,7 @@ namespace Autograde.VisualStudio
 {
     public sealed class AssignmentControl : UserControl, IDisposable
     {
-        readonly TextBox address = new TextBox { Text = "http://127.0.0.1:20000" };
+        readonly TextBox address = new TextBox { Text = "https://ai.cbchoi.info:20000" };
         readonly PasswordBox claim = new PasswordBox { MaxLength = 256 };
         readonly ListBox assignments = new ListBox { MinHeight = 85, MaxHeight = 180, DisplayMemberPath = "Label" };
         readonly ListBox history = new ListBox { MinHeight = 60, MaxHeight = 180, DisplayMemberPath = "Label" };

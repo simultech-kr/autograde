@@ -48,6 +48,32 @@ def test_logout_ui_does_not_require_valid_address():
     assert "finally { ClearScreen();" in action
 
 
+def test_vsix_explicitly_includes_json_dependency():
+    """VSSDK's default suppression list includes Newtonsoft.Json.dll."""
+    directory = ROOT / "extensions/visualstudio"
+    extension = ET.parse(directory / "Autograde.VisualStudio/Autograde.VisualStudio.csproj")
+    core = ET.parse(directory / "Autograde.Core/Autograde.Core.csproj")
+    dependencies = extension.findall("ItemGroup/PackageReference[@Include='Newtonsoft.Json']")
+    assert len(dependencies) == 1
+    dependency = dependencies[0]
+    assert dependency.attrib["GeneratePathProperty"] == "true"
+    assert "ForceIncludeInVSIX" not in dependency.attrib
+    assert dependency.attrib["Version"] == core.find(
+        "ItemGroup/PackageReference[@Include='Newtonsoft.Json']"
+    ).attrib["Version"]
+    assert extension.find("PropertyGroup/CopyLocalLockFileAssemblies").text == "true"
+    content = extension.find(
+        "ItemGroup/Content[@Include='$(PkgNewtonsoft_Json)/lib/net45/Newtonsoft.Json.dll']"
+    )
+    assert content is not None
+    assert content.find("Link").text == "Newtonsoft.Json.dll"
+    assert content.find("IncludeInVSIX").text == "true"
+    # Keep the final ZIP inspection: compiling alone cannot prove packaging worked.
+    build = (directory / "build.ps1").read_text()
+    assert "'Newtonsoft.Json.dll'" in build
+    assert 'throw "VSIX dependency missing: $required"' in build
+
+
 @pytest.fixture(scope="module")
 def dotnet_client():
     dotnet = shutil.which("dotnet")

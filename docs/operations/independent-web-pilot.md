@@ -135,6 +135,23 @@ cp pilot/portal.https.example.csv pilot/portal.https.local
 TCP 20010·20000을 허용하고, 내부 18080·18081은 공개하지 않는다. 학생에게 두 주소의 용도를
 구분해서 안내한다. 두 `/healthz`가 정상 응답하는지 확인한다.
 
+학생 웹 20010용 Nginx 예제는 서버의 `Referrer-Policy: no-referrer`를 숨기고
+`Referrer-Policy: same-origin` 하나로 교체한다. `no-referrer`는 브라우저의 로그인 폼 POST에서
+`Origin: null`을 만들 수 있어, URL이 일치해도 “접속 주소를 확인하고 다시 시도하세요.”가
+발생할 수 있다. API 20000의 정책은 변경하지 않는다. 요청의 `Origin`을 강제로 바꾸거나
+서버의 Origin/CSRF 검사를 비활성화하지 않는다. 기존 Nginx 설정에 상위 `add_header`가
+있다면 새 `server` 블록에서도 필요한 보안 헤더를 유지해야 한다.
+
+예제를 운영 Nginx에 반영한 뒤 `nginx -t`를 통과하면 reload하고, 다음 응답에
+`Referrer-Policy: same-origin`이 한 번만 나오는지 확인한다. 도메인은 실제 값으로 바꾼다.
+
+```bash
+curl -sS -D - -o /dev/null https://grade.example.edu:20010/courses/come2201
+```
+
+기존 로그인 탭은 닫고 새 페이지를 열어 다시 인증한다. 저장소 예제 수정만으로 운영 Nginx가
+변경되지는 않는다.
+
 웹 쿠키와 CSRF 검증은 20010 origin을 기준으로 한다. 코드는 VS Code가 직접 20000 API로
 전송하므로 웹에서 API로 CORS를 열 필요가 없다. 쿠키는 포트로 격리되지 않으므로 전용 이름과
 경로를 사용하며 API listener는 웹 쿠키를 인증에 사용하지 않는다.

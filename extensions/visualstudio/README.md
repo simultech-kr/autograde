@@ -50,6 +50,21 @@ VSIX에는 `Autograde.VisualStudio.dll`, 등록용 `.pkgdef`, `Autograde.Core.dl
 포함되어야 합니다. 스크립트가 출력하는 SHA-256으로 전달 파일이 같은지 확인할 수 있습니다.
 `AutogradeCompileOnly=true` 빌드는 컴파일 점검 전용이며 **설치 가능한 확장이 아닙니다**.
 
+### `VSIX dependency missing: Newtonsoft.Json.dll` 오류
+
+VSSDK는 `Newtonsoft.Json.dll`을 기본 VSIX 제외 목록에 넣습니다. 따라서 DLL이 빌드 폴더에
+있어도 설치 파일에서 누락될 수 있습니다. `ForceIncludeInVSIX="true"`만으로 해결되지 않는
+환경에서는 자동 참조 포함에 의존하지 않고 복원된 NuGet DLL을 명시적인 VSIX Content로 넣습니다.
+확장 프로젝트에는 Core와 같은 버전의 `PackageReference`를 **하나만** 두고
+`GeneratePathProperty="true"`를 지정합니다. 이어서 `$(PkgNewtonsoft_Json)/lib/net45/Newtonsoft.Json.dll`을
+`Content`로 포함하고 `Link=Newtonsoft.Json.dll`, `IncludeInVSIX=true`로 설정합니다.
+net45 어셈블리는 이 확장의 net472 대상과 호환됩니다. 이전 `ForceIncludeInVSIX` 항목은
+중복 포함되지 않도록 교체하며, 사용자 PC의 절대 NuGet 경로나 임의 DLL 다운로드는 사용하지 않습니다.
+수정된 `Autograde.VisualStudio.csproj`를 Windows 체크아웃에 반영한 뒤 `./build.ps1`을 다시
+실행하세요. 스크립트가 Rebuild와 최종 ZIP 내용 검사를 수행합니다. `build.ps1`의 누락 검사를
+삭제하거나 Visual Studio 설치 폴더에서 임의 버전의 DLL을 복사하지 마세요.
+이 변경의 실제 Windows VSIX 생성·설치 확인은 별도로 필요합니다.
+
 ## 2. 설치와 학생 사용
 
 1. VS2022/VS2026을 모두 종료합니다. 위 **Visual Studio용** VSIX를 실행해 대상 IDE를 선택합니다.

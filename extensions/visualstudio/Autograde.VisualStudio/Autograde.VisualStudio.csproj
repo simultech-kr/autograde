@@ -23,6 +23,13 @@
     <PackageReference Include="Microsoft.VisualStudio.SDK" Version="17.0.32112.339" ExcludeAssets="runtime" />
     <PackageReference Include="Microsoft.VSSDK.BuildTools" Version="17.14.2142" PrivateAssets="all" />
     <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" GeneratePathProperty="true" />
+    <!-- Include the restored net472-compatible DLL as content, independently of
+         VSSDK's copy-local reference suppression and ForceIncludeInVSIX support. -->
+    <Content Include="$(PkgNewtonsoft_Json)/lib/net45/Newtonsoft.Json.dll">
+      <Link>Newtonsoft.Json.dll</Link>
+      <IncludeInVSIX>true</IncludeInVSIX>
+    </Content>
     <ProjectReference Include="../Autograde.Core/Autograde.Core.csproj" />
     <VSCTCompile Include="Commands.vsct"><ResourceName>Menus.ctmenu</ResourceName></VSCTCompile>
     <None Update="source.extension.vsixmanifest"><SubType>Designer</SubType></None>
