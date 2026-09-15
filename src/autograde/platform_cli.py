@@ -1444,106 +1444,16 @@ def _add_assignment(
     }
 
 
-def _add_bundle_assignment(
-    args: argparse.Namespace,
-    paths: AppPaths,
-    state: PlatformStateStore,
-    course_key: str,
-) -> Mapping[str, Any]:
-    """Create immutable delivery/input artifacts, then register one release."""
-
-    runner_reference = _assignment_runner_reference(args)
-    store = _bundle_store(paths)
-    starter = store.create_from_directory(args.starter, kind="starter")
-    assessment_artifact = store.create_from_directory(
-        args.assessment, kind="assessment"
-    )
-    builder = WorkspaceBuilder(paths.workspaces)
-    expected_assessment = builder.digest_instructor_tree(
-        args.assessment, label="assessment"
-    )
-    assessment = _materialize_instructor_bundle(
-        paths,
-        store,
-        assessment_artifact.archive_sha256,
-        kind="assessment",
-        expected_tree_digest=expected_assessment.sha256,
-    )
-    data = None
-    if args.data is not None:
-        data_artifact = store.create_from_directory(args.data, kind="data")
-        expected_data = builder.digest_instructor_tree(args.data, label="data")
-        data = _materialize_instructor_bundle(
-            paths,
-            store,
-            data_artifact.archive_sha256,
-            kind="data",
-            expected_tree_digest=expected_data.sha256,
-        )
-
-    assignment = state.register_bundle_assignment_release(
-        assignment_id=args.assignment_id or new_public_id("basn"),
-        course_key=course_key,
-        assignment_key=args.assignment_key,
-        release_id=args.release_id,
-        title=args.title,
-        starter_path=str(starter.path),
-        starter_digest=starter.archive_sha256,
-        starter_size_bytes=starter.compressed_bytes,
-        assessment_path=str(assessment.path),
-        assessment_digest=assessment.sha256,
-        data_path=str(data.path) if data is not None else None,
-        dataset_digest=data.sha256 if data is not None else "",
-        runner_image=runner_reference,
-        rubric_version=args.rubric_version,
-        max_score=args.max_score,
-        result_policy=args.result_policy,
-        opens_at=args.opens_at,
-        due_at=args.due_at,
-        ready=False,
-    )
-    # Registration is always a draft. Replaying an existing registration must
-    # not silently hide a release that is already public.
-    return _bundle_assignment_summary(assignment)
+def _add_bundle_assignment(args, paths, state, course_key):
+    """Preserve the CLI contract while sharing immutable registration rules."""
+    from .assignment_admin_operations import _add_bundle_assignment as register
+    return register(args, paths, state, course_key)
 
 
 def _check_bundle_assignment(args, paths, state, course_key):
-    assignment = state.get_bundle_assignment(args.assignment_id)
-    if assignment.course_key != course_key:
-        raise PlatformNotFound("assignment was not found in this course")
-    if not math.isfinite(args.negative_score) or not 0 <= args.negative_score < assignment.max_score:
-        raise ValueError("negative-score must be finite, nonnegative and below max-score")
-    check_id = state.begin_bundle_release_check(assignment.assignment_id, course_key=course_key)
-    details = {"cases": []}
-    grader = None
-    try:
-        _validate_bundle_assignment(paths, assignment)
-        _check_runner_images(args, (assignment.runner_image,))
-        grader = _new_grader(args, paths, course_key)
-        store = _bundle_store(paths)
-        for label, source, expected in (("solution", args.solution, assignment.max_score),
-                                        ("negative", args.negative_solution, args.negative_score)):
-            artifact = store.create_from_directory(source, kind="submission")
-            workspace = WorkspaceBuilder(paths.workspaces).prepare(
-                new_public_id("validation"), artifact.path, assignment.assessment_path, assignment.data_path,
-                expected_source_sha256=artifact.digest, expected_assessment_sha256=assignment.assessment_digest,
-                expected_data_sha256=assignment.dataset_digest or None,
-            )
-            result = grader.grade(workspace=workspace, runner_image=assignment.runner_image, max_score=assignment.max_score)
-            passed = math.isclose(result.score, expected, rel_tol=0, abs_tol=1e-9) and result.max_score == assignment.max_score
-            details["cases"].append({"case": label, "source_sha256": artifact.digest, "expected_score": expected,
-                                     "score": result.score, "passed": passed})
-            if not passed:
-                raise ValueError(f"{label} test did not receive its expected score")
-        state.finish_bundle_release_check(check_id, passed=True, details=details)
-        return {"assignment_id": assignment.assignment_id, "check_id": check_id, "status": "passed", **details}
-    except BaseException as exc:
-        details["error_type"] = type(exc).__name__
-        state.finish_bundle_release_check(check_id, passed=False, details=details)
-        raise
-    finally:
-        if grader is not None:
-            grader.close()
+    """Use the same validation operation as instructor web jobs."""
+    from .assignment_admin_operations import _check_bundle_assignment as validate
+    return validate(args, paths, state, course_key)
 
 
 def _bundle_store(

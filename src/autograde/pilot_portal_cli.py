@@ -9,7 +9,7 @@ import threading
 from urllib.parse import urlsplit
 
 from .pilot_config import load_pilot_config
-from .pilot_roster import initialize_student_roster, RosterBootstrapError
+from .pilot_roster import initialize_student_roster, initialize_web_roster, RosterBootstrapError
 from .platform_auth import create_or_load_auth_secret, create_or_load_instructor_token
 from .platform_bundle_worker import BundleSubmissionProcessor, BundleSubmissionWorker
 from .platform_cli import _bundle_store, _exclusive_course_service_lock, _validate_bundle_assignment, _grader_instance_label
@@ -22,6 +22,8 @@ from .platform_service import StudentPlatformService
 from .platform_state import PlatformStateStore
 from .settings import AppPaths
 from .workspace import WorkspaceBuilder
+from .course_admin import CourseAdminService, EnrollmentAdminService
+from .course_runtime import CourseRuntimeRegistry, SharedCourseWorker
 
 
 def _validate_mode(values, *, isolated):
@@ -49,52 +51,80 @@ def _course_grader(values, paths, state, course, *, isolated):
                            instance_label=_grader_instance_label(paths, course))
 
 
+def _create_course_runtime(values, paths, state, course, *, isolated, secret,
+                           instructor, bundles, notify, password_slots):
+    """Do not retain a lifecycle lock when a failed activation is retried."""
+    with ExitStack() as resources:
+        resources.enter_context(_exclusive_course_service_lock(paths, course))
+        for assignment in state.list_operator_bundle_assignments(course_key=course, ready_only=True):
+            _validate_bundle_assignment(paths, assignment, store=bundles)
+        grader = _course_grader(values, paths, state, course, isolated=isolated)
+        resources.callback(grader.close)
+        if isolated:
+            grader.reconcile_orphans()
+        processor = BundleSubmissionProcessor(state=state, course_key=course,
+            workspace_builder=WorkspaceBuilder(paths.workspaces), grader=grader)
+        service = StudentPlatformService(state=state, server_secret=secret, course_key=course,
+            public_base_url=values["public_base_url"], bundle_store=bundles,
+            notify_bundle_submission=notify, instructor_token=instructor)
+        service._password_verification_slots = password_slots
+        return service, processor, grader, resources.pop_all()
+
+
 def run(config, *, isolated=False):
     values = config.values
-    if values["course_key"] not in COURSES:
-        raise ValueError("portal config course_key must be come3105 or come2201")
     _validate_mode(values, isolated=isolated)
+    admin_enabled = values.get("instructor_assignment_web_enabled", False)
+    if isolated and admin_enabled:
+        raise ValueError("instructor web authoring currently requires trusted pilot-local mode")
     if not {"web_port", "web_public_base_url"} <= values.keys():
         raise ValueError("portal requires web_port and web_public_base_url in CSV")
-    if values["bundle_worker_count"] < len(COURSES):
-        raise ValueError("portal needs at least two bundle workers")
     paths = AppPaths.from_value(values["data_root"]).ensure()
     state = PlatformStateStore(paths.database)
+    courses = CourseAdminService(state)
+    courses.get_course(values["course_key"])
     secret = create_or_load_auth_secret(paths.platform_auth_secret)
     instructor = create_or_load_instructor_token(paths.platform_instructor_token)
     bundles = _bundle_store(paths)
-    services = {}
     workers = []
+    graders = []
     stop = threading.Event()
     failures = []
     with ExitStack() as stack:
-        for course in COURSES:
-            stack.enter_context(_exclusive_course_service_lock(paths, course))
-        for index, course in enumerate(COURSES):
-            for assignment in state.list_operator_bundle_assignments(course_key=course, ready_only=True):
-                _validate_bundle_assignment(paths, assignment, store=bundles)
-            grader = _course_grader(values, paths, state, course, isolated=isolated)
-            stack.callback(grader.close)
-            if isolated:
-                # Course service lock is held; only this installation/course's
-                # labelled leftovers can be removed before workers start.
-                grader.reconcile_orphans()
-            processor = BundleSubmissionProcessor(state=state, course_key=course,
-                                                  workspace_builder=WorkspaceBuilder(paths.workspaces), grader=grader)
-            count = values["bundle_worker_count"] // len(COURSES) + (index < values["bundle_worker_count"] % len(COURSES))
-            worker = BundleSubmissionWorker(processor, course_key=course, worker_count=count)
-            workers.append(worker)
-            services[course] = StudentPlatformService(
-                state=state, server_secret=secret, course_key=course,
-                public_base_url=values["public_base_url"], bundle_store=bundles,
-                notify_bundle_submission=worker.notify, instructor_token=instructor,
-            )
-        # One password-work limit covers both courses behind the same classroom NAT.
+        # Also fences offline maintenance before a newly created course has a
+        # per-course runtime. Existing CLI course locks remain in force.
+        stack.enter_context(_exclusive_course_service_lock(paths, "portal-runtime"))
         password_slots = threading.BoundedSemaphore(4)
-        for service in services.values():
-            service._password_verification_slots = password_slots
-        api = CourseAPI(services, secret)
-        web = CoursePortal(services, secret, values["web_public_base_url"], values["public_base_url"])
+
+        def factory(course):
+            service, processor, grader, resources = _create_course_runtime(
+                values, paths, state, course, isolated=isolated, secret=secret,
+                instructor=instructor, bundles=bundles, password_slots=password_slots,
+                notify=lambda submission_id: student_worker.submission_available(submission_id))
+            stack.callback(resources.close)
+            graders.append(grader)
+            return service, processor
+
+        services = CourseRuntimeRegistry(courses, factory)
+        student_worker = SharedCourseWorker(state, services, worker_count=values["bundle_worker_count"])
+        workers.append(student_worker)
+        # Validate persisted inputs and acquire course lifecycle locks before bind.
+        for course in services:
+            services[course]
+        courses.before_activate = lambda course: services[course]
+        controller = None
+        if admin_enabled:
+            from .assignment_admin import AssignmentAdminService
+            from .instructor_web import InstructorWeb
+            assignments = AssignmentAdminService(state, paths, course_status=lambda key: courses.get_course(key)["status"])
+            workers.append(assignments)
+            controller = InstructorWeb(courses, EnrollmentAdminService(state, secret), assignments,
+                authorize=services[values["course_key"]]._authorize_instructor,
+                secret=secret, web_url=values["web_public_base_url"],
+                submissions=lambda key, auth: services[key].instructor_dashboard_page(auth))
+        api = CourseAPI(services, secret, courses=courses)
+        web = CoursePortal(services, secret, values["web_public_base_url"], values["public_base_url"],
+                           courses=courses, instructor=controller)
         servers = []
         readiness = PortalReadiness(paths, workers, stop)
         for port, facade, origin in (
@@ -107,7 +137,8 @@ def run(config, *, isolated=False):
             servers.append(server)
         # Bind both sockets and validate assignments before committing initialization.
         # No HTTP requests are served until all roster rows are committed.
-        roster = initialize_student_roster(state, config.source.parent / "student_roster.csv")
+        roster = (initialize_web_roster(state) if values.get("roster_bootstrap_mode") == "web"
+                  else initialize_student_roster(state, config.source.parent / "student_roster.csv"))
         previous = {}
         if threading.current_thread() is threading.main_thread():
             for sig in (signal.SIGTERM, signal.SIGINT):
@@ -131,7 +162,7 @@ def run(config, *, isolated=False):
                 thread.start()
                 threads.append(thread)
             print(json.dumps({"ok": True, "web": values["web_public_base_url"],
-                              "api": values["public_base_url"], "courses": list(COURSES),
+                              "api": values["public_base_url"], "courses": list(COURSES) + [c for c in services if c not in COURSES],
                               "roster": roster,
                               "workers": values["bundle_worker_count"],
                               "grading": values["grading_runtime"] if isolated else "pilot-local (trusted code only)",
@@ -149,7 +180,8 @@ def run(config, *, isolated=False):
                 worker.stop(timeout=0)
             for worker in workers:
                 if not worker.stop(timeout=30):
-                    worker.processor.grader.close()
+                    for grader in graders:
+                        grader.close()
                     worker.stop(timeout=5)
         if failures:
             raise RuntimeError("pilot HTTP listener stopped unexpectedly") from failures[0]

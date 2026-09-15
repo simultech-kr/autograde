@@ -481,7 +481,10 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
     ) -> tuple[Optional[str], Mapping[str, str], frozenset[str]]:
         facade = self.platform_server.facade
         if callable(getattr(facade, "portal_request", None)) and path not in {"/healthz", "/readyz"}:
-            if path in {"/", "/courses"} or path.startswith("/courses/"):
+            if path in {"/", "/courses"} or path.startswith("/courses/") or (
+                getattr(facade, "instructor", None) is not None
+                and (path == "/instructor" or path.startswith("/instructor/"))
+            ):
                 return "portal", {"path": path}, frozenset({"GET", "POST"})
             return None, {}, frozenset()
         if (
@@ -693,7 +696,34 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
             if query:
                 raise PlatformHTTPError(400, "invalid_request", "Unexpected query parameter")
             if self.command == "POST":
-                form = self._read_form()
+                path = parameters["path"]
+                admin = getattr(facade, "instructor", None)
+                is_admin = admin is not None and (
+                    path == "/instructor" or path.startswith("/instructor/")
+                    or re.fullmatch(r"/courses/[^/]+/instructor(?:/.*)?", path)
+                )
+                if is_admin:
+                    admin.authorize_upload(path, self._cookies(), self.headers.get("Origin"),
+                                           self.headers.get("Authorization"))
+                    upload = re.fullmatch(r"/courses/[^/]+/instructor/drafts/[^/]+/uploads/(starter|solution|negative)", path)
+                    csv_upload = re.fullmatch(r"/courses/[^/]+/instructor/students/import/preview", path)
+                    if upload or csv_upload:
+                        if not facade.admin_upload_slots.acquire(blocking=False):
+                            raise PlatformHTTPError(503, "upload_busy", "파일 처리 중입니다. 잠시 후 다시 시도하세요.")
+                        try:
+                            from .instructor_upload import parse_instructor_upload
+                            limit = (5 if upload else 1) * 1024 * 1024
+                            body = self._read_body(expected_media_type="multipart/form-data", max_bytes=limit + 64 * 1024)
+                            try:
+                                form = parse_instructor_upload(self.headers.get("Content-Type", ""), body, file_limit=limit)
+                            except ValueError as exc:
+                                raise PlatformHTTPError(400, "invalid_upload", str(exc)) from exc
+                        finally:
+                            facade.admin_upload_slots.release()
+                    else:
+                        form = self._read_form(max_bytes=64 * 1024, max_fields=400, multiline=True)
+                else:
+                    form = self._read_form()
             else:
                 self._ensure_no_body()
                 form = {}
@@ -929,10 +959,11 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
             )
         return decoded
 
-    def _read_form(self) -> Mapping[str, str]:
+    def _read_form(self, *, max_bytes=None, max_fields=_MAX_FORM_FIELDS, multiline=False) -> Mapping[str, str]:
+        limit = self.platform_server.max_form_bytes if max_bytes is None else max_bytes
         body = self._read_body(
             expected_media_type="application/x-www-form-urlencoded",
-            max_bytes=self.platform_server.max_form_bytes,
+            max_bytes=limit,
         )
         try:
             text = body.decode("utf-8", "strict")
@@ -940,9 +971,11 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
             raise PlatformHTTPError(400, "invalid_form", "Invalid form body") from exc
         return self._parse_parameters(
             text,
-            max_bytes=self.platform_server.max_form_bytes,
-            max_fields=_MAX_FORM_FIELDS,
+            max_bytes=limit,
+            max_fields=max_fields,
             label="form",
+            multiline=multiline,
+            max_value_bytes=limit if multiline else _MAX_PARAMETER_BYTES,
         )
 
     def _read_body(self, *, expected_media_type: str, max_bytes: int) -> bytes:
@@ -1003,6 +1036,9 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
         values = self.headers.get_all("Content-Type") or []
         if len(values) != 1:
             return "", None
+        if re.fullmatch(r'multipart/form-data\s*;\s*boundary=(?:"[A-Za-z0-9\x27()+_,./:=? -]{1,200}"|[A-Za-z0-9\x27()+_,./:=?-]{1,200})',
+                        values[0], re.IGNORECASE):
+            return "multipart/form-data", None
         parts = [part.strip() for part in values[0].split(";")]
         media_type = parts[0].casefold()
         charset: Optional[str] = None
@@ -1082,6 +1118,8 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
         max_bytes: int,
         max_fields: int,
         label: str,
+        multiline: bool = False,
+        max_value_bytes: int = _MAX_PARAMETER_BYTES,
     ) -> Mapping[str, str]:
         try:
             encoded_size = len(encoded.encode("ascii", "strict"))
@@ -1108,10 +1146,11 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
                 not key
                 or key in result
                 or len(key.encode("utf-8")) > _MAX_PARAMETER_BYTES
-                or len(value.encode("utf-8")) > _MAX_PARAMETER_BYTES
+                or len(value.encode("utf-8")) > max_value_bytes
                 or "\x00" in key
                 or "\x00" in value
-                or any(ord(character) < 32 for character in key + value)
+                or any(ord(character) < 32 for character in key)
+                or any(ord(character) < 32 and not (multiline and character in "\r\n\t") for character in value)
             ):
                 raise PlatformHTTPError(400, "invalid_request", f"Invalid {label}")
             result[key] = value
@@ -1163,6 +1202,10 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
         for name, value in _SECURITY_HEADERS.items():
             if name == "Content-Security-Policy" and callable(getattr(self.platform_server.facade, "portal_request", None)):
                 value += "; style-src 'unsafe-inline'"
+            if name == "Referrer-Policy" and callable(getattr(self.platform_server.facade, "portal_request", None)):
+                # Native form POSTs under no-referrer may send Origin: null.
+                # Preserve the same-origin checks without relying on a proxy fix.
+                value = "same-origin"
             self.send_header(name, value)
         self.send_header("Connection", "close")
         self.send_header("Content-Length", str(len(body)))

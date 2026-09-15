@@ -1521,6 +1521,7 @@ _MIGRATIONS = {
     8: _MIGRATION_8,
     9: _MIGRATION_9,
     10: _MIGRATION_10,
+    11: "",  # Incremental admin repositories initialized atomically below.
 }
 _LATEST_SCHEMA_VERSION = max(_MIGRATIONS)
 
@@ -1718,6 +1719,11 @@ class PlatformStateStore:
             connection.execute("BEGIN IMMEDIATE")
             try:
                 yield connection
+            except sqlite3.IntegrityError as exc:
+                connection.rollback()
+                if str(exc) == "admin_course_not_active":
+                    raise PlatformConflict("course is not active") from exc
+                raise
             except BaseException:
                 connection.rollback()
                 raise
@@ -1749,6 +1755,21 @@ class PlatformStateStore:
                     )
                 for version in range(current + 1, _LATEST_SCHEMA_VERSION + 1):
                     applied = utc_iso().replace("'", "''")
+                    if version == 11:
+                        from .course_admin import initialize_course_admin
+                        from .assignment_admin import initialize_assignment_admin
+                        from .instructor_schema import initialize_instructor_runtime
+                        connection.execute("BEGIN IMMEDIATE")
+                        try:
+                            initialize_course_admin(self, connection=connection)
+                            initialize_assignment_admin(connection)
+                            initialize_instructor_runtime(connection)
+                            connection.execute("INSERT INTO platform_schema_migrations VALUES (?, ?)", (version, applied))
+                            connection.commit()
+                        except BaseException:
+                            connection.rollback()
+                            raise
+                        continue
                     migration_sql = _MIGRATIONS[version].replace(
                         "__PLATFORM_MIGRATION_TIMESTAMP__", applied
                     )

@@ -67,7 +67,7 @@ def test_live_service_and_confirmation_refused(records):
             reset_course(paths, "come2201")
     with pytest.raises(ValueError, match="requires"):
         reset_course(paths, "come2201", apply=True)
-    with pytest.raises(ValueError, match="only existing"):
+    with pytest.raises(ValueError, match="already be registered"):
         reset_course(paths, "all")
 
 
@@ -89,7 +89,7 @@ def test_unsafe_apply_refused_without_deletion(records, case, tmp_path):
     if case in {"schema", "bootstrap"}:
         with sqlite3.connect(paths.database) as connection:
             if case == "schema":
-                connection.execute("INSERT INTO platform_schema_migrations VALUES (11, 'synthetic')")
+                connection.execute("INSERT INTO platform_schema_migrations VALUES (12, 'synthetic')")
             else:
                 connection.execute("DELETE FROM platform_roster_bootstrap")
     if case == "symlink":

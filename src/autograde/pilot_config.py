@@ -30,7 +30,8 @@ _REQUIRED_KEYS = frozenset(
     {"course_key", "data_root", "public_base_url", "listen", "port"}
 )
 _OPTIONAL_KEYS = frozenset(
-    {"grading_runtime", "bundle_worker_count", "external_access_mode", "web_public_base_url", "web_port"}
+    {"grading_runtime", "bundle_worker_count", "external_access_mode", "web_public_base_url", "web_port",
+     "instructor_assignment_web_enabled", "roster_bootstrap_mode"}
 )
 _ALLOWED_KEYS = _REQUIRED_KEYS | _OPTIONAL_KEYS
 _SECRET_KEY_PARTS = frozenset(
@@ -108,6 +109,16 @@ def load_pilot_config(path: str | Path) -> PilotConfig:
             )
         ),
     }
+    enabled = raw_values.get("instructor_assignment_web_enabled", "false")
+    if enabled not in {"true", "false"}:
+        raise PilotConfigError("instructor_assignment_web_enabled must be true or false")
+    values["instructor_assignment_web_enabled"] = enabled == "true"
+    mode = raw_values.get("roster_bootstrap_mode", "csv")
+    if mode not in {"csv", "web"}:
+        raise PilotConfigError("roster_bootstrap_mode must be csv or web")
+    if mode == "web" and not values["instructor_assignment_web_enabled"]:
+        raise PilotConfigError("web roster bootstrap requires instructor_assignment_web_enabled=true")
+    values["roster_bootstrap_mode"] = mode
     if "web_public_base_url" in raw_values or "web_port" in raw_values:
         if not {"web_public_base_url", "web_port"} <= raw_values.keys():
             raise PilotConfigError("web_public_base_url and web_port must be provided together")

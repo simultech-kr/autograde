@@ -25,8 +25,9 @@ class CourseAPI:
         "get_bundle_history", "get_bundle_source", "list_accepted_assignments",
     })
 
-    def __init__(self, services: Mapping[str, StudentPlatformService], secret: bytes):
-        self.services = dict(services)
+    def __init__(self, services: Mapping[str, StudentPlatformService], secret: bytes, *, courses=None):
+        self.services = services
+        self.courses = courses
         self.secret = secret
         self.state = next(iter(services.values())).state
 
@@ -35,6 +36,8 @@ class CourseAPI:
             raise PlatformAPIError(401, "invalid_grant", "수령 코드 또는 연결 정보가 올바르지 않습니다.")
         try:
             course = self.state.resolve_auth_course(kind, secret_digest(self.secret, kind, value))
+            if self.courses is not None and not self.courses.is_active(course):
+                raise PlatformNotFound("course unavailable")
             return self.services[course]
         except (PlatformNotFound, KeyError) as exc:
             raise PlatformAPIError(401, "invalid_grant", "수령 코드 또는 연결 정보가 올바르지 않습니다.") from exc
@@ -72,13 +75,18 @@ class WebSession:
     credential: Any
     csrf: str
     expires: float
+    course_revision: int | None = None
 
 
 class CoursePortal:
     """Web-only facade. A restart deliberately invalidates short web sessions."""
 
-    def __init__(self, services, secret: bytes, web_url: str, api_url: str, *, clock=time.monotonic):
-        self.services = dict(services)
+    def __init__(self, services, secret: bytes, web_url: str, api_url: str, *, clock=time.monotonic,
+                 courses=None, instructor=None):
+        self.services = services
+        self.courses = courses
+        self.instructor = instructor
+        self.admin_upload_slots = threading.BoundedSemaphore(2)
         self.secret = secret
         self.web_url = web_url.rstrip("/")
         self.api_url = api_url.rstrip("/")
@@ -105,6 +113,15 @@ class CoursePortal:
             'a{color:#2155ba}label{display:block;margin:16px 0}input,button,textarea{box-sizing:border-box;'
             'font:inherit;width:100%;padding:12px;border:1px solid #bcc7d6;border-radius:8px}'
             'button{background:#2155ba;color:white;cursor:pointer}article{padding:16px 0;border-bottom:1px solid #ddd}'
+            'fieldset{border:0;padding:0;margin:20px 0;min-width:0}legend{font-weight:700}'
+            '.assignment-choice{display:flex;gap:12px;align-items:flex-start;padding:16px;'
+            'border:1px solid #bcc7d6;border-radius:8px;cursor:pointer;overflow-wrap:anywhere}'
+            '.assignment-choice input[type=radio]{width:20px;height:20px;min-width:20px;'
+            'margin:4px 0 0;padding:0;accent-color:#2155ba}'
+            '.assignment-choice span{min-width:0}.assignment-choice small{display:block;margin-top:6px}'
+            '.assignment-choice:focus-within{outline:2px solid #2155ba;outline-offset:2px}'
+            '.assignment-choice:has(input:checked){border-color:#2155ba;background:#eff6ff}'
+            '.assignment-links{display:flex;gap:16px;flex-wrap:wrap;margin:20px 0}'
             '.error{color:#aa2434}small{color:#536173}code{font-size:1.2em;overflow-wrap:anywhere}'
             '</style><main data-audience="student"><a href="/">Autograde · 학생 실습실</a>'
             f'<h1>{html.escape(title)}</h1>{body}</main></html>'
@@ -134,6 +151,9 @@ class CoursePortal:
         session = self.sessions.get(key)
         if session is None or session.credential.course_key != course:
             raise PlatformAPIError(403, "login_required", "인증 시간이 만료되었습니다. 다시 인증해 주세요.")
+        if self.courses is not None and session.course_revision != self.courses.get_course(course)["auth_revision"]:
+            self.sessions.pop(key, None)
+            raise PlatformAPIError(403, "login_required", "수업 상태가 변경되었습니다. 다시 인증해 주세요.")
         try:
             current = self.services[course].state.get_student_password_credential(
                 student_key=session.credential.student_key, course_key=course)
@@ -150,35 +170,52 @@ class CoursePortal:
         state = self.services[course].state
         now = utc_iso()
         assignments = state.list_operator_bundle_assignments(course_key=course, ready_only=True, active_only=True)
-        body = (f'<p>교과목: {course}</p>'
-                '<p>수락할 실습을 선택하세요. 수령 코드를 확장에 입력하면 수락이 완료됩니다.</p>'
-                '<p><small>VS Code에는 현재 수령 코드로 수락한 과제만 표시됩니다.</small></p>')
-        count = 0
-        for assignment in assignments:
-            if ((assignment.opens_at and assignment.opens_at > now)
-                    or (assignment.due_at and assignment.due_at < now)):
-                continue
-            count += 1
-            body += (f'<article><strong>{html.escape(assignment.title)}</strong>'
-                     f'<p>마감: {html.escape(assignment.due_at or "미지정")}</p>'
+        available = [assignment for assignment in assignments
+                     if (not assignment.opens_at or assignment.opens_at <= now)
+                     and (not assignment.due_at or now < assignment.due_at)]
+        body = f'<p>교과목: {course}</p>'
+        if available:
+            body += ('<p id="assignment-help">① 아래에서 실습 하나를 선택하세요.<br>'
+                     '② 선택한 실습의 수령 코드를 발급받으세요.<br>'
+                     '③ 코드를 VS Code 또는 Visual Studio 확장에 입력하면 수락이 완료됩니다.</p>'
                      f'<form method="post" action="/courses/{course}/claims">'
                      f'<input type="hidden" name="csrf" value="{session.csrf}">'
-                     f'<input type="hidden" name="assignment_id" value="{html.escape(assignment.assignment_id, quote=True)}">'
-                     '<button>수령 코드 발급</button></form></article>')
-        if not count:
-            body += '<p>지금 수령할 수 있는 과제가 없습니다.</p>'
+                     '<fieldset aria-describedby="assignment-help"><legend>수락할 실습 선택 (필수)</legend>')
+            for assignment in available:
+                body += ('<label class="assignment-choice">'
+                         f'<input type="radio" name="assignment_id" value="{html.escape(assignment.assignment_id, quote=True)}" required>'
+                         f'<span><strong>{html.escape(assignment.title)}</strong>'
+                         f'<small>마감: {html.escape(assignment.due_at or "미지정")}</small></span></label>')
+            body += ('</fieldset><button type="submit">선택한 실습 수령 코드 발급</button></form>'
+                     '<p><small>확장에는 현재 수령 코드로 수락한 실습만 표시됩니다.</small></p>')
+        else:
+            body += ('<section role="status"><h2>지금 수령할 수 있는 과제가 없습니다.</h2>'
+                     '<p>학생 인증은 완료되었습니다. 비밀번호를 다시 입력할 필요는 없습니다.</p>'
+                     '<p>이 교과목에 공개되어 있고 수령 기간 내인 과제만 표시됩니다. '
+                     '담당 교수자에게 과제 공개 여부와 시작·마감 시간을 확인해 주세요.</p></section>')
+        body += (f'<nav class="assignment-links" aria-label="과제 목록 안내">'
+                 f'<a href="/courses/{course}">과제 목록 새로고침</a>'
+                 '<a href="/">다른 교과목 선택</a></nav>')
         body += (f'<form method="post" action="/courses/{course}/logout">'
                  f'<input type="hidden" name="csrf" value="{session.csrf}"><button>로그아웃</button></form>')
         return self._page("과제 선택", body)
 
     def portal_request(self, method, path, form, cookies, origin=None, authorization=None):
+        if self.instructor is not None:
+            response = self.instructor.request(method, path, form, cookies, origin, authorization)
+            if response is not None:
+                return response
         if path in {"/", "/courses"} and method == "GET":
+            courses = ([c["course_key"] for c in self.courses.list_courses(active_only=True)]
+                       if self.courses is not None else self.services)
             return self._page("교과목 선택", "".join(
-                f'<article><a href="/courses/{course}">{course}</a></article>' for course in self.services))
-        match = re.fullmatch(r"/courses/(come3105|come2201)(?:/(login|assignments|claims|logout|instructor))?", path)
+                f'<article><a href="/courses/{html.escape(course, quote=True)}">{html.escape(course)}</a></article>' for course in courses))
+        match = re.fullmatch(r"/courses/([A-Za-z0-9][A-Za-z0-9._~-]{0,127})(?:/(login|assignments|claims|logout|instructor))?", path)
         if not match or match[1] not in self.services:
             return self._page("페이지 없음", '<p><a href="/">교과목 선택으로 돌아가기</a></p>', status=404)
         course, action = match[1], match[2]
+        if self.courses is not None and action != "instructor" and not self.courses.is_active(course):
+            return self._page("수업 이용 불가", "<p>현재 운영 중인 수업이 아닙니다. 교수자에게 문의하세요.</p>", status=403)
         service = self.services[course]
         if method == "GET" and action is None:
             with self.lock:
@@ -220,7 +257,8 @@ class CoursePortal:
                                 if v.credential.enrollment_id == credential.enrollment_id]:
                         self.sessions.pop(key, None)
                     raw = new_api_token()
-                    session = WebSession(credential, new_api_token(), self.clock() + 600)
+                    session = WebSession(credential, new_api_token(), self.clock() + 600,
+                                         self.courses.get_course(course)["auth_revision"] if self.courses else None)
                     self.sessions[secret_digest(self.secret, "portal-session", raw)] = session
                     page = self._assignments(course, session)
                 return PlatformResponse(page.status, page.body, {**page.headers, "Set-Cookie": self._cookie(course, raw)})
