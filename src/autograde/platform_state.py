@@ -6791,6 +6791,33 @@ class PlatformStateStore:
             ).fetchone()
         return self._bundle_submission(request), self._bundle_result(result)
 
+    def get_instructor_submission_review(self, *, course_key: str, submission_id: str):
+        """Course-fenced immutable submission and bounded same-student history.
+
+        Caller must authenticate the instructor. Retains access to historical
+        submissions after enrollment or release deactivation.
+        """
+        with self._connection() as connection:
+            row = connection.execute(
+                """SELECT r.*, p.student_key, a.title, a.assignment_key, a.release_id,
+                          a.max_score, result.score
+                   FROM bundle_submission_requests r
+                   JOIN bundle_assignment_releases a ON a.assignment_id = r.assignment_id
+                   JOIN platform_students p ON p.id = r.student_id
+                   LEFT JOIN bundle_submission_results result ON result.submission_id = r.submission_id
+                   WHERE a.course_key = ? AND r.submission_id = ?""",
+                (_required_text(course_key, "course_key"), _required_text(submission_id, "submission_id")),
+            ).fetchone()
+            if row is None:
+                raise PlatformNotFound("submission not found in this course")
+            history = connection.execute(
+                """SELECT submission_id, received_at, state FROM bundle_submission_requests
+                   WHERE student_id = ? AND assignment_id = ?
+                   ORDER BY received_at DESC, submission_id DESC LIMIT 101""",
+                (row['student_id'], row['assignment_id']),
+            ).fetchall()
+        return dict(row), [dict(item) for item in history]
+
     def get_bundle_submission(self, submission_id: str) -> BundleSubmissionRequest:
         with self._connection() as connection:
             row = connection.execute(

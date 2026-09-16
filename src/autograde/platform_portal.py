@@ -12,6 +12,7 @@ from typing import Any, Mapping
 from .platform_auth import InvalidSignedValue, new_api_token, secret_digest, sign_browser_value, verify_browser_value
 from .platform_service import PlatformAPIError, PlatformResponse, StudentPlatformService
 from .platform_state import PlatformNotFound, utc_iso
+from .web_theme import THEME_CSS
 
 COURSES = ("come3105", "come2201")
 
@@ -123,7 +124,7 @@ class CoursePortal:
             '.assignment-choice:has(input:checked){border-color:#2155ba;background:#eff6ff}'
             '.assignment-links{display:flex;gap:16px;flex-wrap:wrap;margin:20px 0}'
             '.error{color:#aa2434}small{color:#536173}code{font-size:1.2em;overflow-wrap:anywhere}'
-            '</style><main data-audience="student"><a href="/">Autograde · 학생 실습실</a>'
+            f'{THEME_CSS}</style><main data-audience="student"><a href="/">Autograde · 학생 실습실</a>'
             f'<h1>{html.escape(title)}</h1>{body}</main></html>'
         )
         return PlatformResponse(status, document, headers)
@@ -132,7 +133,7 @@ class CoursePortal:
         csrf = new_api_token()
         signed = sign_browser_value(self.secret, "portal-entry", {"course": course, "csrf": csrf},
                                     lifetime_seconds=600)
-        body = (f'<p>{html.escape(course)}</p><p class="error">{html.escape(message)}</p>'
+        body = (f'<p>{html.escape(self._course_label(course))}</p><p class="error">{html.escape(message)}</p>'
                 f'<form method="post" action="/courses/{course}/login">'
                 f'<input type="hidden" name="csrf" value="{csrf}">'
                 '<label>학번<input name="student_key" maxlength="255" autocomplete="off" required></label>'
@@ -141,6 +142,15 @@ class CoursePortal:
                 '<p><small>교수자에게 받은 숫자 6자리 비밀번호를 입력하세요.</small></p>'
                 '<button>과제 확인</button></form>')
         return self._page("과제 받기", body, status=status, cookie=self._cookie(course, signed))
+
+    def _course_label(self, course):
+        if self.courses is None:
+            return course
+        details = self.courses.get_course(course)
+        period = {'1': '1학기', '2': '2학기', 'summer': '여름학기', 'winter': '겨울학기'}.get(details['semester'], '')
+        return ' · '.join(str(value) for value in (
+            details['code'], details['name'], details['year'], period,
+            details['section'] + '분반' if details['section'] else '분반 미설정') if value)
 
     def _session(self, course, cookies):
         raw = cookies.get(f"autograde_portal_{course}", "")
@@ -173,7 +183,7 @@ class CoursePortal:
         available = [assignment for assignment in assignments
                      if (not assignment.opens_at or assignment.opens_at <= now)
                      and (not assignment.due_at or now < assignment.due_at)]
-        body = f'<p>교과목: {course}</p>'
+        body = f'<p>교과목: {html.escape(self._course_label(course))}</p>'
         if available:
             body += ('<p id="assignment-help">① 아래에서 실습 하나를 선택하세요.<br>'
                      '② 선택한 실습의 수령 코드를 발급받으세요.<br>'
@@ -205,11 +215,17 @@ class CoursePortal:
             response = self.instructor.request(method, path, form, cookies, origin, authorization)
             if response is not None:
                 return response
+        review = re.fullmatch(r'/courses/([a-z0-9_-]{1,96})/instructor/submissions/(bsub_[A-Za-z0-9_-]+)(?:/files/([0-9]{1,5}))?', path)
+        if review and method == 'GET' and review[1] in self.services:
+            return self.services[review[1]].instructor_submission_page(
+                authorization or '', review[2], int(review[3]) if review[3] else None)
         if path in {"/", "/courses"} and method == "GET":
             courses = ([c["course_key"] for c in self.courses.list_courses(active_only=True)]
                        if self.courses is not None else self.services)
             return self._page("교과목 선택", "".join(
-                f'<article><a href="/courses/{html.escape(course, quote=True)}">{html.escape(course)}</a></article>' for course in courses))
+                f'<article><a href="/courses/{html.escape(course, quote=True)}">{html.escape(self._course_label(course))}</a></article>' for course in courses))
+        if path.endswith('/instructor/submissions'):
+            path = path[:-len('/submissions')]
         match = re.fullmatch(r"/courses/([A-Za-z0-9][A-Za-z0-9._~-]{0,127})(?:/(login|assignments|claims|logout|instructor))?", path)
         if not match or match[1] not in self.services:
             return self._page("페이지 없음", '<p><a href="/">교과목 선택으로 돌아가기</a></p>', status=404)
@@ -225,7 +241,7 @@ class CoursePortal:
                 except PlatformAPIError:
                     return self._entry(course)
         if method == "GET" and action == "instructor":
-            page = service.instructor_dashboard_page(authorization or "")
+            page = service.instructor_dashboard_page(authorization or "", portal=True)
             # Remove legacy API-origin claim links and QR images from this entry point.
             body = re.sub(r'<h2>과제 수령 QR</h2>.*?(?=<table><thead><tr><th>학생</th><th>과제</th>)',
                           f'<p>학생 접속: <a href="/courses/{course}">{html.escape(self.web_url)}/courses/{course}</a></p>',

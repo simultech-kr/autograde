@@ -121,7 +121,8 @@ def run(config, *, isolated=False):
             controller = InstructorWeb(courses, EnrollmentAdminService(state, secret), assignments,
                 authorize=services[values["course_key"]]._authorize_instructor,
                 secret=secret, web_url=values["web_public_base_url"],
-                submissions=lambda key, auth: services[key].instructor_dashboard_page(auth))
+                submissions=lambda key, auth: services[key].instructor_dashboard_page(auth, portal=True),
+                submission_review=lambda key, auth, sid, index: services[key].instructor_submission_page(auth, sid, index))
         api = CourseAPI(services, secret, courses=courses)
         web = CoursePortal(services, secret, values["web_public_base_url"], values["public_base_url"],
                            courses=courses, instructor=controller)

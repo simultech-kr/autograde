@@ -54,6 +54,8 @@ internal static class Program
         }
         await SelfTest();
         checks += await ExceptionChecks.Run();
+        checks += await GradingPollerChecks.Run();
+        checks += ResultPresentationChecks.Run();
         Console.WriteLine(checks + " checks passed");
     }
 

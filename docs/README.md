@@ -55,6 +55,15 @@
   교수자용 파일럿 절차
 - `operations/go-live-checklist.md`: 합성·신뢰 코드 local 파일럿의 Go/No-Go와 복구 drill
 
+- [테마별 가독성·제출 코드 확인](architecture/theme-and-submission-review.md): 웹 테마 자동 전환,
+  Visual Studio 테마 연동, 교수자의 확인 필요 제출과 읽기 전용 코드/이력 열람.
+- [VS2022/2026 확장 0.5.0·자동 업데이트](operations/visualstudio-updates.md): 제출 UX·테마 변경,
+  Windows VSIX 빌드와 Marketplace 업데이트 배포 절차.
+- [제출 접수·채점 확인 분리와 확장 UI 검토](architecture/visualstudio-submission-ux.md):
+  구현 범위, 오류 처리, 화면 개선 우선순위와 Windows 현장 시험.
+- [학생 채점 결과·교과목·분반 관리자](operations/results-and-course-admin.md):
+  두 IDE 결과 요약 화면, 수정 필요 항목, 관리자 접속·분반 등록·집계 의미·인수 시험.
+
 `requirements/mvp.md`와 `operations/independent-web-pilot.md`가 현재 파일럿 기준입니다.
 `operations/qr-assignment-claim-pilot.md`는 기존 단일 교과목 실행 모드의 참고 문서입니다.
 `direct-bundle-mvp.md`의 활성화 코드 흐름은 loopback·호환 시험 기준입니다. `student-platform`

@@ -74,6 +74,76 @@ def test_vsix_explicitly_includes_json_dependency():
     assert 'throw "VSIX dependency missing: $required"' in build
 
 
+def test_theme_release_preserves_upgrade_identity_and_versions():
+    directory = ROOT / 'extensions/visualstudio/Autograde.VisualStudio'
+    ns = {'v': 'http://schemas.microsoft.com/developer/vsx-schema/2011'}
+    identity = ET.parse(directory / 'source.extension.vsixmanifest').find('v:Metadata/v:Identity', ns)
+    assert identity.attrib['Id'] == 'Autograde.VisualStudio.74db5571-a3ad-4451-a5f4-e8cc28d20536'
+    assert identity.attrib['Version'] == '0.5.0'
+    project = ET.parse(directory / 'Autograde.VisualStudio.csproj')
+    assert project.find('PropertyGroup/Version').text == identity.attrib['Version']
+    assert '"0.5.0")]' in (directory / 'AutogradePackage.cs').read_text()
+    assert '["extension_version"] = "0.5.0"' in (directory.parent / 'Autograde.Core/ServiceClient.cs').read_text()
+    build = (directory.parent / 'build.ps1').read_text()
+    assert '$builtIdentity.Id -ne $expectedIdentity.Id' in build
+    assert '$builtIdentity.Version -ne $expectedIdentity.Version' in build
+
+
+def test_wpf_theme_uses_dynamic_resources_and_preserves_password_masking():
+    """Source wiring regression only, not a Windows WPF rendering test."""
+    directory = ROOT / 'extensions/visualstudio/Autograde.VisualStudio'
+    theme = (directory / 'ThemeResources.cs').read_text()
+    ui = (directory / 'AssignmentControl.cs').read_text()
+    assert 'new DynamicResourceExtension(key)' in theme
+    assert 'SetResourceReference' in theme
+    for key in ('ToolWindowBackgroundBrushKey', 'ToolWindowTextBrushKey',
+                'ThemedDialogTextBoxStyleKey', 'ThemedDialogButtonStyleKey', 'ThemedDialogListBoxStyleKey',
+                'SelectedItemActiveBrushKey', 'SelectedItemActiveTextBrushKey',
+                'SelectedItemInactiveBrushKey', 'SelectedItemInactiveTextBrushKey',
+                'TextBoxBackgroundDisabledBrushKey', 'TextBoxTextDisabledBrushKey',
+                'TextBoxBorderFocusedBrushKey', 'FocusVisualBorderBrushKey'):
+        assert key in theme
+    assert 'ThemeResources.Apply(this, claim, new[] { assignments, history }, address, folder, output, gradingOutput)' in ui
+    assert 'ThemeResources.Button(cancel)' in ui and 'ThemeResources.Button(button)' in ui
+    assert 'ThemeResources.Label(status)' in ui and 'ThemeResources.Label(label)' in ui
+    assert 'new PasswordBox { MaxLength = 256 }' in ui and 'claim.Clear()' in ui
+    assert '"PART_ContentHost"' in theme and 'typeof(PasswordBox)' in theme
+    assert 'VSColorTheme.ThemeChanged +=' not in theme  # No static event subscription to leak.
+    assert 'Color.FromRgb' not in theme and 'Brushes.White' not in theme and 'Brushes.Black' not in theme
+
+
+def test_acceptance_does_not_wait_for_grading_and_background_has_identity_fences():
+    """Source wiring guard; runtime polling behavior is covered by C# checks."""
+    source = (ROOT / 'extensions/visualstudio/Autograde.VisualStudio/AssignmentControl.cs').read_text()
+    submit = source.split('AddButton(panel, "파일 확인 후 제출"', 1)[1].split('AddLabel(panel, "마지막 접수', 1)[0]
+    assert 'await client.SubmitAsync' in submit
+    assert 'ResultAsync' not in submit and 'Task.Delay' not in submit
+    assert 'receiptStatus.Text' in submit and 'PauseGradingWatch();' in submit
+    assert 'else StartGradingWatch();' in source
+    assert 'ReferenceEquals(receiptWatch, watch)' in source
+    assert 'ReferenceEquals(client, current)' in source
+    assert 'ReferenceEquals(gradingPoll, cancellation)' in source
+    assert 'if (IsCurrent()) ShowResult(result, gradingOutput)' in source
+    assert 'PauseGradingWatch(); receiptWatch = null;' in source
+    assert 'while (busy) await Task.Delay(200, ct);' in source
+
+
+def test_result_cards_are_themed_and_cleared_at_session_boundary():
+    directory = ROOT / 'extensions/visualstudio/Autograde.VisualStudio'
+    ui = (directory / 'AssignmentControl.cs').read_text()
+    view = (directory / 'ResultView.cs').read_text()
+    assert 'panel.Children.Add(liveResult)' in ui
+    assert 'panel.Children.Add(inspectedResult)' in ui
+    assert 'liveResult.Clear(); inspectedResult.Clear();' in ui
+    assert '과거 제출 기록 · ' in ui
+    assert 'ResultPresentation.From(result)' in view
+    assert 'ThemeResources.Label(text)' in view
+    assert 'SetResourceReference' in view
+    assert 'AutomationProperties.SetName' in view
+    assert 'model.DiagnosticPreview' in view
+    assert 'new Expander' in view
+
+
 @pytest.fixture(scope="module")
 def dotnet_client():
     dotnet = shutil.which("dotnet")

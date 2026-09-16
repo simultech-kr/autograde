@@ -62,6 +62,7 @@ import {
 import { ServiceAddressController } from "./serviceAddress";
 import { AssignmentTreeItem, AssignmentsTreeProvider } from "./tree";
 import type { Assignment, GradeResult, ResultDiagnostic, SubmissionSummary } from "./types";
+import { clearResultPanel, showResultPanel } from "./resultPanel";
 
 const SUCCESSFUL_SUBMISSION_STATES = new Set(["accepted", "queued", "running", "graded", "published"]);
 const FAILED_SUBMISSION_STATES = new Set(["rejected", "infra_failed", "assessment_failed"]);
@@ -100,6 +101,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   const updateAuthenticationUI = async (knownState?: boolean): Promise<boolean> => {
     const authenticated = knownState ?? await tokens.hasSession();
+    if (!authenticated) clearResultPanel();
     authenticationUiState = authenticated;
     await Promise.all([
       vscode.commands.executeCommand(
@@ -142,6 +144,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   };
 
   const auth = new AuthenticationController(client, extensionVersion, (authenticated) => {
+    clearResultPanel();
     studentState = clearStudentSessionResidue(studentState, treeProvider, output, diagnostics);
     void updateAuthenticationUI(authenticated);
     if (authenticated) {
@@ -149,6 +152,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
   });
   const assignmentClaims = new AssignmentClaimController(client, extensionVersion, async (assignmentId) => {
+    clearResultPanel();
     studentState = clearStudentSessionResidue(studentState, treeProvider, output, diagnostics);
     await updateAuthenticationUI(true);
     const assignments = await refreshAssignments(false);
@@ -188,6 +192,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   });
 
   const clearSessionUiForAddressChange = async (): Promise<void> => {
+    clearResultPanel();
     studentState = clearStudentSessionResidue(studentState, treeProvider, output, diagnostics);
     await updateAuthenticationUI(false);
   };
@@ -198,6 +203,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   );
 
   context.subscriptions.push(
+    { dispose: clearResultPanel },
     connectionMonitor,
     treeView,
     output,
@@ -595,7 +601,7 @@ async function viewSubmissionHistory(
       const result = await client.getResult(selection.version.id);
       checkSession();
       if (result.sourceDigest !== selection.version.sourceDigest) throw new Error("채점 결과의 제출 파일 정보가 일치하지 않습니다.");
-      diagnostics.clear(); renderResult(output, assignment, result); output.show(true);
+      diagnostics.clear(); renderResult(output, assignment, result, selection.version.id, "과거 제출 기록 · " + new Date(selection.version.receivedAt).toLocaleString());
     } catch (error) {
       checkSession();
       if (error instanceof ApiError && error.status === 404 && error.code === "result_not_available") {
@@ -1000,6 +1006,7 @@ async function viewLatestResult(
     return;
   }
   if (!new Set(["graded", "published"]).has(submission.state.toLowerCase())) {
+    showResultPanel(assignment, { state: submission.state, sourceDigest: submission.sourceDigest, headSha: submission.headSha, rubric: [], diagnostics: [] }, submissionId, "선택 과제의 최신 제출");
     output.appendLine(`${assignment.title}`);
     output.appendLine(`상태: ${submission.state}`);
     if (submission.headSha) {
@@ -1008,8 +1015,6 @@ async function viewLatestResult(
     if (submission.sourceDigest) {
       output.appendLine(`Bundle SHA-256: ${submission.sourceDigest}`);
     }
-    output.show(true);
-    void vscode.window.showInformationMessage(`채점 상태: ${submission.state}`);
     return;
   }
 
@@ -1018,6 +1023,8 @@ async function viewLatestResult(
     result = await client.getResult(submissionId);
   } catch (error) {
     if (error instanceof ApiError && [404, 409, 425].includes(error.status)) {
+      if (!studentState.isActive()) return;
+      showResultPanel(assignment, { state: "graded", rubric: [], diagnostics: [] }, submissionId, "선택 과제의 최신 제출");
       void vscode.window.showInformationMessage("채점은 끝났지만 결과가 아직 공개되지 않았습니다.");
       return;
     }
@@ -1026,12 +1033,13 @@ async function viewLatestResult(
   if (!studentState.isActive()) {
     return;
   }
-  renderResult(output, assignment, result);
+  renderResult(output, assignment, result, submissionId, "선택 과제의 최신 제출");
   publishDiagnostics(diagnostics, result.diagnostics, assignment.assignmentPath);
-  output.show(true);
 }
 
-function renderResult(output: vscode.OutputChannel, assignment: Assignment, result: GradeResult): void {
+function renderResult(output: vscode.OutputChannel, assignment: Assignment, result: GradeResult, receipt: string, context: string): void {
+  showResultPanel(assignment, result, receipt, context);
+  output.hide();
   output.clear();
   output.appendLine(assignment.title);
   output.appendLine("=".repeat(Math.max(assignment.title.length, 12)));

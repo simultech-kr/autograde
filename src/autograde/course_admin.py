@@ -102,6 +102,59 @@ class CourseAdminService:
         with self.state._connection() as db:
             return _course(db, course_key)
 
+    def management_overview(self):
+        """Credential-free offering summaries; latest active enrollment x release only.
+
+        Read one SQLite snapshot without building a student x assignment matrix.
+        A repeated submission replaces its previous status, not the denominator.
+        """
+        with self.state._connection() as db:
+            db.execute('BEGIN')
+            courses = [dict(row) for row in db.execute(
+                'SELECT * FROM admin_courses ORDER BY code,year DESC,semester,section,course_key')]
+            students = {row['course_key']: dict(row) for row in db.execute(
+                'SELECT e.course_key,COUNT(*) enrolled_students,'
+                'SUM(CASE WHEN e.active=1 AND s.active=1 THEN 1 ELSE 0 END) active_students '
+                'FROM platform_enrollments e JOIN platform_students s ON s.id=e.student_id GROUP BY e.course_key')}
+            assignments = {row['course_key']: row['count'] for row in db.execute(
+                'SELECT course_key,COUNT(*) count FROM bundle_assignment_releases WHERE active=1 GROUP BY course_key')}
+            latest = db.execute('''
+                WITH ranked AS (
+                  SELECT a.course_key,r.state,r.submission_id,
+                    ROW_NUMBER() OVER (PARTITION BY r.student_id,r.assignment_id
+                      ORDER BY r.received_at DESC,r.submission_id DESC) position
+                  FROM bundle_submission_requests r
+                  JOIN bundle_assignment_releases a ON a.assignment_id=r.assignment_id AND a.active=1
+                  JOIN platform_enrollments e ON e.student_id=r.student_id AND e.course_key=a.course_key AND e.active=1
+                  JOIN platform_students s ON s.id=r.student_id AND s.active=1
+                )
+                SELECT r.course_key,r.state,g.score,g.max_score,g.published_at
+                FROM ranked r LEFT JOIN bundle_submission_results g ON g.submission_id=r.submission_id
+                WHERE r.position=1
+            ''').fetchall()
+            totals = {}
+            for row in latest:
+                counts = totals.setdefault(row['course_key'], dict(submitted=0, completed=0, needs_work=0, waiting=0, errors=0, unknown=0))
+                counts['submitted'] += 1
+                state = row['state']
+                if state in ('received', 'accepted', 'queued', 'running', 'graded'):
+                    counts['waiting'] += 1
+                elif state in ('rejected', 'infra_failed', 'assessment_failed', 'failed'):
+                    counts['errors'] += 1
+                elif state == 'published' and row['published_at'] and row['max_score'] is not None and row['max_score'] > 0 and row['score'] is not None and 0 <= row['score'] <= row['max_score']:
+                    counts['completed' if row['score'] == row['max_score'] else 'needs_work'] += 1
+                else:
+                    counts['unknown'] += 1
+            for course in courses:
+                roster = students.get(course['course_key'], {})
+                course['enrolled_students'] = roster.get('enrolled_students', 0)
+                course['active_students'] = roster.get('active_students', 0)
+                course['active_assignments'] = assignments.get(course['course_key'], 0)
+                course.update(totals.get(course['course_key'], dict(submitted=0, completed=0, needs_work=0, waiting=0, errors=0, unknown=0)))
+                course['expected'] = course['active_students'] * course['active_assignments']
+                course['not_submitted'] = max(0, course['expected'] - course['submitted'])
+            return courses
+
     def is_active(self, course_key):
         try:
             return self.get_course(course_key)['status'] == 'active'

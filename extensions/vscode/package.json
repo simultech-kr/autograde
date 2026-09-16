@@ -2,7 +2,7 @@
   "name": "autograde-vscode",
   "displayName": "Autograde",
   "description": "Download, submit, and review Autograde assignments from Linux, macOS, or WSL2.",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "private": true,
   "publisher": "autograde",
   "repository": {

@@ -16,6 +16,7 @@ from .platform_auth import InvalidSignedValue, sign_browser_value, verify_browse
 from .platform_service import PlatformAPIError, PlatformResponse
 from .platform_state import PlatformAccessDenied, PlatformConflict, PlatformNotFound
 from .platform_qr import course_login_qr_svg
+from .web_theme import THEME_CSS
 
 
 _COOKIE = "autograde_instructor_web"
@@ -41,6 +42,7 @@ button,.button{display:inline-block;min-height:44px;padding:10px 16px;border:0;b
 .warning{background:#fff7ed;border-left-color:#c2410c}.error{background:#fef2f2;border-left-color:#b91c1c}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px}
 table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:12px;border-bottom:1px solid #cbd5e1;vertical-align:top;overflow-wrap:anywhere}
 .table-scroll{overflow-x:auto}pre{white-space:pre-wrap;overflow-wrap:anywhere}code{font-size:1.05em}.steps{padding:0;display:flex;flex-wrap:wrap;gap:8px;list-style:none}.steps li{padding:8px;border:1px solid #cbd5e1;border-radius:6px}.steps [aria-current]{font-weight:bold;border:2px solid #2563eb}
+.admin-offerings{min-width:860px}.admin-offerings th{white-space:nowrap}.admin-offerings th[scope=row]{white-space:normal;min-width:150px;word-break:keep-all}.admin-offerings td{word-break:keep-all}.admin-offerings .summary{min-width:230px}.admin-offerings .manage{min-width:160px}.admin-offerings .manage a{display:inline-block;margin-bottom:5px}
 :focus-visible{outline:3px solid #0f172a;outline-offset:3px}details{margin:12px 0}summary{cursor:pointer;min-height:44px;padding:8px}.actions{display:flex;gap:12px;flex-wrap:wrap}
 @media(max-width:760px){.shell{display:block}nav{display:flex;flex-wrap:wrap;padding:8px}nav a{padding:8px}main{padding:12px}section,.card{padding:16px}}
 """
@@ -107,7 +109,7 @@ class InstructorWeb:
     """Small MVC adapter. Authentication always precedes service reads/writes."""
 
     def __init__(self, course_admin, enrollment_admin, assignment_admin, *, authorize,
-                 secret, web_url, submissions=None):
+                 secret, web_url, submissions=None, submission_review=None):
         self.courses = course_admin
         self.students = enrollment_admin
         self.assignments = assignment_admin
@@ -115,6 +117,7 @@ class InstructorWeb:
         self.secret = secret
         self.web_url = web_url.rstrip("/")
         self.submissions = submissions
+        self.submission_review = submission_review
 
     @staticmethod
     def matches(path):
@@ -180,7 +183,7 @@ class InstructorWeb:
                               course=course, status=409 if isinstance(exc, PlatformConflict) else 400, cookie=cookie)
 
     def _page(self, title, body, *, course=None, cookie=None, status=200):
-        nav = '<a href="/instructor">수업 관리</a>'
+        nav = '<a href="/instructor/admin">관리자 · 교과목·분반</a><a href="/instructor">수업 관리</a>'
         context = "교수자 관리 · 공유 운영자 계정"
         if course:
             base = self._base(course)
@@ -194,7 +197,7 @@ class InstructorWeb:
             secure = "; Secure" if self.web_url.startswith("https://") else ""
             headers["Set-Cookie"] = f"{_COOKIE}={cookie}; Path=/; Max-Age=3600; HttpOnly; SameSite=Strict{secure}"
         document = ('<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
-                    f'<title>{_e(title)} · Autograde</title><style>{_STYLE}</style></head><body><header><h1>Autograde 교수자</h1><div>{_e(context)}</div></header>'
+                    f'<title>{_e(title)} · Autograde</title><style>{_STYLE}{THEME_CSS}</style></head><body><header><h1>Autograde 교수자</h1><div>{_e(context)}</div></header>'
                     f'<div class="shell"><nav aria-label="교수자 메뉴">{nav}</nav><main><h2>{_e(title)}</h2>{body}'
                     '<p class="hint">공유 교수자 계정은 개인별 권한을 제공하지 않습니다. 공용 학생 PC에서 사용하지 마세요. '
                     'pilot-local 실행은 보안 격리가 아닙니다.</p></main></div></body></html>')
@@ -215,6 +218,8 @@ class InstructorWeb:
         return PlatformResponse(303, None, {"Location": path})
 
     def _root_request(self, method, path, form, session):
+        if method == 'GET' and (path == '/instructor/admin' or path.startswith('/instructor/admin/subjects/')):
+            return self._admin_page(path, session)
         if method == "POST" and path == "/instructor/courses":
             course = self.courses.create_course(code=_value(form, "code"), name=_value(form, "name"),
                                                 year=int(_value(form, "year")), semester=_value(form, "semester"),
@@ -223,7 +228,7 @@ class InstructorWeb:
         if method != "GET" or path != "/instructor":
             raise PlatformNotFound()
         courses = self.courses.list_courses()
-        body = '<div class="grid">' + ''.join(
+        body = '<p><a class="button" href="/instructor/admin">교과목·분반별 관리자 현황 열기</a></p><div class="grid">' + ''.join(
             f'<section><h3><a href="{self._base(c)}">{_e(c.get("name") or c["code"])}</a></h3><p>{_e(c["code"])} · {_e(_STATUS.get(c["status"], c["status"]))}</p>'
             f'<p>{_e(c.get("year") or "정보 확인 필요")} / {_e(c.get("semester"))} / {_e(c.get("section"))}</p></section>' for c in courses) + '</div>'
         if not courses:
@@ -231,21 +236,80 @@ class InstructorWeb:
         body += '<section><h3>새 수업</h3>' + self._form('/instructor/courses', session, self._course_fields({}) + _button('수업 등록')) + '</section>'
         return "수업 관리", body
 
+    def _admin_page(self, path, session):
+        courses = self.courses.management_overview()
+        match = re.fullmatch(r'/instructor/admin/subjects/([a-z0-9_-]{1,32})', path)
+        if path != '/instructor/admin' and not match:
+            raise PlatformNotFound()
+        code = match[1] if match else None
+        groups = {}
+        for course in courses:
+            groups.setdefault(course['code'], []).append(course)
+        if code is not None and code not in groups:
+            raise PlatformNotFound()
+        body = ('<p>교과목을 선택한 뒤 학년도·학기·분반 단위로 학생, 과제, 제출을 관리합니다. '
+                '같은 학번도 분반마다 별도 수강·인증 범위가 적용됩니다.</p>'
+                '<details><summary>현황 집계 기준과 완료 판정 안내</summary><div class="notice">현황은 활성 학생 × 활성 과제 릴리스의 최신 제출 기준입니다. '
+                '재제출 횟수를 합산하지 않습니다. <strong>기준 충족은 공개된 총점이 만점인 제출</strong>이며 '
+                '교수자의 최종 평가·수료 판정이 아닙니다. 비활성 수강과 비활성 과제는 집계에서 제외합니다. '
+                '미제출은 아직 접수본이 없다는 뜻이며 마감 위반 판정이 아닙니다.</div></details>')
+        if code is None:
+            body += f'<p>교과목 {len(groups)}개 · 분반/수업 {len(courses)}개 · <a href="/instructor/admin">현황 새로고침</a></p><div class="grid">'
+            for subject, offerings in groups.items():
+                title = next((c['name'] for c in offerings if c['name']), subject)
+                body += (f'<section><h3><a href="/instructor/admin/subjects/{_e(subject)}">{_e(subject)} · {_e(title)}</a></h3>'
+                         f'<p>{len(offerings)}개 분반/수업 · 수강 중 {sum(c["active_students"] for c in offerings)}건</p>'
+                         f'<p>기준 충족 {sum(c["completed"] for c in offerings)} · 수정 필요 {sum(c["needs_work"] for c in offerings)} · '
+                         f'미제출 {sum(c["not_submitted"] for c in offerings)}</p></section>')
+            body += '</div><section><h3>교과목·첫 분반 등록</h3>'
+            body += self._form('/instructor/courses', session, self._course_fields({}) + _button('교과목·분반 등록')) + '</section>'
+            return '관리자 · 교과목별 현황', body
+        offerings = groups[code]
+        body += '<p><a href="/instructor/admin">전체 교과목</a> · <a href="' + _e(path) + '">현황 새로고침</a></p>'
+        periods = {}
+        for course in offerings:
+            periods.setdefault((course['year'], course['semester']), []).append(course)
+        semesters = {'1': '1학기', '2': '2학기', 'summer': '여름학기', 'winter': '겨울학기'}
+        for (year, semester), sections in periods.items():
+            label = f'{year}학년도 · {semesters.get(semester, semester)}' if year else '기존 수업 · 학기·분반 정보 보완 필요'
+            body += f'<section><h3>{_e(label)}</h3><div class="table-scroll"><table class="admin-offerings"><caption>{_e(code)} 분반별 최신 현황</caption><thead><tr>'
+            body += ''.join(f'<th scope="col">{text}</th>' for text in ('분반 / 수업명', '운영 상태', '수강 중 / 등록', '활성 과제', '제출 현황 (학생 × 과제)', '관리'))
+            body += '</tr></thead><tbody>'
+            for course in sections:
+                base = self._base(course)
+                body += (f'<tr><th scope="row"><a href="{base}">{_e(course["section"] or "분반 미설정")} · {_e(course["name"] or course["code"])}</a></th>'
+                         f'<td>{_e(_STATUS[course["status"]])}</td><td>{course["active_students"]} / {course["enrolled_students"]}</td>'
+                         f'<td>{course["active_assignments"]}</td><td class="summary">기준 충족 <strong>{course["completed"]}</strong> · 수정 필요 <strong>{course["needs_work"]}</strong><br>'
+                         f'미제출 {course["not_submitted"]} · 채점·공개 대기 {course["waiting"]}<br>처리 오류 {course["errors"]} · 확인 필요 {course["unknown"]}</td>'
+                         f'<td class="manage"><a href="{base}/students">학생 관리</a><br><a href="{base}/assignments">과제 등록·관리</a><br>'
+                         f'<a href="{base}/submissions">학생별 결과·코드 확인</a><br><a href="{base}">분반 설정·QR</a></td></tr>')
+            body += '</tbody></table></div></section>'
+        template = next((c for c in offerings if c['year']), offerings[0])
+        defaults = dict(code=code, name=template['name'], year=template['year'] or datetime.now().year,
+                        semester=template['semester'] or '1', section='', status='preparation')
+        fields = self._course_fields(defaults)
+        body += '<section><h3>이 교과목에 분반 추가</h3><p>학년도·학기·분반을 확인하세요. 학생·과제·비밀번호는 다른 분반에서 자동 복사하지 않습니다.</p>'
+        body += self._form('/instructor/courses', session, fields + _button('새 분반 등록')) + '</section>'
+        return code + ' · 학기·분반 관리', body
+
     def _course_fields(self, course):
         fields = _field('name', '수업명', course.get('name'), required=True, extra='maxlength="100"')
         if not course or course.get('status') == 'preparation' or course.get('legacy'):
             fields += '<div class="grid">' + _field('code', '교과목 코드', course.get('code'), required=True, extra='pattern="[a-z0-9_-]{1,32}" maxlength="32"')
             fields += _field('year', '학년도', course.get('year') or datetime.now().year, kind='number', required=True)
             fields += _select('semester', '학기', [('1', '1학기'), ('2', '2학기'), ('summer', '여름'), ('winter', '겨울')], course.get('semester'))
-            fields += _field('section', '분반', course.get('section') or '01', required=True, extra='maxlength="16"') + '</div>'
+            fields += _field('section', '분반', course.get('section', '01'), required=True, extra='maxlength="16"') + '</div>'
         fields += _textarea('description', '수업 설명', course.get('description'))
-        if course:
+        if 'revision' in course:
             fields += f'<input type="hidden" name="revision" value="{course["revision"]}">'
         return fields
 
     def _course_request(self, method, course, route, form, session, authorization):
         base = self._base(course)
         key = course['course_key']
+        review = re.fullmatch(r'submissions/(bsub_[A-Za-z0-9_-]+)(?:/files/([0-9]{1,5}))?', route)
+        if review and method == 'GET' and self.submission_review:
+            return self.submission_review(key, authorization, review[1], int(review[2]) if review[2] else None)
         if route == 'submissions' and method == 'GET':
             if self.submissions:
                 return self.submissions(key, authorization)

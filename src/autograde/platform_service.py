@@ -54,6 +54,8 @@ from .platform_pinner import (
     SubmissionSourceUnavailable,
 )
 from .platform_qr import assignment_claim_qr_svg
+from .web_theme import THEME_CSS
+from .submission_review import attention_reason, render_review
 from .platform_state import (
     DeviceAuthorization,
     DeviceAuthorizationExpired,
@@ -1351,6 +1353,15 @@ class StudentPlatformService:
 
     # Instructor dashboard -------------------------------------------
 
+    def instructor_submission_page(self, authorization: str, submission_id: str,
+                                   file_index: int | None = None) -> PlatformResponse:
+        self._authorize_instructor(authorization)
+        try:
+            status, body = render_review(self.state, self.bundle_store, self.course_key, submission_id, file_index)
+        except PlatformNotFound as exc:
+            raise PlatformAPIError(404, 'submission_not_found', '현재 수업에서 제출물 또는 파일을 찾을 수 없습니다.') from exc
+        return PlatformResponse(status, body, {'Content-Type': 'text/html; charset=utf-8'})
+
     def instructor_dashboard(self, authorization: str) -> Mapping[str, Any]:
         """Return a credential-free operational roster/assignment matrix."""
 
@@ -1400,7 +1411,7 @@ class StudentPlatformService:
             "rows": projected_rows,
         }
 
-    def instructor_dashboard_page(self, authorization: str) -> PlatformResponse:
+    def instructor_dashboard_page(self, authorization: str, *, portal: bool = False) -> PlatformResponse:
         dashboard = self.instructor_dashboard(authorization)
         rows = dashboard["rows"]
         course = dashboard["course"]
@@ -1445,10 +1456,21 @@ class StudentPlatformService:
                 "</section>"
             )
         table_rows = []
+        review_items = []
+        course_base = '/courses/' + quote(self.course_key, safe='') + '/instructor'
         for row in rows:
             score = "—"
             if row["score"] is not None:
                 score = f"{row['score']:g} / {row['max_score']:g}"
+            reason = attention_reason(row['state'], row['score'], row['max_score'])
+            review_link = '제출 없음'
+            if row['latest_submission_id']:
+                review_url = course_base + '/submissions/' + quote(row['latest_submission_id'], safe='')
+                review_link = (f'<a href="{review_url}">코드·제출 이력 확인</a>' if portal
+                               else '학생 웹의 교수자 화면에서 코드 확인')
+                if '확인 필요' in reason:
+                    review_items.append(f'<li>{html.escape(str(row["student_key"]))} · '
+                                        f'{html.escape(str(row["title"]))} · {reason} · {review_link}</li>')
             table_rows.append(
                 "<tr>"
                 f"<td>{html.escape(str(row['student_key']))}</td>"
@@ -1461,8 +1483,11 @@ class StudentPlatformService:
                 f"<td>{html.escape(str(row['state'] or '미제출'))}</td>"
                 f"<td>{html.escape(score)}</td>"
                 f"<td>{html.escape(str(row['latest_received_at'] or '—'))}</td>"
+                f"<td>{reason}<br>{review_link}</td>"
                 "</tr>"
             )
+        dashboard_url = course_base + '/submissions' if portal else '/instructor'
+        management_url = course_base if portal else '/instructor'
         body = (
             "<!doctype html><html lang=\"ko\"><head><meta charset=\"utf-8\">"
             "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
@@ -1475,11 +1500,15 @@ class StudentPlatformService:
             "th,td{text-align:left;padding:10px 14px;border-bottom:1px solid #dce4ec;white-space:nowrap}"
             "th{background:#eef3f7;font-weight:500}"
             "@media(max-width:600px){main{padding:16px;margin:12px}body>nav{padding:12px}}"
-            "</style></head><body><main data-audience=\"instructor\">"
+            + THEME_CSS + "</style></head><body><main data-audience=\"instructor\">"
             "<div class=\"audience\">교수자 관리 · 교과목 전체 현황</div>"
             f"<h1>{html.escape(self.course_key)} 채점 현황</h1>"
             f"<p>갱신 시각: {html.escape(str(dashboard['generated_at']))} · "
-            "<a href=\"/instructor\">새로 고침</a></p>"
+            f'<a href="{dashboard_url}">새로 고침</a> · <a href="{management_url}">수업 관리</a></p>'
+            f'<h2>확인 필요한 제출 ({len(review_items)}건)</h2>'
+            '<p>최신 제출의 감점·처리 실패만 모았습니다. 미제출·처리 중은 전체 표에서 확인하세요. '
+            '부정행위 판정이 아니며, 원본 코드는 읽기 전용입니다.</p><ul>'
+            + ''.join(review_items) + '</ul>'
             "<h2>교과목 요약</h2>"
             f"<p>등록 학생 {int(course['enrolled_students'])}명 · "
             f"활성 학생 {int(course['active_students'])}명 · "
@@ -1501,7 +1530,7 @@ class StudentPlatformService:
             + ("<p>공개된 bundle 과제가 없습니다.</p>" if not assignment_cards else "")
             + "<table><thead><tr><th>학생</th><th>과제</th><th>릴리스</th>"
             "<th>수락</th><th>다운로드</th><th>제출</th><th>최신 상태</th><th>점수</th>"
-            "<th>최근 제출</th></tr></thead><tbody>"
+            "<th>최근 제출</th><th>확인·코드</th></tr></thead><tbody>"
             + "".join(table_rows)
             + "</tbody></table>"
             + ("<p>등록된 학생 또는 과제가 없습니다.</p>" if not table_rows else "")

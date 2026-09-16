@@ -8,6 +8,8 @@ if (!$vsPath) { throw 'A Visual Studio installation with MSBuild and CoreEditor 
 $msbuild = Join-Path $vsPath 'MSBuild\Current\Bin\MSBuild.exe'
 Push-Location $PSScriptRoot
 try {
+    [xml]$sourceManifest = Get-Content -Raw 'Autograde.VisualStudio/source.extension.vsixmanifest'
+    $expectedIdentity = $sourceManifest.PackageManifest.Metadata.Identity
     & dotnet run --project Autograde.Checks/Autograde.Checks.csproj --configuration $Configuration
     if ($LASTEXITCODE -ne 0) { throw 'Core checks failed; VSIX packaging stopped.' }
     & $msbuild Autograde.VisualStudio/Autograde.VisualStudio.csproj /restore /t:Rebuild /m "/p:Configuration=$Configuration" /p:DeployExtension=false /nologo
@@ -21,7 +23,14 @@ try {
         foreach ($required in @('extension.vsixmanifest', 'Autograde.VisualStudio.dll', 'Autograde.VisualStudio.pkgdef', 'Autograde.Core.dll', 'Newtonsoft.Json.dll')) {
             if ($names -notcontains $required) { throw "VSIX dependency missing: $required" }
         }
+        $reader = [System.IO.StreamReader]::new($archive.GetEntry('extension.vsixmanifest').Open())
+        try { [xml]$builtManifest = $reader.ReadToEnd() } finally { $reader.Dispose() }
+        $builtIdentity = $builtManifest.PackageManifest.Metadata.Identity
+        if ($builtIdentity.Id -ne $expectedIdentity.Id -or $builtIdentity.Version -ne $expectedIdentity.Version) {
+            throw 'Built VSIX identity/version differs from source. Do not publish this artifact.'
+        }
     } finally { $archive.Dispose() }
     Write-Host "VSIX built (installation smoke tests still required): $vsix"
+    Write-Host "Extension ID: $($expectedIdentity.Id) / Version: $($expectedIdentity.Version)"
     Get-FileHash -Algorithm SHA256 $vsix
 } finally { Pop-Location }
