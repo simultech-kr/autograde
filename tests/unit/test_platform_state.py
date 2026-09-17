@@ -246,7 +246,7 @@ def test_bootstrap_has_an_independent_migration_namespace(database: Path) -> Non
     StateStore(database)
     platform = PlatformStateStore(database)
 
-    assert platform.schema_version() == 11
+    assert platform.schema_version() == 12
     with sqlite3.connect(database) as connection:
         tables = {
             row[0]
@@ -336,7 +336,7 @@ def test_v4_migration_backfills_existing_refresh_rotation_count(
         )
         connection.commit()
     migrated = PlatformStateStore(database)
-    assert migrated.schema_version() == 11
+    assert migrated.schema_version() == 12
     with sqlite3.connect(database) as connection:
         family = connection.execute(
             "SELECT course_key, refresh_rotation_count "
@@ -420,7 +420,7 @@ def test_v8_migration_removes_inactive_passwords_and_enforces_invariant(
 
     migrated = PlatformStateStore(database)
 
-    assert migrated.schema_version() == 11
+    assert migrated.schema_version() == 12
     with sqlite3.connect(database) as connection:
         remaining = connection.execute(
             "SELECT enrollment_id FROM platform_student_passwords"

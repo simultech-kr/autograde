@@ -276,6 +276,10 @@ def test_course_lockout_inactive_enrollment_and_instructor_view(portal):
     status, _, body = request(web, path, authorization=auth)
     assert status == 200, body
     assert (WEB + "/courses/come3105").encode() in body
+    assert b'<body class="responsive-instructor"><nav' in body
+    assert b'href="/courses/come2201/instructor"' in body
+    assert b'/assignment-claim/' not in body
+    assert b'class="result-table"' in body
     assert b"/courses/come2201/instructor" in body
     assert (API + "/assignments/").encode() not in body
 

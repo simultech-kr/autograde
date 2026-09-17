@@ -363,6 +363,18 @@ test("Retry-After is preserved on API errors", async () => {
   );
 });
 
+test("binary body remains covered by timeout after response headers arrive", async () => {
+  const transport = new HttpTransport(() => "https://example.edu", async (_url, init) => {
+    const stream = new ReadableStream<Uint8Array>({ start(controller) {
+      controller.enqueue(new Uint8Array([1]));
+      init?.signal?.addEventListener("abort", () => controller.error(new Error("aborted")), {once:true});
+    }});
+    return new Response(stream, {headers:{"Content-Type":"application/gzip"}});
+  });
+  await assert.rejects(transport.requestBytes("/file", {method:"GET"}, undefined, {timeoutMs:25}),
+    (error: unknown) => error instanceof ApiError && error.code === "request_timeout");
+});
+
 test("binary responses enforce content type and byte limits", async () => {
   const valid = new HttpTransport(
     () => "https://grade.example.edu",

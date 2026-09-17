@@ -71,9 +71,9 @@ def _digest(connection, excluded=None):
 
 def _preflight(connection, course):
     version = connection.execute("SELECT MAX(version) FROM platform_schema_migrations").fetchone()[0]
-    if version not in (10, 11):
-        raise ValueError("reset supports schema 10/11 only; do not modify the database manually")
-    if version == 11:
+    if version not in (10, 11, 12):
+        raise ValueError("reset supports schema 10/11/12 only; do not modify the database manually")
+    if version >= 11:
         if not connection.execute("SELECT 1 FROM admin_courses WHERE course_key=?", (course,)).fetchone():
             raise ValueError("course must already be registered")
         if connection.execute("SELECT 1 FROM instructor_assignment_jobs WHERE course_key=? "
@@ -102,7 +102,11 @@ def _preflight(connection, course):
     guard = connection.execute("SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = ?", (GUARD,)).fetchone()
     if not guard:
         raise ValueError("expected acceptance immutability guard is missing")
-    definitions = TARGETS + ((('admin_roster_previews', 'course_key = ?'),) if version == 11 else ())
+    diagnostics = (
+        ('download_diagnostic_events', 'attempt_id IN (SELECT attempt_id FROM download_diagnostic_attempts WHERE course_key=?)'),
+        ('download_diagnostic_attempts', 'course_key = ?'),
+    ) if version >= 12 else ()
+    definitions = diagnostics + TARGETS + ((('admin_roster_previews', 'course_key = ?'),) if version >= 11 else ())
     targets = {table: {row[0] for row in connection.execute(
         f"SELECT rowid FROM {_quote(table)} WHERE {where}", (course,)
     )} for table, where in definitions}

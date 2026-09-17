@@ -46,13 +46,10 @@ namespace Autograde.VisualStudio
             Text("다음 할 일", 14, true); Text(model.NextStep);
             foreach (var item in model.Criteria)
             {
-                Text(item.Status + " · " + item.Title + "  " + item.Score, 14, true);
-                Text(item.Feedback);
-            }
-            if (model.DiagnosticPreview.Count > 0)
-            {
-                Text("추가 피드백 (최대 5건 · 전체는 상세 진단)", 14, true);
-                foreach (var line in model.DiagnosticPreview) Text(line);
+                var label = new TextBlock { Text = item.Status + " · " + item.Title + "  " + item.Score, TextWrapping = TextWrapping.Wrap };
+                var feedback = new TextBlock { Text = item.Feedback, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(8) };
+                ThemeResources.Label(label); ThemeResources.Label(feedback);
+                content.Children.Add(new Expander { Header = label, Content = feedback, Margin = new Thickness(0, 4, 0, 4) });
             }
             var details = new TextBox { Text = model.Details, IsReadOnly = true, TextWrapping = TextWrapping.Wrap,
                 AcceptsReturn = true, MaxHeight = 180, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Padding = new Thickness(6) };

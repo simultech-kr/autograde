@@ -117,6 +117,7 @@ namespace Autograde.Core
                     if (response.Content.Headers.ContentLength > limit)
                     {
                         if (!response.IsSuccessStatusCode) throw new ServiceError((int)response.StatusCode, "request_failed");
+                        if (binary) throw new DownloadFailure("AG-DL-INTEGRITY-SIZE");
                         throw new InvalidDataException("서버 응답이 너무 큽니다.");
                     }
                     using (var input = await response.Content.ReadAsStreamAsync().ConfigureAwait(false))
@@ -129,6 +130,7 @@ namespace Autograde.Core
                             if (output.Length + count > limit)
                             {
                                 if (!response.IsSuccessStatusCode) throw new ServiceError((int)response.StatusCode, "request_failed");
+                                if (binary) throw new DownloadFailure("AG-DL-INTEGRITY-SIZE");
                                 throw new InvalidDataException("서버 응답이 너무 큽니다.");
                             }
                             output.Write(buffer, 0, count);
@@ -151,7 +153,7 @@ namespace Autograde.Core
                         }
                         string media = response.Content.Headers.ContentType?.MediaType;
                         if (binary && media != "application/gzip" && media != "application/octet-stream" && media != "application/x-gzip")
-                            throw new InvalidDataException("과제 파일 응답 형식이 올바르지 않습니다.");
+                            throw new DownloadFailure("AG-DL-RESPONSE-TYPE");
                         if (!binary && response.StatusCode != HttpStatusCode.NoContent && media != "application/json")
                             throw new InvalidDataException("JSON API 대신 다른 페이지가 응답했습니다. 서버 주소를 확인하세요.");
                         timeout.Token.ThrowIfCancellationRequested();
@@ -181,7 +183,7 @@ namespace Autograde.Core
                 var device = Parse(await Send("POST", "/v1/device-authorizations", new JObject
                 {
                     ["client"] = "visualstudio-extension",
-                    ["extension_version"] = "0.5.0",
+                    ["extension_version"] = "0.5.2",
                     ["device_name"] = "Visual Studio / Windows",
                     ["claim_code"] = claim
                 }, null, null, null, cancel).ConfigureAwait(false));
@@ -292,12 +294,36 @@ namespace Autograde.Core
             return bytes;
         }
 
-        public async Task<byte[]> StarterAsync(JObject assignment, CancellationToken cancel)
+        public async Task<string> ReportDownloadAsync(string assignmentId, JObject payload, CancellationToken cancel)
+        {
+            int version; string token;
+            lock (stateLock) { version = sessionVersion; token = access; }
+            using (var limit = CancellationTokenSource.CreateLinkedTokenSource(cancel))
+            {
+                limit.CancelAfter(TimeSpan.FromSeconds(3));
+                try {
+                    if (token == null) return "서버 전달 실패 · 로그인 필요";
+                    var ack = Parse(await Send("POST", "/v1/assignments/" + Uri.EscapeDataString(assignmentId) + "/download-diagnostics",
+                        payload, null, token, null, limit.Token).ConfigureAwait(false));
+                    if ((bool?)ack["stored"] != true || (string)ack["attempt_id"] != (string)payload["attempt_id"] || (int?)ack["seq"] != (int?)payload["seq"])
+                        return "서버 전달 확인 실패 · 진단 정보를 복사해 문의하세요";
+                    lock (stateLock) if (version != sessionVersion) return "로그인 변경 · 진단 폐기";
+                    return "서버에 전달됨";
+                }
+                catch (ServiceError ex) when (ex.Status == 404 || ex.Status == 405) { return "서버 진단 기능 미지원"; }
+                catch (Exception) { return "서버 전달 실패 · 진단 정보를 복사해 문의하세요"; }
+            }
+        }
+        public async Task<byte[]> StarterAsync(JObject assignment, CancellationToken cancel, Action<string> stage = null)
         {
             string id = Required(assignment, "assignment_id");
+            stage?.Invoke("requesting");
             var bytes = await Authorized("GET", "/v1/assignments/" + Uri.EscapeDataString(id) + "/starter", null, null, cancel).ConfigureAwait(false);
-            if (Bundle.Digest(bytes) != Required(assignment["starter"], "sha256") || bytes.Length != (long?)assignment["starter"]?["size_bytes"])
-                throw new InvalidDataException("과제 파일 크기 또는 SHA-256 불일치");
+            stage?.Invoke("verifying");
+            if (bytes.Length != (long?)assignment["starter"]?["size_bytes"])
+                throw new DownloadFailure("AG-DL-INTEGRITY-SIZE");
+            if (Bundle.Digest(bytes) != Required(assignment["starter"], "sha256"))
+                throw new DownloadFailure("AG-DL-INTEGRITY-HASH");
             return bytes;
         }
         public async Task<JObject> SubmitAsync(string assignment, byte[] archive, CancellationToken cancel)

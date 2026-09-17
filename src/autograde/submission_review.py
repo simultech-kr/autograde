@@ -8,6 +8,7 @@ from urllib.parse import quote
 from .platform_bundle import BundleError, BundleStorageError
 from .platform_state import PlatformNotFound
 from .web_theme import THEME_CSS
+from .instructor_responsive import RESPONSIVE_CSS
 
 MAX_SOURCE_BYTES = 256 * 1024
 MAX_LINES = 5000
@@ -86,7 +87,7 @@ def render_review(state, store, course_key, submission_id, file_index=None):
         if file_index is not None and not 0 <= file_index < len(files):
             raise PlatformNotFound('file not found')
         start = ((file_index or 0) // 200) * 200
-        body += '<h2>제출 파일</h2><ul>'
+        body += '<h2>제출 파일</h2><ul class="source-files">'
         for index in range(start, min(start + 200, len(files))):
             entry = files[index]
             label = _visible_controls(entry.path)
@@ -126,13 +127,13 @@ def render_review(state, store, course_key, submission_id, file_index=None):
                     body += '<p class="hint">줄 번호 표시 · 제어/방향 전환 문자는 \\uXXXX로 표시합니다.</p>'
                     if truncated:
                         body += '<p>표시 한도(5,000줄 또는 변환 후 256 KiB)에 도달해 일부만 표시합니다.</p>'
-                    body += '<pre class="source-code"><code>' + preview + '</code></pre>'
+                    body += '<pre class="source-code" tabindex="0" role="region" aria-label="제출 코드 원문 · 가로 스크롤 가능"><code>' + preview + '</code></pre>'
     except (BundleError, OSError, tarfile.TarError, KeyError):
         status = 503
         body += '<p class="error" role="alert">제출 원본을 읽을 수 없습니다. 보관 상태를 확인하고 다시 시도하세요.</p>'
     style = ('body{margin:0;font:16px/1.6 system-ui}main{max-width:1200px;margin:24px auto;padding:24px}'
-             'code{overflow-wrap:anywhere}li{margin:6px 0}a{overflow-wrap:anywhere}.notice{padding:16px}' + THEME_CSS)
+             'code{overflow-wrap:anywhere}li{margin:6px 0}a{overflow-wrap:anywhere}.notice{padding:16px}' + THEME_CSS + RESPONSIVE_CSS)
     return status, ('<!doctype html><html lang="ko"><head><meta charset="utf-8">'
                     '<meta name="viewport" content="width=device-width,initial-scale=1">'
                     '<title>제출 코드 확인 · Autograde</title><style>' + style + '</style></head>'
-                    '<body><main>' + body + '</main></body></html>')
+                    '<body class="responsive-instructor"><main>' + body + '</main></body></html>')

@@ -34,6 +34,8 @@ internal static class Program
             var root = (string)setup["target"];
             Bundle.ExtractStarter(await client.StarterAsync(assignment, None), root, client.BaseUrl, id);
             Bundle.VerifyWorkspace(root, client.BaseUrl, id);
+            var diagnostic = new DownloadDiagnostic { Stage = "files_ready", Outcome = "succeeded" };
+            Check(await client.ReportDownloadAsync(id, diagnostic.Payload("0.5.2"), None) == "서버에 전달됨", "live download report");
             File.WriteAllText(Path.Combine(root, "main.c"), "#include <stdio.h>\nint main(void){puts(\"Hello, World!\");return 0;}\n");
             File.WriteAllText(Path.Combine(root, "answer.txt"), "my solution");
             var receipt = await client.SubmitAsync(id, Bundle.CreateSubmission(root).Archive, None);
@@ -105,7 +107,7 @@ internal static class Program
             Check((await client.StarterAsync(assignment, None)).SequenceEqual(snapshot.Archive), "starter digest verified");
             assignment["starter"]["sha256"] = "sha256:" + new string('0', 64);
             try { await client.StarterAsync(assignment, None); throw new Exception("digest mismatch accepted"); }
-            catch (InvalidDataException) { checks++; }
+            catch (DownloadFailure error) when (error.Code == "AG-DL-INTEGRITY-HASH") { checks++; }
             var receipt = await client.SubmitAsync("asn_one", snapshot.Archive, None);
             Check((string)receipt["submission_id"] == "bsub_one", "submission envelope");
             Check(handler.Keys.Count == 2 && handler.Keys.Distinct().Count() == 1, "retry same idempotency key");

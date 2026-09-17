@@ -31,6 +31,7 @@ from typing import Any, Iterator, List, Mapping, Optional, Sequence, Tuple, Unio
 from urllib.parse import urlsplit
 
 from .domain import DatetimeValue, git_oid, utc_iso
+from .download_diagnostics import SCHEMA as _DOWNLOAD_DIAGNOSTICS_SCHEMA
 from .gitops import normalize_assignment_subpath
 from .platform_runner_image import (
     RunnerImageAvailabilityError,
@@ -1522,6 +1523,7 @@ _MIGRATIONS = {
     9: _MIGRATION_9,
     10: _MIGRATION_10,
     11: "",  # Incremental admin repositories initialized atomically below.
+    12: _DOWNLOAD_DIAGNOSTICS_SCHEMA,
 }
 _LATEST_SCHEMA_VERSION = max(_MIGRATIONS)
 
@@ -6230,7 +6232,7 @@ class PlatformStateStore:
         client_platform: Optional[str] = None,
         at: Optional[DatetimeValue] = None,
     ) -> BundleDownloadEvent:
-        """Record a successful starter delivery with retry-safe event identity."""
+        """Record starter response preparation, not proof of client installation."""
 
         download_id = _required_text(download_id, "download_id")
         access_token_hash = _verifier(access_token_hash, "access_token_hash")

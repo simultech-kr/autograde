@@ -63,6 +63,9 @@ import { ServiceAddressController } from "./serviceAddress";
 import { AssignmentTreeItem, AssignmentsTreeProvider } from "./tree";
 import type { Assignment, GradeResult, ResultDiagnostic, SubmissionSummary } from "./types";
 import { clearResultPanel, showResultPanel } from "./resultPanel";
+import { DownloadDiagnostic, DownloadFailure, stageLabels } from "./downloadDiagnostic";
+import { clearDownloadDiagnostic, rememberDownloadDiagnostic, showDownloadDiagnostic } from "./downloadDiagnosticPanel";
+let diagnosticExtensionVersion = "0.5.2";
 
 const SUCCESSFUL_SUBMISSION_STATES = new Set(["accepted", "queued", "running", "graded", "published"]);
 const FAILED_SUBMISSION_STATES = new Set(["rejected", "infra_failed", "assessment_failed"]);
@@ -98,10 +101,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   let studentState = new EphemeralStudentState();
   let authenticationUiState = false;
   const extensionVersion = String(context.extension.packageJSON.version ?? "0.0.0");
+  diagnosticExtensionVersion = extensionVersion;
 
   const updateAuthenticationUI = async (knownState?: boolean): Promise<boolean> => {
     const authenticated = knownState ?? await tokens.hasSession();
-    if (!authenticated) clearResultPanel();
+    if (!authenticated) { clearResultPanel(); clearDownloadDiagnostic(); }
     authenticationUiState = authenticated;
     await Promise.all([
       vscode.commands.executeCommand(
@@ -144,6 +148,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   };
 
   const auth = new AuthenticationController(client, extensionVersion, (authenticated) => {
+    clearDownloadDiagnostic();
     clearResultPanel();
     studentState = clearStudentSessionResidue(studentState, treeProvider, output, diagnostics);
     void updateAuthenticationUI(authenticated);
@@ -152,6 +157,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
   });
   const assignmentClaims = new AssignmentClaimController(client, extensionVersion, async (assignmentId) => {
+    clearDownloadDiagnostic();
     clearResultPanel();
     studentState = clearStudentSessionResidue(studentState, treeProvider, output, diagnostics);
     await updateAuthenticationUI(true);
@@ -203,6 +209,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   );
 
   context.subscriptions.push(
+    { dispose: clearDownloadDiagnostic },
+    vscode.commands.registerCommand("autograde.downloadDiagnostics", () => showDownloadDiagnostic()),
     { dispose: clearResultPanel },
     connectionMonitor,
     treeView,
@@ -742,28 +750,50 @@ async function downloadBundleAssignment(
   client: AutogradeClient,
   assignment: Assignment,
 ): Promise<void> {
+  const diagnostic = new DownloadDiagnostic();
+  const origin = client.transport.getBaseUrl();
+  const generation = client.tokens.getSessionGeneration?.();
+  const current = (): boolean => client.transport.getBaseUrl() === origin && client.tokens.getSessionGeneration?.() === generation;
+  const checkSession = (): void => { if (!current()) throw new DownloadFailure("AG-DL-AUTH-EXPIRED"); };
+  const report = async (): Promise<void> => {
+    if (!current()) return;
+    try {
+      const bearer = await client.tokens.getAccessToken();
+      if (!current()) return;
+      const payload = diagnostic.payload(diagnosticExtensionVersion, process.platform, vscode.env.remoteName) as {attempt_id:string; seq:number};
+      const ack = await client.transport.request<{stored:boolean;attempt_id:string;seq:number}>(`/v1/assignments/${encodeURIComponent(assignment.id)}/download-diagnostics`,
+        { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(payload) },
+        bearer, { expectedBaseUrl:origin, timeoutMs:3000 });
+      if (!ack || ack.stored !== true || ack.attempt_id !== payload.attempt_id || ack.seq !== payload.seq) throw new Error("diagnostic ack mismatch");
+      diagnostic.delivery = "서버에 전달됨";
+    } catch (error) {
+      diagnostic.delivery = error instanceof ApiError && [404,405].includes(error.status) ? "서버 진단 기능 미지원" : "서버 전달 실패 · 진단 정보를 복사해 문의하세요";
+    }
+  };
+  try {
   const directoryName = safeAssignmentDirectoryName(assignment);
   if (!directoryName) {
-    throw new Error("서비스가 안전한 과제 디렉터리 이름을 제공하지 않았습니다.");
+    throw new DownloadFailure("AG-DL-LOCAL-PATH");
   }
   const parentFolder = await selectCourseWorkspaceFolder(assignment.title);
   if (!parentFolder) {
     return;
   }
+  checkSession();
+  rememberDownloadDiagnostic(diagnostic);
+  await report();
   const parentUri = parentFolder.uri;
   if (await readWorkspaceMarker(parentUri.fsPath)) {
-    throw new Error(
-      "현재 workspace 자체가 과제 폴더입니다. 같은 로그인 세션에서 다음 과제를 받으려면 상위 수업 폴더를 workspace로 여세요.",
-    );
+    throw new DownloadFailure("AG-DL-LOCAL-EXISTS");
   }
   const targetUri = vscode.Uri.joinPath(parentUri, directoryName);
   const targetPath = path.resolve(parentUri.fsPath, directoryName);
   const relation = path.relative(path.resolve(parentUri.fsPath), targetPath);
   if (relation.startsWith("..") || path.isAbsolute(relation)) {
-    throw new Error("선택한 다운로드 경로가 안전하지 않습니다.");
+    throw new DownloadFailure("AG-DL-LOCAL-PATH");
   }
   if (await pathExists(targetPath)) {
-    throw new Error(`대상 경로가 이미 존재합니다: ${directoryName}. 다른 위치를 선택하세요.`);
+    throw new DownloadFailure("AG-DL-LOCAL-EXISTS");
   }
 
   await vscode.window.withProgress(
@@ -777,7 +807,10 @@ async function downloadBundleAssignment(
       const subscription = token.onCancellationRequested(() => controller.abort());
       let extracted = false;
       try {
+        checkSession(); diagnostic.stage = "requesting";
+        await report();
         const archive = await client.getStarter(assignment.id, assignment.starterUrl, controller.signal);
+        checkSession(); diagnostic.stage = "verifying";
         if (token.isCancellationRequested) {
           throw new vscode.CancellationError();
         }
@@ -785,30 +818,41 @@ async function downloadBundleAssignment(
           assignment.starterSizeBytes !== undefined &&
           archive.byteLength !== assignment.starterSizeBytes
         ) {
-          throw new Error("다운로드한 starter 크기가 과제 목록의 값과 일치하지 않습니다.");
+          throw new DownloadFailure("AG-DL-INTEGRITY-SIZE");
         }
         if (assignment.starterSha256 && sha256Hex(archive) !== assignment.starterSha256) {
-          throw new Error("다운로드한 starter SHA-256이 과제 목록의 값과 일치하지 않습니다.");
+          throw new DownloadFailure("AG-DL-INTEGRITY-HASH");
         }
         progress.report({ message: "archive 검증 및 설치 중" });
-        const starter = await extractStarterBundle(archive, targetPath);
+        diagnostic.stage = "installing";
+        let starter;
+        try { starter = await extractStarterBundle(archive, targetPath); }
+        catch (error) {
+          if (error && typeof error === "object" && "code" in error) throw error;
+          throw new DownloadFailure("AG-DL-ARCHIVE-INVALID");
+        }
         extracted = true;
+        checkSession();
         if (token.isCancellationRequested) {
           throw new vscode.CancellationError();
         }
-        await writeWorkspaceMarker(targetPath, {
+        try { await writeWorkspaceMarker(targetPath, {
           schemaVersion: 1,
           serviceBaseUrl: client.transport.getBaseUrl(),
           assignmentId: assignment.id,
-        });
+        }); } catch { throw new DownloadFailure("AG-DL-MARKER-WRITE"); }
+        checkSession(); diagnostic.stage = "files_ready"; diagnostic.outcome = "succeeded";
+        await report();
+        checkSession();
         void vscode.window.showInformationMessage(
           `${assignment.title}을 다운로드했습니다 (${starter.fileCount.toLocaleString()}개 파일).`,
         );
       } catch (error) {
-        if (extracted) {
+        if (extracted && diagnostic.outcome !== "succeeded") {
           await rm(targetPath, { recursive: true, force: true }).catch(() => undefined);
         }
         if (token.isCancellationRequested) {
+          diagnostic.fail(error, true);
           throw new vscode.CancellationError();
         }
         throw error;
@@ -817,7 +861,31 @@ async function downloadBundleAssignment(
       }
     },
   );
-  await revealDownloadedBundle(targetUri, targetPath);
+  try {
+    checkSession(); diagnostic.stage = "opening";
+    await revealDownloadedBundle(targetUri, targetPath);
+    diagnostic.openOutcome = "opened";
+  } catch (error) {
+    if (!current()) return;
+    diagnostic.fail(error);
+    void vscode.window.showWarningMessage(`다운로드는 완료됐지만 과제 폴더를 열지 못했습니다. 파일은 보존됩니다. 탐색기에서 다음 경로를 여세요: ${targetPath}`);
+  }
+  await report();
+  if (current()) {
+    rememberDownloadDiagnostic(diagnostic);
+    if (diagnostic.code) await showDownloadDiagnostic();
+  }
+  } catch (error) {
+    if (!current()) return; // A former student's diagnostic must never reappear after sign-out.
+    diagnostic.fail(error, error instanceof vscode.CancellationError);
+    await report();
+    if (!current()) return;
+    rememberDownloadDiagnostic(diagnostic);
+    if (diagnostic.outcome !== "cancelled") {
+      void vscode.window.showErrorMessage(`${diagnostic.summary} · ${stageLabels[diagnostic.stage]} (${diagnostic.code})`);
+      await showDownloadDiagnostic();
+    }
+  }
 }
 
 interface BundleSubmissionTarget extends AuthenticatedBundleRoot {
@@ -904,18 +972,22 @@ async function selectCourseWorkspaceFolder(
 }
 
 async function revealDownloadedBundle(targetUri: vscode.Uri, targetPath: string): Promise<void> {
+  // Reveal the installed folder inside the existing workspace. Replacing the
+  // workspace or converting it to multi-root can restart the host and lose login.
+  await vscode.commands.executeCommand("workbench.view.explorer");
+  await vscode.commands.executeCommand("revealInExplorer", targetUri);
   const preview = await findSafeStarterPreview(targetPath);
   if (preview) {
     try {
       const previewUri = vscode.Uri.joinPath(targetUri, path.basename(preview));
+      await vscode.commands.executeCommand("revealInExplorer", previewUri);
       const document = await vscode.workspace.openTextDocument(previewUri);
       await vscode.window.showTextDocument(document, { preview: true });
       return;
     } catch {
-      // The starter remains installed; fall back to a non-host-restarting reveal.
+      void vscode.window.showWarningMessage(`과제 폴더는 열었지만 소스 미리보기를 열지 못했습니다. 탐색기에서 파일을 선택하세요: ${targetPath}`);
     }
   }
-  await vscode.commands.executeCommand("revealFileInOS", targetUri);
 }
 
 async function pathExists(candidate: string): Promise<boolean> {
@@ -926,7 +998,7 @@ async function pathExists(candidate: string): Promise<boolean> {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       return false;
     }
-    throw new Error("clone 대상 경로를 확인할 수 없습니다.");
+    throw error;
   }
 }
 

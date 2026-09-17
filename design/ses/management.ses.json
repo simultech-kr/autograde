@@ -1,0 +1,202 @@
+{
+  "schema_version": "autograde.management.ses.v1",
+  "root": {
+    "label": "ManagementSystem",
+    "type": "entity",
+    "children": [
+      {
+        "label": "SystemComposition",
+        "type": "aspect",
+        "children": [
+          {
+            "label": "MandatoryCore",
+            "type": "entity",
+            "children": [],
+            "module_id": "core.policy.v1"
+          },
+          {
+            "label": "CourseFleet",
+            "type": "entity",
+            "children": [
+              {
+                "label": "CourseReplication",
+                "type": "multi_aspect",
+                "multiplicity": "courses",
+                "children": [
+                  {
+                    "label": "CourseManagement",
+                    "type": "entity",
+                    "children": [
+                      {
+                        "label": "ManagementModules",
+                        "type": "aspect",
+                        "children": [
+                          {
+                            "label": "Lifecycle",
+                            "type": "entity",
+                            "children": [
+                              {
+                                "label": "LifecycleSpecialization",
+                                "type": "specialization",
+                                "selection": "lifecycle_mode",
+                                "children": [
+                                  {
+                                    "label": "ManualLifecycle",
+                                    "type": "entity",
+                                    "children": [],
+                                    "module_id": "lifecycle.manual.v1"
+                                  },
+                                  {
+                                    "label": "DeadlineWindows",
+                                    "type": "entity",
+                                    "children": [],
+                                    "module_id": "lifecycle.deadlines.v1"
+                                  }
+                                ]
+                              }
+                            ]
+                          },
+                          {
+                            "label": "Archive",
+                            "type": "entity",
+                            "children": [
+                              {
+                                "label": "ArchiveSpecialization",
+                                "type": "specialization",
+                                "selection": "archive_mode",
+                                "children": [
+                                  {
+                                    "label": "ArchiveDisabled",
+                                    "type": "entity",
+                                    "children": [],
+                                    "module_id": "archive.disabled.v1"
+                                  },
+                                  {
+                                    "label": "LocalTarArchive",
+                                    "type": "entity",
+                                    "children": [],
+                                    "module_id": "archive.local_tar.v1"
+                                  }
+                                ]
+                              }
+                            ]
+                          },
+                          {
+                            "label": "Reports",
+                            "type": "entity",
+                            "children": [
+                              {
+                                "label": "ReportsSpecialization",
+                                "type": "specialization",
+                                "selection": "report_mode",
+                                "children": [
+                                  {
+                                    "label": "ReportsDisabled",
+                                    "type": "entity",
+                                    "children": [],
+                                    "module_id": "reports.disabled.v1"
+                                  },
+                                  {
+                                    "label": "CsvReports",
+                                    "type": "entity",
+                                    "children": [],
+                                    "module_id": "reports.csv.v1"
+                                  },
+                                  {
+                                    "label": "HtmlCsvReports",
+                                    "type": "entity",
+                                    "children": [],
+                                    "module_id": "reports.html_csv.v1"
+                                  }
+                                ]
+                              }
+                            ]
+                          },
+                          {
+                            "label": "LearningSupport",
+                            "type": "entity",
+                            "children": [
+                              {
+                                "label": "LearningSupportSpecialization",
+                                "type": "specialization",
+                                "selection": "support_mode",
+                                "children": [
+                                  {
+                                    "label": "SupportDisabled",
+                                    "type": "entity",
+                                    "children": [],
+                                    "module_id": "support.disabled.v1"
+                                  },
+                                  {
+                                    "label": "ExplainableRules",
+                                    "type": "entity",
+                                    "children": [],
+                                    "module_id": "support.rules.v1"
+                                  }
+                                ]
+                              }
+                            ]
+                          },
+                          {
+                            "label": "Notifications",
+                            "type": "entity",
+                            "children": [
+                              {
+                                "label": "NotificationsSpecialization",
+                                "type": "specialization",
+                                "selection": "notification_mode",
+                                "children": [
+                                  {
+                                    "label": "NotificationsDisabled",
+                                    "type": "entity",
+                                    "children": [],
+                                    "module_id": "notifications.disabled.v1"
+                                  },
+                                  {
+                                    "label": "InstructorInbox",
+                                    "type": "entity",
+                                    "children": [],
+                                    "module_id": "notifications.instructor_inbox.v1"
+                                  }
+                                ]
+                              }
+                            ]
+                          },
+                          {
+                            "label": "Scheduler",
+                            "type": "entity",
+                            "children": [
+                              {
+                                "label": "SchedulerSpecialization",
+                                "type": "specialization",
+                                "selection": "scheduler_mode",
+                                "children": [
+                                  {
+                                    "label": "ManualScheduler",
+                                    "type": "entity",
+                                    "children": [],
+                                    "module_id": "scheduler.manual.v1"
+                                  },
+                                  {
+                                    "label": "PyJevSimScheduler",
+                                    "type": "entity",
+                                    "children": [],
+                                    "module_id": "scheduler.pyjevsim.v1"
+                                  }
+                                ]
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

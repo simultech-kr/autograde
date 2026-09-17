@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 import threading
 import time
+from uuid import uuid4
 
 from autograde.platform_auth import secret_digest
 from autograde.platform_bundle import BundleStore
@@ -242,6 +243,29 @@ def test_twenty_five_students_download_submit_grade_and_retrieve(tmp_path: Path)
     worker.start()
     try:
         with _running_server(service) as server:
+            def download_with_diagnostics(index):
+                event = dict(schema_version=1, attempt_id=str(uuid4()), seq=0, stage='requesting', outcome='in_progress',
+                             open_outcome='not_attempted', ide='vscode', extension_version='0.5.2', os='linux', remote_kind='wsl')
+                path = '/v1/assignments/basn_lab01/download-diagnostics'
+                status, _ = _request(server, 'POST', path, token=tokens[index], body=json.dumps(event).encode(), headers={'Content-Type':'application/json'})
+                assert status == 200
+                connection = http.client.HTTPConnection(*server.server_address[:2], timeout=5)
+                try:
+                    connection.request('GET', '/v1/assignments/basn_lab01/starter', headers={'Authorization':'Bearer ' + tokens[index]})
+                    response = connection.getresponse()
+                    assert response.status == 200 and response.read() == starter.path.read_bytes()
+                finally:
+                    connection.close()
+                event.update(seq=1, stage='files_ready', outcome='succeeded')
+                status, _ = _request(server, 'POST', path, token=tokens[index], body=json.dumps(event).encode(), headers={'Content-Type':'application/json'})
+                assert status == 200
+            with ThreadPoolExecutor(max_workers=25) as executor:
+                list(executor.map(download_with_diagnostics, range(STUDENT_COUNT)))
+            from autograde.download_diagnostics import list_reports
+            reports = list_reports(state, COURSE)
+            assert len(reports) == STUDENT_COUNT and len({r['student_key'] for r in reports}) == STUDENT_COUNT
+            assert all(r['outcome'] == 'succeeded' and len(r['events']) == 2 for r in reports)
+
             def submit(index: int):
                 return _request(
                     server,

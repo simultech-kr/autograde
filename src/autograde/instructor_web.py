@@ -17,6 +17,7 @@ from .platform_service import PlatformAPIError, PlatformResponse
 from .platform_state import PlatformAccessDenied, PlatformConflict, PlatformNotFound
 from .platform_qr import course_login_qr_svg
 from .web_theme import THEME_CSS
+from .instructor_responsive import RESPONSIVE_CSS, result_table
 
 
 _COOKIE = "autograde_instructor_web"
@@ -42,7 +43,6 @@ button,.button{display:inline-block;min-height:44px;padding:10px 16px;border:0;b
 .warning{background:#fff7ed;border-left-color:#c2410c}.error{background:#fef2f2;border-left-color:#b91c1c}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px}
 table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:12px;border-bottom:1px solid #cbd5e1;vertical-align:top;overflow-wrap:anywhere}
 .table-scroll{overflow-x:auto}pre{white-space:pre-wrap;overflow-wrap:anywhere}code{font-size:1.05em}.steps{padding:0;display:flex;flex-wrap:wrap;gap:8px;list-style:none}.steps li{padding:8px;border:1px solid #cbd5e1;border-radius:6px}.steps [aria-current]{font-weight:bold;border:2px solid #2563eb}
-.admin-offerings{min-width:860px}.admin-offerings th{white-space:nowrap}.admin-offerings th[scope=row]{white-space:normal;min-width:150px;word-break:keep-all}.admin-offerings td{word-break:keep-all}.admin-offerings .summary{min-width:230px}.admin-offerings .manage{min-width:160px}.admin-offerings .manage a{display:inline-block;margin-bottom:5px}
 :focus-visible{outline:3px solid #0f172a;outline-offset:3px}details{margin:12px 0}summary{cursor:pointer;min-height:44px;padding:8px}.actions{display:flex;gap:12px;flex-wrap:wrap}
 @media(max-width:760px){.shell{display:block}nav{display:flex;flex-wrap:wrap;padding:8px}nav a{padding:8px}main{padding:12px}section,.card{padding:16px}}
 """
@@ -197,7 +197,7 @@ class InstructorWeb:
             secure = "; Secure" if self.web_url.startswith("https://") else ""
             headers["Set-Cookie"] = f"{_COOKIE}={cookie}; Path=/; Max-Age=3600; HttpOnly; SameSite=Strict{secure}"
         document = ('<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
-                    f'<title>{_e(title)} · Autograde</title><style>{_STYLE}{THEME_CSS}</style></head><body><header><h1>Autograde 교수자</h1><div>{_e(context)}</div></header>'
+                    f'<title>{_e(title)} · Autograde</title><style>{_STYLE}{THEME_CSS}{RESPONSIVE_CSS}</style></head><body class="responsive-instructor"><header><h1>Autograde 교수자</h1><div>{_e(context)}</div></header>'
                     f'<div class="shell"><nav aria-label="교수자 메뉴">{nav}</nav><main><h2>{_e(title)}</h2>{body}'
                     '<p class="hint">공유 교수자 계정은 개인별 권한을 제공하지 않습니다. 공용 학생 PC에서 사용하지 마세요. '
                     'pilot-local 실행은 보안 격리가 아닙니다.</p></main></div></body></html>')
@@ -272,18 +272,19 @@ class InstructorWeb:
         semesters = {'1': '1학기', '2': '2학기', 'summer': '여름학기', 'winter': '겨울학기'}
         for (year, semester), sections in periods.items():
             label = f'{year}학년도 · {semesters.get(semester, semester)}' if year else '기존 수업 · 학기·분반 정보 보완 필요'
-            body += f'<section><h3>{_e(label)}</h3><div class="table-scroll"><table class="admin-offerings"><caption>{_e(code)} 분반별 최신 현황</caption><thead><tr>'
-            body += ''.join(f'<th scope="col">{text}</th>' for text in ('분반 / 수업명', '운영 상태', '수강 중 / 등록', '활성 과제', '제출 현황 (학생 × 과제)', '관리'))
-            body += '</tr></thead><tbody>'
+            body += f'<section><h3>{_e(label)}</h3>'
+            offering_rows = []
             for course in sections:
                 base = self._base(course)
-                body += (f'<tr><th scope="row"><a href="{base}">{_e(course["section"] or "분반 미설정")} · {_e(course["name"] or course["code"])}</a></th>'
-                         f'<td>{_e(_STATUS[course["status"]])}</td><td>{course["active_students"]} / {course["enrolled_students"]}</td>'
-                         f'<td>{course["active_assignments"]}</td><td class="summary">기준 충족 <strong>{course["completed"]}</strong> · 수정 필요 <strong>{course["needs_work"]}</strong><br>'
-                         f'미제출 {course["not_submitted"]} · 채점·공개 대기 {course["waiting"]}<br>처리 오류 {course["errors"]} · 확인 필요 {course["unknown"]}</td>'
-                         f'<td class="manage"><a href="{base}/students">학생 관리</a><br><a href="{base}/assignments">과제 등록·관리</a><br>'
-                         f'<a href="{base}/submissions">학생별 결과·코드 확인</a><br><a href="{base}">분반 설정·QR</a></td></tr>')
-            body += '</tbody></table></div></section>'
+                offering_rows.append((f'<a href="{base}">{_e(course["section"] or "분반 미설정")} · {_e(course["name"] or course["code"])}</a>',
+                         _e(_STATUS[course['status']]), f'{course["active_students"]} / {course["enrolled_students"]}',
+                         str(course['active_assignments']),
+                         f'기준 충족 <strong>{course["completed"]}</strong> · 수정 필요 <strong>{course["needs_work"]}</strong><br>'
+                         f'미제출 {course["not_submitted"]} · 채점·공개 대기 {course["waiting"]}<br>처리 오류 {course["errors"]} · 확인 필요 {course["unknown"]}',
+                         f'<a href="{base}/students">학생 관리</a><br><a href="{base}/assignments">과제 등록·관리</a><br>'
+                         f'<a href="{base}/submissions">학생별 결과·코드 확인</a><br><a href="{base}">분반 설정·QR</a>'))
+            body += result_table(('분반 / 수업명', '운영 상태', '수강 중 / 등록', '활성 과제', '제출 현황 (학생 × 과제)', '관리'),
+                                 offering_rows, code + ' 분반별 최신 현황') + '</section>'
         template = next((c for c in offerings if c['year']), offerings[0])
         defaults = dict(code=code, name=template['name'], year=template['year'] or datetime.now().year,
                         semester=template['semester'] or '1', section='', status='preparation')

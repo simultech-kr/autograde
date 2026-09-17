@@ -55,6 +55,7 @@ from .platform_pinner import (
 )
 from .platform_qr import assignment_claim_qr_svg
 from .web_theme import THEME_CSS
+from .instructor_responsive import RESPONSIVE_CSS, result_table
 from .submission_review import attention_reason, render_review
 from .platform_state import (
     DeviceAuthorization,
@@ -802,6 +803,23 @@ class StudentPlatformService:
         )
         return {"assignments": projected}
 
+    def report_download_diagnostic(self, access_token, assignment_id, payload):
+        from .download_diagnostics import record
+        # Diagnostics cannot grant new assignment access.
+        self._owned_bundle_assignment(access_token, assignment_id)
+        try:
+            return record(self.state, token_hash=self._access_verifier(access_token),
+                          course_key=self.course_key, assignment_id=assignment_id,
+                          payload=payload, at=utc_iso(self._aware_now()))
+        except ValueError as exc:
+            raise PlatformAPIError(400, 'invalid_diagnostic', 'invalid diagnostic data') from exc
+        except PlatformAccessDenied as exc:
+            raise PlatformAPIError(403, 'access_denied', 'diagnostic scope denied') from exc
+        except PlatformConflict as exc:
+            if str(exc) == 'diagnostic rate limit':
+                raise PlatformAPIError(429, 'diagnostic_rate_limit', 'diagnostic rate limit', headers={'Retry-After': '60'}) from exc
+            raise PlatformAPIError(409, 'diagnostic_conflict', 'diagnostic conflict') from exc
+
     def get_bundle_starter(
         self, access_token: str, assignment_id: str
     ) -> PlatformFileResponse:
@@ -1381,7 +1399,13 @@ class StudentPlatformService:
         student_summaries = self.state.list_course_student_summaries(
             course_key=self.course_key
         )
+        from .download_diagnostics import list_reports, status_label
+        reports = list_reports(self.state, self.course_key)
         projected_rows = [self._dashboard_projection(row) for row in rows]
+        for row in projected_rows:
+            attempts = [r for r in reports if r['student_key'] == row['student_key'] and r['assignment_id'] == row['assignment_id']]
+            row['download_status'] = status_label(attempts[0] if attempts else None, self._aware_now())
+            row['download_attempts'] = attempts
         claim_assignments = self.state.list_operator_bundle_assignments(
             course_key=self.course_key,
             ready_only=True,
@@ -1428,14 +1452,9 @@ class StudentPlatformService:
                     else "설정됨"
                 )
             student_management_rows.append(
-                "<tr>"
-                f"<td>{html.escape(str(student['student_key']))}</td>"
-                f"<td>{'활성' if student['active'] else '비활성'}</td>"
-                f"<td>{html.escape(password_state)}</td>"
-                f"<td>{int(student['acceptances'])}</td>"
-                f"<td>{int(student['downloads'])}</td>"
-                f"<td>{int(student['submissions'])}</td>"
-                "</tr>"
+                (html.escape(str(student['student_key'])),
+                 '활성' if student['active'] else '비활성', html.escape(password_state),
+                 str(int(student['acceptances'])), str(int(student['downloads'])), str(int(student['submissions'])))
             )
         assignment_cards = []
         for assignment in dashboard["assignments"]:
@@ -1472,19 +1491,15 @@ class StudentPlatformService:
                     review_items.append(f'<li>{html.escape(str(row["student_key"]))} · '
                                         f'{html.escape(str(row["title"]))} · {reason} · {review_link}</li>')
             table_rows.append(
-                "<tr>"
-                f"<td>{html.escape(str(row['student_key']))}</td>"
-                f"<td>{html.escape(str(row['assignment_key']))} · "
-                f"{html.escape(str(row['title']))}</td>"
-                f"<td>{html.escape(str(row['release_id']))}</td>"
-                f"<td>{int(row['acceptance_count'])}</td>"
-                f"<td>{int(row['download_count'])}</td>"
-                f"<td>{int(row['submission_count'])}</td>"
-                f"<td>{html.escape(str(row['state'] or '미제출'))}</td>"
-                f"<td>{html.escape(score)}</td>"
-                f"<td>{html.escape(str(row['latest_received_at'] or '—'))}</td>"
-                f"<td>{reason}<br>{review_link}</td>"
-                "</tr>"
+                (html.escape(str(row['student_key'])),
+                 html.escape(str(row['assignment_key'])) + ' · ' + html.escape(str(row['title'])),
+                 html.escape(score), html.escape(str(row['state'] or '미제출')),
+                 reason + '<br>' + review_link,
+                 html.escape(str(row['latest_received_at'] or '—')),
+                 str(int(row['submission_count'])), str(int(row['acceptance_count'])),
+                 str(int(row['download_count'])) + '<br>' + html.escape(row['download_status'])
+                 + self._download_diagnostic_details(row['download_attempts'], self._aware_now()),
+                 html.escape(str(row['release_id'])))
             )
         dashboard_url = course_base + '/submissions' if portal else '/instructor'
         management_url = course_base if portal else '/instructor'
@@ -1500,11 +1515,13 @@ class StudentPlatformService:
             "th,td{text-align:left;padding:10px 14px;border-bottom:1px solid #dce4ec;white-space:nowrap}"
             "th{background:#eef3f7;font-weight:500}"
             "@media(max-width:600px){main{padding:16px;margin:12px}body>nav{padding:12px}}"
-            + THEME_CSS + "</style></head><body><main data-audience=\"instructor\">"
+            + THEME_CSS + RESPONSIVE_CSS + "</style></head><body class=\"responsive-instructor\"><main data-audience=\"instructor\">"
             "<div class=\"audience\">교수자 관리 · 교과목 전체 현황</div>"
             f"<h1>{html.escape(self.course_key)} 채점 현황</h1>"
-            f"<p>갱신 시각: {html.escape(str(dashboard['generated_at']))} · "
-            f'<a href="{dashboard_url}">새로 고침</a> · <a href="{management_url}">수업 관리</a></p>'
+            f"<p>갱신 시각: {html.escape(str(dashboard['generated_at']))}</p>"
+            f'<nav class="page-actions" aria-label="결과 화면 이동"><a href="{dashboard_url}">새로 고침</a>'
+            f'<a href="#student-results">학생별 결과</a><a href="#student-management">학생 관리</a>'
+            f'<a href="#assignment-qr">과제 수령 QR</a><a href="{management_url}">수업 관리</a></nav>'
             f'<h2>확인 필요한 제출 ({len(review_items)}건)</h2>'
             '<p>최신 제출의 감점·처리 실패만 모았습니다. 미제출·처리 중은 전체 표에서 확인하세요. '
             '부정행위 판정이 아니며, 원본 코드는 읽기 전용입니다.</p><ul>'
@@ -1515,30 +1532,45 @@ class StudentPlatformService:
             f"과제 {int(course['assignments'])}개 · "
             f"수락 {int(course['acceptances'])}건 · "
             f"제출 {int(course['submissions'])}건</p>"
-            "<h2>학생 관리</h2>"
-            "<table><thead><tr><th>학생</th><th>상태</th><th>전용 비밀번호</th>"
-            "<th>수락</th><th>다운로드</th><th>제출</th></tr></thead><tbody>"
-            + "".join(student_management_rows)
-            + "</tbody></table>"
+            '<h2 id="student-results">학생별 제출·채점 결과</h2>'
+            + result_table(('학생', '과제', '점수', '최신 상태', '확인·코드', '최근 제출',
+                            '제출', '수락', '응답 준비 / 다운로드 진단', '릴리스'), table_rows, '학생·과제별 최신 제출')
+            + '<p>서버 응답 준비 횟수는 학생 PC의 저장 완료가 아닙니다. 진단은 최근 200개 시도의 클라이언트 보고이며, 보고가 없으면 실패로 단정하지 않습니다. IDE 연결 상태·출석·성적의 증거가 아닙니다.</p>'
+            + ("<p>등록된 학생 또는 과제가 없습니다.</p>" if not table_rows else "")
+            + '<h2 id="student-management">학생 관리</h2>'
+            + result_table(('학생', '상태', '전용 비밀번호', '수락', '서버 응답 준비', '제출'),
+                           student_management_rows, '학생별 수강·접속 현황')
             + (
                 "<p>등록된 학생이 없습니다.</p>"
                 if not student_management_rows
                 else ""
             )
-            + "<h2>과제 수령 QR</h2>"
+            + '<!-- assignment-qr:start --><h2 id="assignment-qr">과제 수령 QR</h2>'
             + "".join(assignment_cards)
             + ("<p>공개된 bundle 과제가 없습니다.</p>" if not assignment_cards else "")
-            + "<table><thead><tr><th>학생</th><th>과제</th><th>릴리스</th>"
-            "<th>수락</th><th>다운로드</th><th>제출</th><th>최신 상태</th><th>점수</th>"
-            "<th>최근 제출</th><th>확인·코드</th></tr></thead><tbody>"
-            + "".join(table_rows)
-            + "</tbody></table>"
-            + ("<p>등록된 학생 또는 과제가 없습니다.</p>" if not table_rows else "")
+            + '<!-- assignment-qr:end -->'
             + "</main></body></html>"
         )
         return PlatformResponse(
             200, body, {"Content-Type": "text/html; charset=utf-8"}
         )
+
+    @staticmethod
+    def _download_diagnostic_details(attempts, now=None):
+        from .download_diagnostics import status_label, STAGE_LABELS, ERROR_HINTS
+        result = ''
+        for attempt in attempts:
+            result += '<details><summary>' + html.escape(status_label(attempt, now) + ' · ' + attempt['last_seen_at']) + '</summary>'
+            hint = ERROR_HINTS.get((attempt.get('error_code') or '').removeprefix('AG-DL-'))
+            if hint:
+                result += '<p>' + html.escape(hint) + '</p>'
+            result += '<p>문의번호: <code>' + html.escape(attempt['attempt_id']) + '</code><br>'
+            result += html.escape(attempt['ide'] + ' ' + attempt['extension_version'] + ' / ' + attempt['os'] + ' / ' + attempt['remote_kind']) + '</p><ol>'
+            for event in attempt['events']:
+                text = event['received_at'] + ' · ' + STAGE_LABELS[event['stage']] + ' · ' + (event.get('error_code') or '오류 보고 없음')
+                result += '<li>' + html.escape(text) + '</li>'
+            result += '</ol></details>'
+        return result
 
     def _authorize_instructor(self, authorization: str) -> None:
         challenge = {"WWW-Authenticate": 'Basic realm="Autograde instructor", charset="UTF-8"'}

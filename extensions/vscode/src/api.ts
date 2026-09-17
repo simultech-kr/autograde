@@ -54,6 +54,7 @@ export interface LegacySecretStore {
 }
 
 export interface SessionTokenStore {
+  getSessionGeneration?(): number;
   hasSession(): Promise<boolean>;
   storeSession(tokens: TokenResponse, expectedBaseUrl: string): Promise<void>;
   getAccessToken(forceRefresh?: boolean): Promise<string>;
@@ -277,7 +278,8 @@ export class HttpTransport implements ApiTransport {
         await response.body?.cancel().catch(() => undefined);
         throw new ApiError("Autograde 서비스가 예상한 파일 형식이 아닌 응답을 반환했습니다.", 0, "invalid_response");
       }
-      return readLimitedBody(response, maxResponseBytes);
+      // Keep timeout/cancellation alive until the entire body arrives, not just its headers.
+      return await readLimitedBody(response, maxResponseBytes);
     } catch (error) {
       if (error instanceof ApiError || error instanceof RequestCancelledError) {
         throw error;
@@ -425,6 +427,7 @@ export async function clearLegacyPersistedTokens(secrets: LegacySecretStore): Pr
 }
 
 export class TokenManager {
+  public getSessionGeneration(): number { return this.sessionGeneration; }
   private accessToken: string | undefined;
   private refreshToken: string | undefined;
   private accessExpiresAt = 0;

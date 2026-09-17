@@ -1,8 +1,8 @@
 {
   "name": "autograde-vscode",
   "displayName": "Autograde",
-  "description": "Download, submit, and review Autograde assignments from Linux, macOS, or WSL2.",
-  "version": "0.5.0",
+  "description": "C/C++ 실습 과제 수령·다운로드·제출·채점 피드백을 VS Code에서. Linux, macOS, Windows WSL2 수업용 Autograde 확장.",
+  "version": "0.5.2",
   "private": true,
   "publisher": "autograde",
   "repository": {
@@ -48,6 +48,13 @@
   ],
   "contributes": {
     "commands": [
+      {
+        "command": "autograde.downloadDiagnostics",
+        "title": "Autograde: Download Diagnostics",
+        "shortTitle": "다운로드 진단 · 문의번호",
+        "enablement": "autograde.authenticated",
+        "icon": "$(bug)"
+      },
       {
         "command": "autograde.submissionHistory",
         "title": "Autograde: Submission History and Restore",
@@ -168,17 +175,17 @@
         {
           "command": "autograde.configureServiceAddress",
           "when": "view == autograde.assignments",
-          "group": "navigation@0"
+          "group": "2_settings@0"
         },
         {
           "command": "autograde.checkServerConnection",
           "when": "view == autograde.assignments",
-          "group": "navigation@0.5"
+          "group": "2_settings@1"
         },
         {
           "command": "autograde.redeemAssignmentClaim",
           "when": "view == autograde.assignments && isWorkspaceTrusted",
-          "group": "navigation@2"
+          "group": "1_assignment@0"
         },
         {
           "command": "autograde.signOut",
@@ -193,19 +200,24 @@
         {
           "command": "autograde.cloneAssignment",
           "when": "view == autograde.assignments && autograde.authenticated && autograde.hasDownloadableAssignments && isWorkspaceTrusted",
-          "group": "navigation@5"
+          "group": "1_assignment@1"
         },
         {
           "command": "autograde.submitCurrentCommit",
           "when": "view == autograde.assignments && autograde.authenticated && isWorkspaceTrusted",
-          "group": "navigation@6"
+          "group": "1_assignment@2"
+        },
+        {
+          "command": "autograde.downloadDiagnostics",
+          "when": "view == autograde.assignments && autograde.authenticated",
+          "group": "2_settings@2"
         }
       ],
       "view/item/context": [
         {
           "command": "autograde.cloneAssignment",
           "when": "view == autograde.assignments && autograde.authenticated && (viewItem == autograde.assignment || viewItem == autograde.assignmentWithSubmission) && isWorkspaceTrusted",
-          "group": "inline@0"
+          "group": "1_assignment@0"
         },
         {
           "command": "autograde.submitCurrentCommit",

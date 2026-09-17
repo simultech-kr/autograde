@@ -109,7 +109,7 @@ test("assignment claim code is directly reachable from every sidebar authenticat
   assert.match(titleMenu.when ?? "", /view\s*==\s*autograde\.assignments/);
   assert.match(titleMenu.when ?? "", /isWorkspaceTrusted/);
   assert.doesNotMatch(titleMenu.when ?? "", /!?autograde\.authenticated/);
-  assert.match(titleMenu.group ?? "", /^navigation/);
+  assert.match(titleMenu.group ?? "", /^1_assignment/);
 
   const welcome = (manifest.contributes?.viewsWelcome ?? [])
     .filter((item) => item.view === "autograde.assignments");
@@ -193,7 +193,7 @@ test("sidebar title exposes direct signed-out and signed-in actions", async () =
     assert.ok(menu, `${command} must be reachable from the Assignments title`);
     assert.match(menu.when ?? "", /view\s*==\s*autograde\.assignments/);
     assert.match(menu.when ?? "", /autograde\.authenticated/);
-    assert.match(menu.group ?? "", /^navigation/);
+    assert.match(menu.group ?? "", command === "autograde.cloneAssignment" ? /^1_assignment/ : /^navigation/);
   }
 
   const download = titleMenus.find((item) => item.command === "autograde.cloneAssignment");
@@ -203,10 +203,16 @@ test("sidebar title exposes direct signed-out and signed-in actions", async () =
   const itemMenus = manifest.contributes?.menus?.["view/item/context"] ?? [];
   assert.ok(
     itemMenus.some((item) =>
-      item.command === "autograde.cloneAssignment" && (item.group ?? "").startsWith("inline")
+      item.command === "autograde.cloneAssignment" && (item.group ?? "").startsWith("1_assignment")
     ),
-    "the existing one-click download action on each assignment row must remain available",
+    "download remains in the assignment context menu and labelled child action",
   );
+});
+
+test("compact toolbar keeps at most two persistent navigation buttons and exposes diagnostics", async () => {
+  const menus = (await readManifest()).contributes?.menus?.["view/title"] ?? [];
+  assert.ok(menus.filter(item => item.group?.startsWith("navigation")).length <= 2);
+  assert.ok(menus.some(item => item.command === "autograde.downloadDiagnostics" && item.when?.includes("authenticated")));
 });
 
 test("sidebar welcome content offers authentication-aware clickable controls", async () => {

@@ -2,6 +2,7 @@
 import json
 from pathlib import Path
 import sqlite3
+from uuid import uuid4
 
 import pytest
 
@@ -89,7 +90,7 @@ def test_unsafe_apply_refused_without_deletion(records, case, tmp_path):
     if case in {"schema", "bootstrap"}:
         with sqlite3.connect(paths.database) as connection:
             if case == "schema":
-                connection.execute("INSERT INTO platform_schema_migrations VALUES (12, 'synthetic')")
+                connection.execute("INSERT INTO platform_schema_migrations VALUES (13, 'synthetic')")
             else:
                 connection.execute("DELETE FROM platform_roster_bootstrap")
     if case == "symlink":
@@ -125,6 +126,9 @@ def test_reset_actual_claims_submissions_preserves_other_course(portal, tmp_path
         _, tokens[course] = connect(api, claim(web, course, password))
         token = tokens[course]["access_token"]
         assert request(api, f"/v1/assignments/asn_{course}/starter", token=token)[0] == 200
+        services[course].report_download_diagnostic(token, 'asn_' + course, dict(
+            schema_version=1, attempt_id=str(uuid4()), seq=0, stage='files_ready', outcome='succeeded',
+            open_outcome='not_attempted', ide='visualstudio', extension_version='0.5.2', os='windows', remote_kind='none'))
         source = tmp_path / (course + "-solution")
         source.mkdir()
         (source / "answer.txt").write_text("my solution")
@@ -145,11 +149,15 @@ def test_reset_actual_claims_submissions_preserves_other_course(portal, tmp_path
     plan = reset_course(paths, "come2201")
     assert plan["counts"]["bundle_submission_results"] == 1
     assert plan["counts"]["platform_assignment_acceptances"] == 1
+    assert plan['counts']['download_diagnostic_attempts'] == 1
+    assert plan['counts']['download_diagnostic_events'] == 1
     apply(paths, plan)
     with sqlite3.connect(paths.database) as connection:
         assert connection.execute("SELECT COUNT(*) FROM bundle_assignment_releases").fetchone()[0] == 2
         assert connection.execute("SELECT COUNT(*) FROM bundle_submission_results").fetchone()[0] == 1
         assert connection.execute("SELECT COUNT(*) FROM platform_assignment_acceptances").fetchone()[0] == 1
+        assert connection.execute("SELECT course_key FROM download_diagnostic_attempts").fetchall() == [('come3105',)]
+        assert connection.execute("SELECT COUNT(*) FROM download_diagnostic_events").fetchone()[0] == 1
     assert services["come3105"].get_me(tokens["come3105"]["access_token"])
     with pytest.raises(Exception):
         services["come2201"].get_me(tokens["come2201"]["access_token"])

@@ -37,6 +37,27 @@ namespace Autograde.VisualStudio
         public static void Button(Button button) =>
             button.SetResourceReference(FrameworkElement.StyleProperty, VsResourceKeys.ThemedDialogButtonStyleKey);
 
+        public static void Tabs(TabControl tabs)
+        {
+            tabs.SetResourceReference(Control.BackgroundProperty, EnvironmentColors.ToolWindowBackgroundBrushKey);
+            tabs.SetResourceReference(Control.ForegroundProperty, EnvironmentColors.ToolWindowTextBrushKey);
+            tabs.SetResourceReference(Control.BorderBrushProperty, CommonControlsColors.TextBoxBorderBrushKey);
+            var style = new Style(typeof(TabItem));
+            style.Setters.Add(Resource(Control.BackgroundProperty, EnvironmentColors.ToolWindowBackgroundBrushKey));
+            style.Setters.Add(Resource(Control.ForegroundProperty, EnvironmentColors.ToolWindowTextBrushKey));
+            style.Setters.Add(Resource(Control.BorderBrushProperty, CommonControlsColors.TextBoxBorderBrushKey));
+            style.Setters.Add(new Setter(Control.BorderThicknessProperty, new Thickness(1)));
+            style.Setters.Add(new Setter(Control.PaddingProperty, new Thickness(12, 7, 12, 7)));
+            var header = new FrameworkElementFactory(typeof(ContentPresenter));
+            header.SetValue(ContentPresenter.ContentSourceProperty, "Header");
+            style.Setters.Add(new Setter(Control.TemplateProperty, BorderedTemplate(typeof(TabItem), header)));
+            var selected = new Trigger { Property = TabItem.IsSelectedProperty, Value = true };
+            selected.Setters.Add(Resource(Control.BackgroundProperty, TreeViewColors.SelectedItemActiveBrushKey));
+            selected.Setters.Add(Resource(Control.ForegroundProperty, TreeViewColors.SelectedItemActiveTextBrushKey));
+            style.Triggers.Add(selected);
+            tabs.ItemContainerStyle = style;
+        }
+
         static Setter Resource(DependencyProperty property, object key) =>
             new Setter(property, new DynamicResourceExtension(key));
 

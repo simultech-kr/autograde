@@ -7,7 +7,7 @@
     <LangVersion>latest</LangVersion>
     <RootNamespace>Autograde.VisualStudio</RootNamespace>
     <AssemblyName>Autograde.VisualStudio</AssemblyName>
-    <Version>0.5.0</Version>
+    <Version>0.5.2</Version>
     <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
     <GeneratePkgDefFile>true</GeneratePkgDefFile>
     <IncludeAssemblyInVSIXContainer>true</IncludeAssemblyInVSIXContainer>

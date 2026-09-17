@@ -1,5 +1,10 @@
 # Design
 
+- [과제 다운로드 troubleshooting](../docs/architecture/download-troubleshooting.md): 수락/파일 준비/IDE 열기 분리, 클라이언트 진단과 서버 상태 원장·교수자 화면 설계.
+
+- [관리 기능과 SES 기반 사용자 정의](../docs/architecture/management-ses.md): 보관·보고서·학생 지원 모듈과 SES/MB/PES 경계.
+- [SES 구조 모델](ses/management.ses.json), [구성 예시·실행 방법](../examples/management/README.md): 읽기 전용 검증·pruning 구현, 운영 부작용 없음.
+
 - [수업별 학생 초기화·재등록 설계](../docs/architecture/course-student-reset-mvp.md): 위험 작업 UX, 수업 범위 원자성·인증 폐기·자료 보존·백업 복구.
 
 - [교수자 과제 자료 제출·검증 UX](../docs/architecture/instructor-assignment-validation-ux.md): 준비 파일·서버 검사·오류 수정·학생 공개를 안내하는 교수자 전용 6단계.

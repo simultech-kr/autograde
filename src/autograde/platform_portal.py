@@ -24,6 +24,7 @@ class CourseAPI:
         "get_me", "list_sessions", "revoke_current", "revoke_session", "list_assignments",
         "get_bundle_starter", "submit_bundle", "get_submission", "get_result",
         "get_bundle_history", "get_bundle_source", "list_accepted_assignments",
+        "report_download_diagnostic",
     })
 
     def __init__(self, services: Mapping[str, StudentPlatformService], secret: bytes, *, courses=None):
@@ -243,11 +244,11 @@ class CoursePortal:
         if method == "GET" and action == "instructor":
             page = service.instructor_dashboard_page(authorization or "", portal=True)
             # Remove legacy API-origin claim links and QR images from this entry point.
-            body = re.sub(r'<h2>과제 수령 QR</h2>.*?(?=<table><thead><tr><th>학생</th><th>과제</th>)',
-                          f'<p>학생 접속: <a href="/courses/{course}">{html.escape(self.web_url)}/courses/{course}</a></p>',
+            body = re.sub(r'<!-- assignment-qr:start -->.*?<!-- assignment-qr:end -->',
+                          f'<p id="assignment-qr">학생 접속: <a href="/courses/{course}">{html.escape(self.web_url)}/courses/{course}</a></p>',
                           str(page.body), flags=re.S)
             links = " · ".join(f'<a href="/courses/{c}/instructor">{c}</a>' for c in self.services)
-            body = body.replace("<body>", f"<body><nav>{links}</nav>")
+            body = re.sub(r'(<body\b[^>]*>)', lambda match: match[1] + f'<nav aria-label="수업 선택">{links}</nav>', body, count=1)
             body = body.replace('href="/instructor"', f'href="/courses/{course}/instructor"')
             return PlatformResponse(page.status, body, page.headers)
         if method == "POST" and origin is not None and origin != self.web_url:

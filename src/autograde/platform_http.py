@@ -617,6 +617,8 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
                 )
         if len(parts) == 5 and parts[:3] == ["", "v1", "assignments"]:
             identifier = self._identifier(parts[3])
+            if identifier is not None and parts[4] == "download-diagnostics" and callable(getattr(facade, "report_download_diagnostic", None)):
+                return ("download_diagnostic", {"assignment_id": identifier}, frozenset({"POST"}))
             if identifier is not None and parts[4] == "history" and callable(getattr(facade, "get_bundle_history", None)):
                 return ("bundle_history", {"assignment_id": identifier}, frozenset({"GET"}))
             if identifier is not None and parts[4] == "repository":
@@ -788,6 +790,8 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
                 ),
                 200,
             )
+        if route == "download_diagnostic":
+            return facade.report_download_diagnostic(self._bearer_token(), parameters["assignment_id"], self._read_json_object(max_bytes=4096)), 200
         if route == "bundle_starter":
             self._ensure_no_body()
             return (
@@ -927,10 +931,10 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
                 length,
             )
 
-    def _read_json_object(self) -> Mapping[str, Any]:
+    def _read_json_object(self, max_bytes=None) -> Mapping[str, Any]:
         body = self._read_body(
             expected_media_type="application/json",
-            max_bytes=self.platform_server.max_request_bytes,
+            max_bytes=min(self.platform_server.max_request_bytes, max_bytes) if max_bytes is not None else self.platform_server.max_request_bytes,
         )
 
         def unique_object(pairs: Sequence[tuple[str, Any]]) -> MutableMapping[str, Any]:

@@ -39,10 +39,26 @@ def test_vsix_registration_and_packaging_contract():
     assert 'ProvideMenuResource("Menus.ctmenu", 1)' in (directory / "AutogradePackage.cs").read_text()
 
 
+def test_compact_layout_keeps_results_separate_from_secondary_actions():
+    """Layout wiring guard; native sizing still requires Windows visual QA."""
+    directory = ROOT / "extensions/visualstudio/Autograde.VisualStudio"
+    source = (directory / "AssignmentControl.cs").read_text()
+    assert 'Tuple.Create("과제", taskPanel)' in source
+    assert 'Tuple.Create("결과", resultPanel)' in source
+    assert 'Tuple.Create("기록", historyPanel)' in source
+    assert 'new GridLength(1, GridUnitType.Star)' in source
+    assert 'Grid.SetRow(pages, 1)' in source and 'Grid.SetRow(footer, 2)' in source
+    assert 'HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled' in source
+    assert 'downloadButton.Visibility = authenticated && selected != null && !ready' in source
+    assert 'submitButton.Visibility = authenticated && ready' in source
+    assert 'TextWrapping = TextWrapping.Wrap' in source
+    assert 'ThemeResources.Tabs(pages)' in source
+
+
 def test_logout_ui_does_not_require_valid_address():
     """Source contract only; Windows WPF interaction remains a manual test."""
     source = (ROOT / "extensions/visualstudio/Autograde.VisualStudio/AssignmentControl.cs").read_text()
-    action = source.split('AddButton(panel, "로그아웃 / 자리 비우기"', 1)[1].split('var cancel =', 1)[0]
+    action = source.split('AddButton(chrome, "로그아웃"', 1)[1].split('var cancel =', 1)[0]
     assert "RequireClient()" not in action
     assert "client.LogoutAsync(ct)" in action
     assert "finally { ClearScreen();" in action
@@ -79,14 +95,32 @@ def test_theme_release_preserves_upgrade_identity_and_versions():
     ns = {'v': 'http://schemas.microsoft.com/developer/vsx-schema/2011'}
     identity = ET.parse(directory / 'source.extension.vsixmanifest').find('v:Metadata/v:Identity', ns)
     assert identity.attrib['Id'] == 'Autograde.VisualStudio.74db5571-a3ad-4451-a5f4-e8cc28d20536'
-    assert identity.attrib['Version'] == '0.5.0'
+    assert identity.attrib['Version'] == '0.5.2'
     project = ET.parse(directory / 'Autograde.VisualStudio.csproj')
     assert project.find('PropertyGroup/Version').text == identity.attrib['Version']
-    assert '"0.5.0")]' in (directory / 'AutogradePackage.cs').read_text()
-    assert '["extension_version"] = "0.5.0"' in (directory.parent / 'Autograde.Core/ServiceClient.cs').read_text()
+    assert '"0.5.2")]' in (directory / 'AutogradePackage.cs').read_text()
+    assert '["extension_version"] = "0.5.2"' in (directory.parent / 'Autograde.Core/ServiceClient.cs').read_text()
     build = (directory.parent / 'build.ps1').read_text()
     assert '$builtIdentity.Id -ne $expectedIdentity.Id' in build
     assert '$builtIdentity.Version -ne $expectedIdentity.Version' in build
+
+
+def test_download_opens_installed_folder_without_deleting_files_on_open_failure():
+    """Source contract; native save/trust dialogs still need a Windows IDE test."""
+    directory = ROOT / 'extensions/visualstudio/Autograde.VisualStudio'
+    ui = (directory / 'AssignmentControl.cs').read_text()
+    download = ui.split('async Task DownloadAsync(', 1)[1].split('async Task ReportDownloadAsync', 1)[0]
+    assert download.index('Bundle.ExtractStarter(') < download.index('folder.Text = target;') < download.index('await OpenDownloadedFolderAsync(target, ct, diagnostic)')
+    opening = ui.split('async Task OpenDownloadedFolderAsync(', 1)[1].split('void RequireClient()', 1)[0]
+    assert 'catch (OperationCanceledException ex)' in opening and 'catch (Exception ex)' in opening
+    assert '파일은 보존됩니다' in opening
+    assert 'Delete(' not in opening
+    adapter = (directory / 'WorkspaceOpener.cs').read_text()
+    assert adapter.index('SwitchToMainThreadAsync(cancel)') < adapter.index('solution.OpenFolder(fullPath)')
+    assert 'GetSolutionInfo' in adapter and 'StringComparison.OrdinalIgnoreCase' in adapter
+    assert 'Directory.Exists(directory)' in adapter
+    assert 'Process.Start' not in adapter and 'ExecuteCommand' not in adapter
+    assert 'Bundle.VerifyWorkspace(folder.Text, client.BaseUrl, Id)' in ui
 
 
 def test_wpf_theme_uses_dynamic_resources_and_preserves_password_masking():
@@ -103,7 +137,7 @@ def test_wpf_theme_uses_dynamic_resources_and_preserves_password_masking():
                 'TextBoxBackgroundDisabledBrushKey', 'TextBoxTextDisabledBrushKey',
                 'TextBoxBorderFocusedBrushKey', 'FocusVisualBorderBrushKey'):
         assert key in theme
-    assert 'ThemeResources.Apply(this, claim, new[] { assignments, history }, address, folder, output, gradingOutput)' in ui
+    assert 'ThemeResources.Apply(this, claim, new[] { assignments, history }, address, folder, output, gradingOutput, diagnosticText)' in ui
     assert 'ThemeResources.Button(cancel)' in ui and 'ThemeResources.Button(button)' in ui
     assert 'ThemeResources.Label(status)' in ui and 'ThemeResources.Label(label)' in ui
     assert 'new PasswordBox { MaxLength = 256 }' in ui and 'claim.Clear()' in ui
@@ -115,7 +149,7 @@ def test_wpf_theme_uses_dynamic_resources_and_preserves_password_masking():
 def test_acceptance_does_not_wait_for_grading_and_background_has_identity_fences():
     """Source wiring guard; runtime polling behavior is covered by C# checks."""
     source = (ROOT / 'extensions/visualstudio/Autograde.VisualStudio/AssignmentControl.cs').read_text()
-    submit = source.split('AddButton(panel, "파일 확인 후 제출"', 1)[1].split('AddLabel(panel, "마지막 접수', 1)[0]
+    submit = source.split('AddButton(footerActions, "파일 확인 후 제출"', 1)[1].split('panel = resultPanel;', 1)[0]
     assert 'await client.SubmitAsync' in submit
     assert 'ResultAsync' not in submit and 'Task.Delay' not in submit
     assert 'receiptStatus.Text' in submit and 'PauseGradingWatch();' in submit
@@ -140,7 +174,7 @@ def test_result_cards_are_themed_and_cleared_at_session_boundary():
     assert 'ThemeResources.Label(text)' in view
     assert 'SetResourceReference' in view
     assert 'AutomationProperties.SetName' in view
-    assert 'model.DiagnosticPreview' in view
+    assert 'model.Details' in view
     assert 'new Expander' in view
 
 

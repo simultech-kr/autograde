@@ -1,5 +1,18 @@
 # Documentation
 
+- [관리자 결과 화면 반응형 지원](operations/instructor-responsive-results.md): 표·카드 자동 전환, 분반 현황·제출 코드, 브라우저 검증과 적용 방법.
+
+- [확장 0.5.2 · 간결한 UI와 다운로드 진단](operations/extension-download-diagnostics.md): 구현 범위, 학생/교수자 확인 방법, DB 업그레이드와 미구현·현장 검증 항목.
+
+- [수락 후 다운로드 장애 진단 설계](architecture/download-troubleshooting.md): 목표 설계와 0.5.2 구현 안내 연결. 단계별 오류·완료 미확인 구분, 공용 PC 보호와 인수 시험.
+
+- [수업 운영 개선·SES 모듈 설계](architecture/management-ses.md): Canvas 제외, 수명주기·보관/복원·보고서·학습 지원·권한·운영 구성.
+- [SES 수업별 구성 미리보기](../examples/management/README.md): 실제 데이터 변경 없는 SES → PES 검증 도구와 두 수업 예시. 운영 모듈은 구현 예정.
+
+- [VS Code 확장 소개·학생 사용법](../extensions/vscode/README.md): 지원 환경, 설치, 수령 코드, 자동 열기, 제출·결과, FAQ.
+- [Visual Studio 확장 소개·학생 사용법](../extensions/visualstudio/README.md): Community용 설치, 접수·채점 구분, 제출 범위와 FAQ.
+- [확장 소개 페이지 관리·게시 안내](operations/extension-introduction.md): 학생용 소개와 개발 문서의 구분, 패키지 반영·Marketplace 등록 전 확인.
+
 - [교수자 웹 관리 MVP 사용 안내](operations/instructor-web-mvp.md): 설정 활성화 → 수업·학생 등록 → 6단계 과제 등록·검증·공개. 2026-09-16 구현, 운영 배포는 별도.
 
 - [교수자 웹 관리 시험 기록](testing/instructor-web-mvp.md): HTTP·실제 컴파일·25명 동시 제출·마이그레이션과 미실시 환경 구분.
@@ -27,7 +40,7 @@
 - [제출 기록·코드 복원 MVP](operations/submission-history-mvp.md): 두 확장의 서버 접수 원본 조회·새 폴더 복원·학생별 격리와 직접 시험 절차.
 
 - [C/C++ Hello World 실습](../examples/hello-world/README.md): Linux/WSL2 서버 등록, Windows/VS2022 로컬 시험과 배점.
-- [Visual Studio 2022/2026 확장](../extensions/visualstudio/README.md): Windows VSIX 빌드·설치·학생 흐름과 미검증 항목.
+- [Visual Studio 2022/2026 개발·운영 참고](../extensions/visualstudio/DEVELOPMENT.md): Windows VSIX 빌드·검증과 미검증 항목.
 - [Visual Studio 예외 점검](operations/visualstudio-exception-review.md): 인증·네트워크·제출·파일 처리의 수정 사항과 남은 현장 시험.
 - [독립 웹 파일럿 실행](operations/independent-web-pilot.md): 현재 권장 절차. 학생 웹 20010,
   VS Code API 20000, `come3105`·`come2201` 학생 등록부터 서버 실행까지.

@@ -1,0 +1,52 @@
+{
+  "schema_version": "autograde.management.profile.v1",
+  "courses": [
+    {
+      "course_key": "come2201",
+      "selections": {
+        "lifecycle_mode": "DeadlineWindows",
+        "archive_mode": "LocalTarArchive",
+        "report_mode": "HtmlCsvReports",
+        "support_mode": "ExplainableRules",
+        "notification_mode": "InstructorInbox",
+        "scheduler_mode": "PyJevSimScheduler"
+      },
+      "parameters": {
+        "lifecycle.deadlines.v1": {
+          "appeal_days": 7
+        },
+        "archive.local_tar.v1": {
+          "delay_days": 7,
+          "retention_days": 180
+        },
+        "reports.html_csv.v1": {
+          "score_basis": "latest"
+        },
+        "support.rules.v1": {
+          "minimum_graded_assignments": 3,
+          "consecutive_missed_deadlines": 2,
+          "low_score_percent": 60
+        },
+        "scheduler.pyjevsim.v1": {
+          "interval_seconds": 300
+        }
+      }
+    },
+    {
+      "course_key": "come3105",
+      "selections": {
+        "lifecycle_mode": "ManualLifecycle",
+        "archive_mode": "ArchiveDisabled",
+        "report_mode": "CsvReports",
+        "support_mode": "SupportDisabled",
+        "notification_mode": "NotificationsDisabled",
+        "scheduler_mode": "ManualScheduler"
+      },
+      "parameters": {
+        "reports.csv.v1": {
+          "score_basis": "instructor_confirmed"
+        }
+      }
+    }
+  ]
+}

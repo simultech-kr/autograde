@@ -155,7 +155,7 @@ test("symlinked assignment roots are ignored", async (context) => {
   }
 });
 
-test("starter preview accepts only a small regular top-level README", async (context) => {
+test("starter preview rejects a symlinked README", async (context) => {
   const assignmentRoot = await temporaryDirectory();
   const outside = await temporaryDirectory();
   try {
@@ -180,6 +180,61 @@ test("starter preview accepts only a small regular top-level README", async (con
   }
 });
 
+test("starter preview prefers C++ then C then README in a Unicode/spaced path", async () => {
+  const root = await temporaryDirectory();
+  const assignmentRoot = path.join(root, "실습 과제");
+  try {
+    await mkdir(assignmentRoot);
+    for (const name of ["main.cpp", "main.c", "README.md"]) {
+      await writeFile(path.join(assignmentRoot, name), "// lab\n");
+    }
+    for (const name of ["main.cpp", "main.c", "README.md"]) {
+      assert.equal(await findSafeStarterPreview(assignmentRoot), path.join(assignmentRoot, name));
+      await rm(path.join(assignmentRoot, name));
+    }
+    assert.equal(await findSafeStarterPreview(assignmentRoot), undefined);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("starter preview skips oversized sources and directories without loading project files", async () => {
+  const root = await temporaryDirectory();
+  try {
+    await writeFile(path.join(root, "main.cpp"), Buffer.alloc(2 * 1024 * 1024 + 1));
+    await mkdir(path.join(root, "main.c"));
+    await writeFile(path.join(root, "lab.sln"), "project");
+    await writeFile(path.join(root, "README.txt"), "instructions");
+    assert.equal(await findSafeStarterPreview(root), path.join(root, "README.txt"));
+    await rm(path.join(root, "README.txt"));
+    assert.equal(await findSafeStarterPreview(root), undefined);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("starter preview skips symlinked source and falls back to README", async (context) => {
+  const root = await temporaryDirectory();
+  const outside = await temporaryDirectory();
+  try {
+    await writeFile(path.join(outside, "secret.cpp"), "outside");
+    await writeFile(path.join(root, "README"), "instructions");
+    try {
+      await symlink(path.join(outside, "secret.cpp"), path.join(root, "main.cpp"), "file");
+    } catch (error) {
+      if (["EPERM", "EACCES", "ENOTSUP"].includes((error as NodeJS.ErrnoException).code ?? "")) {
+        context.skip("file symlinks are unavailable on this platform");
+        return;
+      }
+      throw error;
+    }
+    assert.equal(await findSafeStarterPreview(root), path.join(root, "README"));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await rm(outside, { recursive: true, force: true });
+  }
+});
+
 test("bundle download wiring cannot replace the current VS Code workspace", async () => {
   const extensionSource = await readFile(
     path.resolve(__dirname, "../../src/extension.ts"),
@@ -190,7 +245,20 @@ test("bundle download wiring cannot replace the current VS Code workspace", asyn
   assert.ok(downloadStart >= 0 && downloadEnd > downloadStart);
   const downloadFunction = extensionSource.slice(downloadStart, downloadEnd);
   assert.doesNotMatch(downloadFunction, /vscode\.openFolder/);
+  assert.doesNotMatch(downloadFunction, /updateWorkspaceFolders/);
   assert.match(downloadFunction, /revealDownloadedBundle\(targetUri, targetPath\)/);
+  const openStart = extensionSource.indexOf("async function revealDownloadedBundle(");
+  const openEnd = extensionSource.indexOf("async function pathExists(", openStart);
+  assert.ok(openStart >= 0 && openEnd > openStart);
+  const openFunction = extensionSource.slice(openStart, openEnd);
+  assert.match(openFunction, /executeCommand\("workbench.view.explorer"\)/);
+  assert.match(openFunction, /executeCommand\("revealInExplorer", previewUri\)/);
+  assert.match(openFunction, /vscode.Uri.joinPath\(targetUri, path.basename\(preview\)\)/);
+  assert.match(openFunction, /showTextDocument\(document, \{ preview: true \}\)/);
+  assert.doesNotMatch(openFunction, /revealFileInOS|Uri.file|rm\(/);
+  const afterOpen = downloadFunction.slice(downloadFunction.indexOf("await revealDownloadedBundle(targetUri, targetPath)"));
+  assert.match(afterOpen, /파일은 보존됩니다/);
+  assert.doesNotMatch(afterOpen, /rm\(/);
 
   const submitStart = extensionSource.indexOf("async function submitCurrentBundle(");
   const submitEnd = extensionSource.indexOf("async function cloneAssignment(", submitStart);

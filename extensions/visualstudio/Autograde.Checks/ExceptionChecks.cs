@@ -208,6 +208,34 @@ internal static class ExceptionChecks
             await Throws<ServiceError>(() => first); await Throws<ServiceError>(() => second);
             Check(posts == 1, "old files sent using new login");
         });
+        await Case("download diagnostic contains no raw exception or path", () =>
+        {
+            var diagnostic = new DownloadDiagnostic { Stage = "installing" };
+            diagnostic.Fail(new UnauthorizedAccessException("token-secret C:\\Users\\private"), false);
+            Check(diagnostic.Code == "AG-DL-LOCAL-PERMISSION", "permission classification");
+            var text = diagnostic.Details + diagnostic.Payload("0.5.2").ToString();
+            Check(!text.Contains("token-secret") && !text.Contains("C:\\Users"), "raw exception leaked");
+            Check((int)diagnostic.Payload("0.5.2")["seq"] == 1, "sequence must increase");
+            return Task.CompletedTask;
+        });
+        await Case("IDE open error preserves download success", () =>
+        {
+            var diagnostic = new DownloadDiagnostic { Stage = "opening", Outcome = "succeeded" };
+            diagnostic.Fail(new InvalidOperationException("unsafe details"), false);
+            Check(diagnostic.Outcome == "succeeded" && diagnostic.OpenOutcome == "open_failed", "file readiness lost");
+            Check(DownloadDiagnostic.Classify(new OperationCanceledException(), false, "requesting") == "AG-DL-NETWORK-TIMEOUT", "timeout classification");
+            Check(DownloadDiagnostic.Classify(new OperationCanceledException(), true, "requesting") == "AG-DL-USER-CANCELLED", "cancel classification");
+            return Task.CompletedTask;
+        });
+        foreach (int status in new[] { 401, 404, 503 })
+        await Case("diagnostic failure does not log out student " + status, async () =>
+        {
+            using var client = new ServiceClient("https://example.edu", new Handler { Action = request =>
+                Task.FromResult(request.RequestUri.AbsolutePath.EndsWith("/download-diagnostics") ? Json("{}", status) : Auth(request.RequestUri.AbsolutePath)) });
+            await client.LoginAsync("AK1-ABCD-EFGH-IJKL", None);
+            var result = await client.ReportDownloadAsync("asn_one", new DownloadDiagnostic().Payload("0.5.2"), None);
+            Check(result != "서버에 전달됨" && client.HasSession, "diagnostics altered session");
+        });
         if (failures.Count != 0) throw new Exception(string.Join("\n", failures));
         return passed;
     }

@@ -3,7 +3,7 @@ import * as path from "node:path";
 
 import { readWorkspaceMarker } from "./bundle";
 
-const SAFE_STARTER_FILE_NAMES = ["README.md", "README.txt", "README"] as const;
+const SAFE_STARTER_FILE_NAMES = ["main.cpp", "main.c", "README.md", "README.txt", "README"] as const;
 const MAX_PREVIEW_FILE_BYTES = 2 * 1024 * 1024;
 
 export interface AuthenticatedBundleRoot {
@@ -94,7 +94,7 @@ export async function discoverAuthenticatedBundleRoots(
   });
 }
 
-/** Return a small, regular top-level README that can be safely previewed. */
+/** Return a small, regular top-level source/README without loading project tasks. */
 export async function findSafeStarterPreview(assignmentRoot: string): Promise<string | undefined> {
   const root = path.resolve(assignmentRoot);
   const rootStat = await lstat(root).catch(() => undefined);
