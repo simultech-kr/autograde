@@ -16,6 +16,7 @@ import secrets
 import sqlite3
 import time
 from contextlib import nullcontext
+from copy import copy
 from typing import Any
 
 from .platform_auth import hash_student_password, validate_student_password, verify_student_password
@@ -122,7 +123,7 @@ class CourseAdminService:
                 WITH ranked AS (
                   SELECT a.course_key,r.state,r.submission_id,
                     ROW_NUMBER() OVER (PARTITION BY r.student_id,r.assignment_id
-                      ORDER BY r.received_at DESC,r.submission_id DESC) position
+                      ORDER BY r.received_at DESC,r.rowid DESC) position
                   FROM bundle_submission_requests r
                   JOIN bundle_assignment_releases a ON a.assignment_id=r.assignment_id AND a.active=1
                   JOIN platform_enrollments e ON e.student_id=r.student_id AND e.course_key=a.course_key AND e.active=1
@@ -272,6 +273,22 @@ class EnrollmentAdminService:
         if not self.secret:
             raise ValueError('server secret is required')
         self.clock = clock
+        self.principal = None
+
+    def for_instructor(self, principal):
+        """Bind authorization/audit to a request-local copy, never shared state."""
+        scoped = copy(self)
+        scoped.principal = principal
+        return scoped
+
+    def _authorize_course(self, course_key):
+        if self.principal and not self.principal.allows(course_key):
+            raise PlatformAccessDenied('담당 교과목·분반이 아닙니다.')
+
+    def _check_profile_name(self, identity, name):
+        if (self.principal and self.principal.role != 'admin' and identity
+                and name and name != identity['name']):
+            raise PlatformAccessDenied('기존 학생의 공통 이름은 관리자만 수정할 수 있습니다.')
 
     @staticmethod
     def _rows(db, course_key):
@@ -289,6 +306,7 @@ class EnrollmentAdminService:
             'active': bool(row['active']), 'has_password': bool(row['password_hash'])}
 
     def list_students(self, course_key):
+        self._authorize_course(course_key)
         with self.state._connection() as db:
             _course(db, course_key)
             return [self._public(row) for row in self._rows(db, course_key)]
@@ -308,6 +326,7 @@ class EnrollmentAdminService:
         return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
 
     def _read(self, course_key):
+        self._authorize_course(course_key)
         with self.state._connection() as db:
             # One read transaction, not a mixture of different concurrent snapshots.
             db.execute('BEGIN')
@@ -338,6 +357,7 @@ class EnrollmentAdminService:
         raise PlatformConflict('could not allocate a unique password; retry')
 
     def _cas(self, db, key, snapshot):
+        self._authorize_course(key)
         _course(db, key, writable=True)
         if self._snapshot(db, key) != snapshot:
             raise PlatformConflict('student or course state changed; review and retry')
@@ -360,11 +380,11 @@ class EnrollmentAdminService:
                        'ON CONFLICT(student_id) DO UPDATE SET name=excluded.name,updated_at=excluded.updated_at',
                        (student_id, name, utc_iso()))
 
-    @staticmethod
-    def _audit(db, key, student_key, action, reason=''):
+    def _audit(self, db, key, student_key, action, reason=''):
         reason = _text(reason, 'reason', 500, required=False)
+        actor = self.principal.user_id if self.principal else 'instructor'
         db.execute('INSERT INTO admin_enrollment_audit(course_key,student_key,action,actor,reason,created_at) '
-                   "VALUES (?,?,?,'instructor',?,?)", (key, student_key, action, reason, utc_iso()))
+                   'VALUES (?,?,?,?,?,?)', (key, student_key, action, actor, reason, utc_iso()))
 
     def add_student(self, course_key, *, student_key, name='', active=True, password=None):
         student_key = _text(student_key, 'student_key', 128)
@@ -375,6 +395,7 @@ class EnrollmentAdminService:
         if any(r['student_key'] == student_key for r in rows):
             raise PlatformConflict('student is already enrolled; use the student detail page')
         identity = identities.get(student_key)
+        self._check_profile_name(identity, name)
         if identity and name and identity['name'] and name != identity['name']:
             raise PlatformConflict('student name conflicts with an existing student')
         if not active and password:
@@ -409,6 +430,9 @@ class EnrollmentAdminService:
 
     def update_name(self, course_key, student_key, *, name, expected_name, reason=''):
         """Edit global display information after the UI confirms its global scope."""
+        self._authorize_course(course_key)
+        if self.principal and self.principal.role != 'admin':
+            raise PlatformAccessDenied('학생 공통 정보 변경은 관리자에게 요청하세요.')
         name = _text(name, 'name', 100, required=False)
         expected_name = _text(expected_name, 'expected_name', 100, required=False)
         with self.state._write() as db:
@@ -485,6 +509,7 @@ class EnrollmentAdminService:
                 name = _text(item.get('name', ''), 'name', 100, required=False)
                 view['name'] = name
                 identity, old = identities.get(key), by_key.get(key)
+                self._check_profile_name(identity, name)
                 if identity and name and identity['name'] and identity['name'] != name:
                     raise ValueError('name conflicts with existing student')
                 field = 'active'
@@ -526,7 +551,7 @@ class EnrollmentAdminService:
                     'changed' if bool(old['active']) != active or (name and name != old['name']) else 'unchanged')
                 payload.append(dict(student_key=key, name=name, active=active, expected=expected if active else None,
                                     verifier=verifier, generate=generate))
-            except (ValueError, PlatformConflict) as exc:
+            except (ValueError, PlatformConflict, PlatformAccessDenied) as exc:
                 view['errors'].append({'field': field, 'message': str(exc)})
             display.append(view)
         valid = all(not row['errors'] for row in display)
@@ -543,6 +568,7 @@ class EnrollmentAdminService:
         return dict(preview_id=preview_id, valid=valid, rows=display, expires_at=expires)
 
     def apply_csv(self, course_key, preview_id, *, session_id):
+        self._authorize_course(course_key)
         session_hash = self._session_hash(session_id)
         with self.state._connection() as db:
             preview = db.execute('SELECT * FROM admin_roster_previews WHERE preview_id=? AND course_key=?',
@@ -568,6 +594,7 @@ class EnrollmentAdminService:
         # Include all explicit new verifiers before allocating generated values.
         password_rows += [dict(student_key=p['student_key'], password_hash=p['verifier']) for p in payload if p['verifier']]
         for item in payload:
+            self._check_profile_name(identities.get(item['student_key']), item['name'])
             verifier = item['verifier']
             if item['generate']:
                 plain, verifier = self._new_password(None, password_rows, item['student_key'])

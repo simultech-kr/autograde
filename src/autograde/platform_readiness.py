@@ -20,15 +20,17 @@ class PortalReadiness:
     """
 
     def __init__(self, paths: AppPaths, workers: Sequence[BundleSubmissionWorker],
-                 stopping: threading.Event, *, min_free_bytes: int = 1024 ** 3):
+                 stopping: threading.Event, *, min_free_bytes: int = 1024 ** 3,
+                 module_checks=None):
         if isinstance(min_free_bytes, bool) or not isinstance(min_free_bytes, int) or min_free_bytes < 0:
             raise ValueError("min_free_bytes must be a non-negative integer")
         self.paths = paths
         self.workers = workers
         self.stopping = stopping
         self.min_free_bytes = min_free_bytes
+        self.module_checks = dict(module_checks or {})
 
-    def __call__(self) -> bool:
+    def _core_ready(self) -> bool:
         if self.stopping.is_set() or not self.workers or not all(worker.healthy for worker in self.workers):
             return False
         try:
@@ -49,3 +51,17 @@ class PortalReadiness:
         except (OSError, sqlite3.Error):
             return False
         return True
+
+    def status(self):
+        """Fixed module names and booleans only; never expose paths or secrets."""
+        result = {'core': self._core_ready()}
+        for name, check in self.module_checks.items():
+            try:
+                outcome = check()
+                result[name] = outcome is None or outcome is True
+            except (OSError, sqlite3.Error, ValueError):
+                result[name] = False
+        return result
+
+    def __call__(self) -> bool:
+        return all(self.status().values())

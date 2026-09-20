@@ -56,7 +56,7 @@ from .platform_pinner import (
 from .platform_qr import assignment_claim_qr_svg
 from .web_theme import THEME_CSS
 from .instructor_responsive import RESPONSIVE_CSS, result_table
-from .submission_review import attention_reason, render_review
+from .submission_review import attention_reason, render_review, render_comparison
 from .platform_state import (
     DeviceAuthorization,
     DeviceAuthorizationExpired,
@@ -333,12 +333,14 @@ class StudentPlatformService:
         bundle_store: BundleStore | None = None,
         notify_bundle_submission: SubmissionNotifier | None = None,
         instructor_token: str | None = None,
+        instructor_authorizer: Callable | None = None,
         now: Callable[[], datetime] = _utc_now,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         if len(server_secret) < 32:
             raise ValueError("server_secret must contain at least 32 bytes")
         self.state = state
+        self._instructor_authorizer = instructor_authorizer
         self._secret = server_secret
         self.course_key = _required_string(course_key, "course_key")
         self.external_access_mode = external_access_mode
@@ -1012,8 +1014,10 @@ class StudentPlatformService:
             raise PlatformAPIError(
                 403, "access_denied", "submission is not allowed"
             ) from exc
+        projection = dict(self._bundle_submission_projection(outcome.request))
+        projection['previous_best'] = self.state.get_bundle_previous_best(outcome.request.submission_id)
         return {
-            "submission": self._bundle_submission_projection(outcome.request),
+            "submission": projection,
             "replayed": outcome.replayed,
         }
 
@@ -1293,7 +1297,9 @@ class StudentPlatformService:
             self._enforce_session_assignment_scope(
                 session, "bundle", request.assignment_id
             )
-            return {"submission": self._bundle_submission_projection(request)}
+            projection = dict(self._bundle_submission_projection(request))
+            projection['previous_best'] = self.state.get_bundle_previous_best(safe_id)
+            return {"submission": projection}
         try:
             request = self.state.get_owned_submission(
                 access_token_hash=self._access_verifier(access_token),
@@ -1334,6 +1340,7 @@ class StudentPlatformService:
                 session, "bundle", receipt.assignment_id
             )
             projection = self._bundle_result_projection(result)
+            projection['previous_best'] = self.state.get_bundle_previous_best(safe_id)
             if receipt.result_policy == ResultPolicy.SCORE_ONLY:
                 projection["rubric"] = {}
                 projection["diagnostics"] = []
@@ -1372,10 +1379,14 @@ class StudentPlatformService:
     # Instructor dashboard -------------------------------------------
 
     def instructor_submission_page(self, authorization: str, submission_id: str,
-                                   file_index: int | None = None) -> PlatformResponse:
+                                   file_index: int | None = None, *, history_offset: int = 0,
+                                   compare_id: str | None = None) -> PlatformResponse:
         self._authorize_instructor(authorization)
         try:
-            status, body = render_review(self.state, self.bundle_store, self.course_key, submission_id, file_index)
+            if compare_id is not None:
+                status, body = render_comparison(self.state, self.bundle_store, self.course_key, submission_id, compare_id, file_index)
+            else:
+                status, body = render_review(self.state, self.bundle_store, self.course_key, submission_id, file_index, history_offset)
         except PlatformNotFound as exc:
             raise PlatformAPIError(404, 'submission_not_found', '현재 수업에서 제출물 또는 파일을 찾을 수 없습니다.') from exc
         return PlatformResponse(status, body, {'Content-Type': 'text/html; charset=utf-8'})
@@ -1573,6 +1584,9 @@ class StudentPlatformService:
         return result
 
     def _authorize_instructor(self, authorization: str) -> None:
+        if getattr(self, '_instructor_authorizer', None) is not None:
+            self._instructor_authorizer(authorization, self.course_key)
+            return
         challenge = {"WWW-Authenticate": 'Basic realm="Autograde instructor", charset="UTF-8"'}
         if self._instructor_token is None:
             raise PlatformAPIError(

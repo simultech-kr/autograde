@@ -55,6 +55,24 @@ def test_compact_layout_keeps_results_separate_from_secondary_actions():
     assert 'ThemeResources.Tabs(pages)' in source
 
 
+def test_toolbar_alignment_and_signed_out_visibility_contract():
+    """WPF wiring only; native layout at Windows DPI requires manual confirmation."""
+    directory = ROOT / 'extensions/visualstudio/Autograde.VisualStudio'
+    ui = (directory / 'AssignmentControl.cs').read_text()
+    theme = (directory / 'ThemeResources.cs').read_text()
+    assert 'var toolbar = new Grid()' in ui
+    assert 'toolbar.ActualWidth < 300' in ui
+    assert 'Grid.SetRow(chrome, narrow ? 1 : 0)' in ui
+    assert 'button.Margin = new Thickness(8, 0, 0, 0)' in ui
+    assert 'button.VerticalAlignment = VerticalAlignment.Center' in ui
+    assert 'button.MinHeight = 32' in theme
+    assert 'button.Padding = new Thickness(10, 4, 10, 4)' in theme
+    assert 'logoutButton.Visibility = authenticated ? Visibility.Visible : Visibility.Collapsed' in ui
+    assert 'assignmentManagement.Visibility = folderManagement.Visibility = authenticated' in ui
+    assert 'output.TextChanged += (_, __) => UpdateOutputVisibility()' in ui
+    assert 'string.IsNullOrWhiteSpace(output.Text) ? Visibility.Collapsed : Visibility.Visible' in ui
+
+
 def test_logout_ui_does_not_require_valid_address():
     """Source contract only; Windows WPF interaction remains a manual test."""
     source = (ROOT / "extensions/visualstudio/Autograde.VisualStudio/AssignmentControl.cs").read_text()
@@ -95,11 +113,11 @@ def test_theme_release_preserves_upgrade_identity_and_versions():
     ns = {'v': 'http://schemas.microsoft.com/developer/vsx-schema/2011'}
     identity = ET.parse(directory / 'source.extension.vsixmanifest').find('v:Metadata/v:Identity', ns)
     assert identity.attrib['Id'] == 'Autograde.VisualStudio.74db5571-a3ad-4451-a5f4-e8cc28d20536'
-    assert identity.attrib['Version'] == '0.5.2'
+    assert identity.attrib['Version'] == '0.5.5'
     project = ET.parse(directory / 'Autograde.VisualStudio.csproj')
     assert project.find('PropertyGroup/Version').text == identity.attrib['Version']
-    assert '"0.5.2")]' in (directory / 'AutogradePackage.cs').read_text()
-    assert '["extension_version"] = "0.5.2"' in (directory.parent / 'Autograde.Core/ServiceClient.cs').read_text()
+    assert '"0.5.5")]' in (directory / 'AutogradePackage.cs').read_text()
+    assert '["extension_version"] = "0.5.5"' in (directory.parent / 'Autograde.Core/ServiceClient.cs').read_text()
     build = (directory.parent / 'build.ps1').read_text()
     assert '$builtIdentity.Id -ne $expectedIdentity.Id' in build
     assert '$builtIdentity.Version -ne $expectedIdentity.Version' in build
@@ -113,7 +131,7 @@ def test_download_opens_installed_folder_without_deleting_files_on_open_failure(
     assert download.index('Bundle.ExtractStarter(') < download.index('folder.Text = target;') < download.index('await OpenDownloadedFolderAsync(target, ct, diagnostic)')
     opening = ui.split('async Task OpenDownloadedFolderAsync(', 1)[1].split('void RequireClient()', 1)[0]
     assert 'catch (OperationCanceledException ex)' in opening and 'catch (Exception ex)' in opening
-    assert '파일은 보존됩니다' in opening
+    assert 'DownloadDiagnostic.OpenRecoveryGuidance(target)' in opening
     assert 'Delete(' not in opening
     adapter = (directory / 'WorkspaceOpener.cs').read_text()
     assert adapter.index('SwitchToMainThreadAsync(cancel)') < adapter.index('solution.OpenFolder(fullPath)')
@@ -121,6 +139,24 @@ def test_download_opens_installed_folder_without_deleting_files_on_open_failure(
     assert 'Directory.Exists(directory)' in adapter
     assert 'Process.Start' not in adapter and 'ExecuteCommand' not in adapter
     assert 'Bundle.VerifyWorkspace(folder.Text, client.BaseUrl, Id)' in ui
+
+
+def test_extension_manager_description_and_open_recovery_are_connected():
+    directory = ROOT / 'extensions/visualstudio/Autograde.VisualStudio'
+    ns = {'v': 'http://schemas.microsoft.com/developer/vsx-schema/2011'}
+    description = ET.parse(directory / 'source.extension.vsixmanifest').find('v:Metadata/v:Description', ns).text
+    for phrase in ('도구 → Autograde 과제', 'API 주소', '수령 코드', '수강 등록', '이전 공개 최고점',
+                   '파일 → 열기 → 폴더', '문의번호', '로그아웃', 'VS Code용 아님'):
+        assert phrase in description
+    assert len(description) <= 4000
+    ui = (directory / 'AssignmentControl.cs').read_text()
+    assert 'ShowDownloadDiagnostic(diagnostic, target)' in ui
+    presentation = ui.split('void ShowDownloadDiagnostic(', 1)[1].split('async Task ReportDownloadAsync', 1)[0]
+    assert 'OpenRecoveryGuidance(target)' in presentation and '저장 위치: ' in presentation
+    retry = ui.split('folderButton = AddButton', 1)[1].split('AddButton(panel, "기존 과제 폴더 선택"', 1)[0]
+    assert 'Bundle.VerifyWorkspace' in retry and 'await ReportDownloadAsync(Id, diagnostic)' in retry
+    assert 'ShowDownloadDiagnostic(diagnostic, folder.Text)' in retry
+    assert 'StarterAsync' not in retry and 'ExtractStarter' not in retry
 
 
 def test_wpf_theme_uses_dynamic_resources_and_preserves_password_masking():

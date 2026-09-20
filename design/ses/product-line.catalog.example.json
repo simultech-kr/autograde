@@ -1,0 +1,68 @@
+{
+  "schema_version": "autograde.spl.catalog.design-example.v1",
+  "status": "design_only",
+  "runtime_ready": false,
+  "apply_supported": false,
+  "notice": "Proposed initial feature-to-plugin mapping and complete template feature sets, not a license, production SES or supported release matrix.",
+  "product_family": "autograde",
+  "catalog_revision": 1,
+  "features": [
+    {
+      "feature_id": "platform.core",
+      "mandatory": true,
+      "requires": [],
+      "plugin_ids": ["authorization.course", "identity.roster_password", "identity.instructor_personal", "audit.events", "storage.sqlite", "artifacts.local_digest", "course.catalog", "enrollment.roster_csv", "assignment.authoring", "assignment.validation", "assignment.release", "delivery.bundle", "claim.web_code", "submission.receipt", "submission.history", "grading.queue", "result.publication", "operations.health", "operations.backup", "data.portability", "ui.instructor", "ui.student_portal"],
+      "production_gate": ["personal_admin_identity", "verified_runner_isolation", "restore_test", "basic_data_export"]
+    },
+    {
+      "feature_id": "assessment.io",
+      "requires": ["platform.core"],
+      "plugin_ids": ["grading.io_cases"],
+      "course_variants_enabled": ["LegacyIoAssessment"]
+    },
+    {
+      "feature_id": "rubric.rules",
+      "requires": ["platform.core", "assessment.io"],
+      "plugin_ids": ["rubric.catalog", "rubric.binding", "evaluation.rubric", "evaluator.deterministic"],
+      "course_variants_enabled": ["RuleBasedRubric"]
+    },
+    {
+      "feature_id": "rubric.manual",
+      "requires": ["platform.core"],
+      "plugin_ids": ["rubric.catalog", "rubric.binding", "evaluation.rubric", "evaluator.instructor"],
+      "course_variants_enabled": ["InstructorRubric"]
+    },
+    {
+      "feature_id": "rubric.hybrid",
+      "requires": ["rubric.rules", "rubric.manual"],
+      "plugin_ids": ["evaluation.rubric"],
+      "course_variants_enabled": ["HybridRubric"]
+    },
+    {
+      "feature_id": "achievement.hybrid",
+      "requires": ["rubric.hybrid"],
+      "plugin_ids": ["outcome.catalog", "rubric.mapping", "achievement.hybrid"],
+      "course_variants_enabled": ["HybridAchievement"],
+      "readiness_gate": ["approved_outcome_mapping", "consistent_evidence_snapshot"]
+    },
+    {
+      "feature_id": "reports.achievement",
+      "requires": ["achievement.hybrid"],
+      "plugin_ids": ["report.html_csv"]
+    },
+    {
+      "feature_id": "support.achievement",
+      "requires": ["achievement.hybrid"],
+      "plugin_ids": ["support.explainable_rules", "inbox.instructor"],
+      "policy": "human_review_no_student_auto_contact"
+    }
+  ],
+  "templates": [
+    {"template_id": "practice", "commercial_name_provisional": true, "features": ["platform.core", "assessment.io"]},
+    {"template_id": "rubric", "commercial_name_provisional": true, "features": ["platform.core", "assessment.io", "rubric.rules", "rubric.manual", "rubric.hybrid"]},
+    {"template_id": "insight", "commercial_name_provisional": true, "features": ["platform.core", "assessment.io", "rubric.rules", "rubric.manual", "rubric.hybrid", "achievement.hybrid", "reports.achievement", "support.achievement"]}
+  ],
+  "future_catalog_entries": ["rubric.ai_assist", "rubric.document_import", "achievement.criteria", "archive.verified_bundle", "shared_multitenant_deployment"],
+  "activation_blockers": ["spl_generator_not_implemented", "v2_host_not_implemented", "plugins_not_installed_or_qualified", "production_gates_not_verified"],
+  "pricing_and_entitlements": "not_defined"
+}

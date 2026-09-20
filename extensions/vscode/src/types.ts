@@ -35,6 +35,14 @@ export interface SubmissionSummary {
   readonly sourceDigest?: string;
   readonly score?: number;
   readonly maxScore?: number;
+  readonly previousBest?: PreviousBestScore;
+}
+
+export interface PreviousBestScore {
+  readonly submissionId: string;
+  readonly receivedAt: string;
+  readonly score: number;
+  readonly maxScore: number;
 }
 
 export interface GradeResult {
@@ -45,6 +53,7 @@ export interface GradeResult {
   readonly maxScore?: number;
   readonly rubric: readonly RubricItem[];
   readonly diagnostics: readonly ResultDiagnostic[];
+  readonly previousBest?: PreviousBestScore;
 }
 
 export interface RubricItem {

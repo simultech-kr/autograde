@@ -322,7 +322,8 @@ Dashboard에서 active roster × assignment의 다운로드, 제출, 최신 상�
 다음 항목을 표본 점검합니다.
 
 - 미제출 학생이 제출 완료로 표시되지 않음
-- 동일 bundle 재시도가 중복 성적으로 늘지 않음
+- 동일 요청 키의 통신 재시도가 중복 성적으로 늘지 않음. 0.5.4부터 접수 확인 후 새 요청 키로
+  명시적으로 재제출하면 같은 bundle이어도 별도 접수·채점한다.
 - 다른 학생이 submission/result ID를 알아도 조회할 수 없음
 - assessment 오류는 0점이 아니라 `assessment_failed`로 구분됨
 - 운영 오류는 `infra_failed`로 구분됨

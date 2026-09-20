@@ -1,0 +1,122 @@
+{
+  "schema_version": "autograde.platform.composition.design-example.v1",
+  "status": "design_only",
+  "runtime_ready": false,
+  "apply_supported": false,
+  "notice": "Proposed v2 decision bindings, not an executable SES/PES or current pilot/management configuration. Course keys are illustrative; no database lookup or mutation. Product entitlements and supported deployment choices are separate SPL inputs.",
+  "target_contracts": {
+    "model": "autograde.platform.ses.v2",
+    "profile": "autograde.platform.profile.v2",
+    "plan": "autograde.platform.pes.v2"
+  },
+  "protected_invariants": {
+    "course_scope_required": true,
+    "immutable_receipts_required": true,
+    "audit_required": true,
+    "approved_registry_only": true,
+    "automatic_grade_mutation": false,
+    "automatic_artifact_deletion": false,
+    "automatic_student_contact": false
+  },
+  "platform": {
+    "kernel": "host.kernel",
+    "identity": "PersonalInstructorIdentity",
+    "student_identity_provider": "identity.roster_password",
+    "instructor_identity_provider": "identity.instructor_personal",
+    "authorization_provider": "authorization.course",
+    "storage_provider": "storage.sqlite",
+    "artifact_provider": "artifacts.local_digest",
+    "audit_provider": "audit.events",
+    "health_provider": "operations.health",
+    "backup_provider": "operations.backup",
+    "reset_provider": "enrollment.reset",
+    "diagnostics_provider": "client.diagnostics",
+    "presentation": ["ui.instructor", "ui.student_portal"],
+    "client_adapters": ["client.vscode", "client.visualstudio", "client.cli"],
+    "worker_limits": {"analysis_concurrency": 1},
+    "readiness": "contract_only; personal identity, host, and plugins are not installed by this file"
+  },
+  "course_offerings": [
+    {
+      "course_key": "come2201",
+      "course_code": "come2201",
+      "selection_kind": "complete_no_inheritance",
+      "required_plugins": [
+        "course.catalog", "enrollment.roster_csv",
+        "assignment.authoring", "assignment.validation", "assignment.release",
+        "lifecycle.deadlines", "claim.web_code", "submission.receipt",
+        "submission.history", "source.compare", "grading.queue", "result.publication",
+        "rubric.catalog", "rubric.binding", "evaluation.rubric", "evaluator.deterministic"
+      ],
+      "selections": {
+        "delivery": "BundleDelivery",
+        "assessment": "RuleBasedRubric",
+        "runner": "PilotLocalTrustedOnly",
+        "achievement": "CriteriaAchievement",
+        "reports": "HtmlCsvReports",
+        "support": "SupportDisabled",
+        "archive": "ArchiveDisabled",
+        "notifications": "InboxDisabled",
+        "schedule": "ManualSchedule"
+      },
+      "achievement_policy": {
+        "score_basis": "latest_received",
+        "minimum_coverage_percent": 100,
+        "minimum_distinct_assignments": 1,
+        "all_required_criteria": true,
+        "achieved_from_percent": 80,
+        "partial_from_percent": 60,
+        "missing_evidence": "unknown_not_zero",
+        "student_visibility": "instructor_approved_only",
+        "parameters_are_illustrative": true
+      },
+      "required_capabilities": ["ApprovedRubric.v1", "RubricBinding.v1", "RubricAssessment.v1", "OutcomeMap.v1", "EvidenceSnapshot.v1", "AchievementSnapshot.v1"],
+      "activation_blockers": ["v2_host_not_implemented", "plugins_contract_only", "rubric_and_binding_not_approved", "outcomes_and_mapping_not_registered"]
+    },
+    {
+      "course_key": "come3105",
+      "course_code": "come3105",
+      "selection_kind": "complete_no_inheritance",
+      "required_plugins": [
+        "course.catalog", "enrollment.roster_csv",
+        "assignment.authoring", "assignment.validation", "assignment.release",
+        "lifecycle.deadlines", "claim.web_code", "submission.receipt",
+        "submission.history", "source.compare", "grading.queue", "result.publication",
+        "rubric.catalog", "rubric.binding", "evaluation.rubric", "evaluator.deterministic", "evaluator.instructor"
+      ],
+      "selections": {
+        "delivery": "BundleDelivery",
+        "assessment": "HybridRubric",
+        "runner": "PilotLocalTrustedOnly",
+        "achievement": "HybridAchievement",
+        "reports": "HtmlCsvReports",
+        "support": "ExplainableSupport",
+        "archive": "ArchiveDisabled",
+        "notifications": "InstructorInbox",
+        "schedule": "PyJevSimSchedule"
+      },
+      "achievement_policy": {
+        "score_basis": "latest_received",
+        "minimum_coverage_percent": 100,
+        "minimum_distinct_assignments": 1,
+        "all_required_criteria": true,
+        "achieved_from_percent": 80,
+        "partial_from_percent": 60,
+        "missing_evidence": "unknown_not_zero",
+        "student_visibility": "instructor_approved_only",
+        "parameters_are_illustrative": true
+      },
+      "schedule_policy": {"interval_seconds": 300},
+      "support_policy": {"mode": "human_review_only", "student_auto_contact": false},
+      "required_capabilities": ["ApprovedRubric.v1", "RubricBinding.v1", "RubricAssessment.v1", "OutcomeMap.v1", "EvidenceSnapshot.v1", "InstructorDecision.v1", "AchievementSnapshot.v1"],
+      "activation_blockers": ["v2_host_not_implemented", "plugins_contract_only", "personal_instructor_identity_not_implemented", "durable_analysis_jobs_not_implemented", "rubric_and_binding_not_approved", "outcomes_and_mapping_not_registered"]
+    }
+  ],
+  "constraints": [
+    "Required providers cannot be disabled; implementation must be approved and installed.",
+    "HybridAchievement requires personal instructor identity and manual rubric decisions.",
+    "Automatic jobs require durable outbox, bounded workers, and PyJevSimSchedule.",
+    "PilotLocalTrustedOnly is not an isolation boundary or general-student production approval.",
+    "Course, assignment, and client selections cannot weaken platform safety policies."
+  ]
+}

@@ -1,0 +1,122 @@
+{
+  "assignment_id": "observer_demo",
+  "course_key": "come2201",
+  "criteria": [
+    {
+      "criterion_id": "observer.notification",
+      "description": "구독 등록과 해제 후 통지 대상이 요구사항과 일치한다.",
+      "evaluator_kind": "deterministic",
+      "evidence": {
+        "case_ids": [
+          "notify_registered",
+          "detach_stops"
+        ],
+        "kind": "test_case_results"
+      },
+      "infrastructure_failure": "blocked_not_zero",
+      "levels": [
+        {
+          "description": "유효하게 실행한 두 검사 모두 기준 미충족",
+          "level_id": "not_met",
+          "ratio": "0"
+        },
+        {
+          "description": "유효하게 실행한 두 검사 중 하나 충족",
+          "level_id": "partial",
+          "ratio": "0.5"
+        },
+        {
+          "description": "유효하게 실행한 두 검사 모두 충족",
+          "level_id": "met",
+          "ratio": "1"
+        }
+      ],
+      "maximum_points": "40",
+      "required": true,
+      "rule": {
+        "all_cases_must_have_valid_results": true,
+        "level_by_count": {
+          "0": "not_met",
+          "1": "partial",
+          "2": "met"
+        },
+        "operator": "passed_case_count"
+      },
+      "title": "등록된 구독자에게 상태 변경 통지"
+    },
+    {
+      "criterion_id": "observer.decoupling",
+      "description": "발행자는 구체 구독자 타입을 알지 않고 공통 인터페이스를 통해 통지한다.",
+      "evaluator_kind": "instructor",
+      "evidence": {
+        "kind": "source_review",
+        "requires_file_and_line_reference": true,
+        "requires_source_digest": true
+      },
+      "levels": [
+        {
+          "description": "구체 구독자별 분기가 필요하고 공통 인터페이스를 사용하지 않는다.",
+          "level_id": "not_met",
+          "ratio": "0"
+        },
+        {
+          "description": "공통 인터페이스는 있으나 발행자가 일부 구체 타입에 의존한다.",
+          "level_id": "partial",
+          "ratio": "0.5"
+        },
+        {
+          "description": "새 구독자 구현을 추가해도 발행자 변경 없이 공통 인터페이스로 통지한다.",
+          "level_id": "met",
+          "ratio": "1"
+        }
+      ],
+      "maximum_points": "35",
+      "required": true,
+      "review_reason_required": true,
+      "title": "발행자와 구독자의 추상 인터페이스 분리"
+    },
+    {
+      "criterion_id": "observer.lifecycle",
+      "description": "구독자가 파괴된 뒤 유효하지 않은 참조를 호출하지 않도록 소유권과 해제 책임을 설명하고 구현한다.",
+      "evaluator_kind": "instructor",
+      "evidence": {
+        "kind": "source_and_explanation_review",
+        "requires_file_and_line_reference": true,
+        "requires_source_digest": true
+      },
+      "levels": [
+        {
+          "description": "해제 책임이 없고 파괴된 객체 참조가 남는 근거가 확인된다.",
+          "level_id": "not_met",
+          "ratio": "0"
+        },
+        {
+          "description": "정상 해제 경로는 있으나 객체 수명 예외에서 책임이 불명확하다.",
+          "level_id": "partial",
+          "ratio": "0.5"
+        },
+        {
+          "description": "소유권·해제 책임이 명확하고 제출 코드 및 설명에서 해당 정책을 확인할 수 있다.",
+          "level_id": "met",
+          "ratio": "1"
+        }
+      ],
+      "maximum_points": "25",
+      "required": true,
+      "review_reason_required": true,
+      "title": "구독 해제와 객체 수명 정책 설명"
+    }
+  ],
+  "rubric_id": "observer_cpp_review",
+  "schema_version": "autograde.rubric.v1",
+  "scoring": {
+    "decimal_places_display": 2,
+    "incomplete_total": "null",
+    "maximum_points": "100",
+    "method": "weighted_levels.v1",
+    "not_applicable": "requires_approved_exception",
+    "rounding": "half_up_after_total"
+  },
+  "title": "C++ 옵저버 패턴: 통지 동작과 의존성 분리",
+  "version": 1
+}

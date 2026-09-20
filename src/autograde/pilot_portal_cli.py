@@ -52,7 +52,7 @@ def _course_grader(values, paths, state, course, *, isolated):
 
 
 def _create_course_runtime(values, paths, state, course, *, isolated, secret,
-                           instructor, bundles, notify, password_slots):
+                           instructor, bundles, notify, password_slots, identities=None):
     """Do not retain a lifecycle lock when a failed activation is retried."""
     with ExitStack() as resources:
         resources.enter_context(_exclusive_course_service_lock(paths, course))
@@ -66,7 +66,8 @@ def _create_course_runtime(values, paths, state, course, *, isolated, secret,
             workspace_builder=WorkspaceBuilder(paths.workspaces), grader=grader)
         service = StudentPlatformService(state=state, server_secret=secret, course_key=course,
             public_base_url=values["public_base_url"], bundle_store=bundles,
-            notify_bundle_submission=notify, instructor_token=instructor)
+            notify_bundle_submission=notify, instructor_token=instructor,
+            instructor_authorizer=identities.authorize_course if identities else None)
         service._password_verification_slots = password_slots
         return service, processor, grader, resources.pop_all()
 
@@ -85,6 +86,15 @@ def run(config, *, isolated=False):
     courses.get_course(values["course_key"])
     secret = create_or_load_auth_secret(paths.platform_auth_secret)
     instructor = create_or_load_instructor_token(paths.platform_instructor_token)
+    identities = None
+    if values.get('instructor_auth_mode', 'shared') == 'personal':
+        from .instructor_identity import InstructorIdentityStore
+        import sqlite3
+        identities = InstructorIdentityStore(paths.root / 'instructor-identities.sqlite3')
+        try:
+            identities.check_ready()
+        except sqlite3.Error as exc:
+            raise ValueError('personal instructor accounts must be initialized before startup') from exc
     bundles = _bundle_store(paths)
     workers = []
     graders = []
@@ -99,7 +109,7 @@ def run(config, *, isolated=False):
         def factory(course):
             service, processor, grader, resources = _create_course_runtime(
                 values, paths, state, course, isolated=isolated, secret=secret,
-                instructor=instructor, bundles=bundles, password_slots=password_slots,
+                instructor=instructor, bundles=bundles, password_slots=password_slots, identities=identities,
                 notify=lambda submission_id: student_worker.submission_available(submission_id))
             stack.callback(resources.close)
             graders.append(grader)
@@ -113,27 +123,41 @@ def run(config, *, isolated=False):
             services[course]
         courses.before_activate = lambda course: services[course]
         controller = None
+        web_module_checks = {}
+        if identities is not None:
+            web_module_checks['instructor_identity'] = identities.check_ready
         if admin_enabled:
             from .assignment_admin import AssignmentAdminService
             from .instructor_web import InstructorWeb
             assignments = AssignmentAdminService(state, paths, course_status=lambda key: courses.get_course(key)["status"])
             workers.append(assignments)
+            rubrics = None
+            if values.get("instructor_rubric_web_enabled", False):
+                from .rubric_catalog import open_web_catalog
+                from .instructor_assignment_catalog import InstructorAssignmentCatalog
+                from .rubric_assessment import SubmissionEvidenceSource
+                rubrics = open_web_catalog(paths, InstructorAssignmentCatalog(state), secret,
+                    evidence_source=SubmissionEvidenceSource(state, bundles) if identities else None)
+                web_module_checks['rubric_catalog'] = rubrics.store.check_available
+                if rubrics.assessments:
+                    web_module_checks['rubric_assessment'] = rubrics.assessments.check_available
             controller = InstructorWeb(courses, EnrollmentAdminService(state, secret), assignments,
                 authorize=services[values["course_key"]]._authorize_instructor,
-                secret=secret, web_url=values["web_public_base_url"],
+                secret=secret, web_url=values["web_public_base_url"], rubrics=rubrics, identities=identities,
                 submissions=lambda key, auth: services[key].instructor_dashboard_page(auth, portal=True),
-                submission_review=lambda key, auth, sid, index: services[key].instructor_submission_page(auth, sid, index))
+                submission_review=lambda key, auth, sid, index, **options: services[key].instructor_submission_page(auth, sid, index, **options))
         api = CourseAPI(services, secret, courses=courses)
         web = CoursePortal(services, secret, values["web_public_base_url"], values["public_base_url"],
                            courses=courses, instructor=controller)
         servers = []
         readiness = PortalReadiness(paths, workers, stop)
+        web_readiness = PortalReadiness(paths, workers, stop, module_checks=web_module_checks)
         for port, facade, origin in (
             (values["port"], api, values["public_base_url"]),
             (values["web_port"], web, values["web_public_base_url"]),
         ):
             server = create_server((values["listen"], port), facade, public_base_url=origin,
-                                   readiness_check=readiness)
+                                   readiness_check=web_readiness if facade is web else readiness)
             stack.callback(server.server_close)
             servers.append(server)
         # Bind both sockets and validate assignments before committing initialization.

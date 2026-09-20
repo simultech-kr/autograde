@@ -182,7 +182,7 @@ def test_six_step_template_validation_publish_real_grader(setup):
     hidden = browser.post(BASE + '/assignments/' + draft['published_assignment_id'] + '/hide', confirm='yes')
     assert hidden.status == 303
     assert '현재 숨김 상태입니다' in browser.get(published.headers['Location']).body
-    assert '<td>숨김</td>' in browser.get(BASE + '/assignments').body
+    assert '<span class="status-badge">숨김</span>' in browser.get(BASE + '/assignments').body
 
 
 def test_direct_upload_roles_and_case_form_then_stale_revision(setup):
@@ -235,7 +235,7 @@ def test_archive_views_do_not_offer_unavailable_edits_or_dangerous_reset(setup):
     students.add_student('come2201', student_key='001', password='123456')
     guide = browser.get(BASE + '/students/reset-guide')
     assert '현재 웹에서는 실행할 수 없으며' in guide.body
-    assert '<form' not in guide.body
+    assert not [form for form in Forms(guide.body).forms if form.get('method') == 'post']
     courses.set_status('come2201', 'archived')
     assert '학생 등록</button>' not in browser.get(BASE + '/students').body
     assert '비밀번호 초기화</button>' not in browser.get(BASE + '/students/001').body
@@ -265,7 +265,7 @@ def test_name_edit_explicit_global_warning_and_concurrency(setup):
 def test_create_form_replay_uses_durable_key_without_duplicate_draft(setup):
     browser, _, _, _, assignments = setup
     page = browser.get(BASE + '/assignments/new')
-    fields = Forms(page.body).forms[0]['fields']
+    fields = next(form['fields'] for form in Forms(page.body).forms if form['action'] == BASE + '/drafts')
     key = fields['creation_key']
     first = browser.post(BASE + '/drafts', creation_key=key, title='First')
     second = browser.post(BASE + '/drafts', creation_key=key, title='First')

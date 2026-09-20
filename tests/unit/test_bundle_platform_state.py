@@ -440,8 +440,8 @@ def test_accepted_bundle_submission_snapshots_inputs_and_coalesces_replays(
         key="another-key",
         request_hash=verifier("9"),
     )
-    assert semantic.replayed
-    assert semantic.request.submission_id == created.request.submission_id
+    assert not semantic.replayed
+    assert semantic.request.submission_id == "unused-semantic"
 
     with pytest.raises(PlatformIdempotencyConflict):
         fixture.submit(
@@ -543,12 +543,12 @@ def test_daily_limit_does_not_charge_replays(
     replay = fixture.submit(
         submission_id="unused",
         receipt_id="unused-receipt",
-        key="replay-key",
-        request_hash=verifier("9"),
         max_daily=1,
     )
     assert replay.replayed
     assert replay.request.submission_id == first.request.submission_id
+    with pytest.raises(PlatformSubmissionLimitExceeded, match="daily"):
+        fixture.submit(submission_id="same-source-new", receipt_id="new-receipt", key="new-key", max_daily=1)
 
     store.transition_bundle_submission(first.request.submission_id, "queued", at=NOW)
     store.transition_bundle_submission(

@@ -54,6 +54,7 @@ summary{cursor:pointer;padding:10px 0}:focus-visible{outline:2px solid var(--vsc
 <section class="card" aria-label="채점 결과 요약"><h1>${escape(view.headline)}</h1><p class="score">${escape(view.score)}</p>
 ${view.percent === undefined ? "" : `<progress max="100" value="${view.percent}" aria-label="자동채점 총점 달성률"></progress>`}
 <p>${escape(view.summary)}</p><h2>다음 할 일</h2><p>${escape(view.next)}</p></section>
+${result.previousBest ? `<section class="card" aria-label="이전 최고점"><h2>이번 제출 이전 최고점</h2><p>${escape(result.previousBest.score)} / ${escape(result.previousBest.maxScore)}점</p><p>${escape(result.previousBest.receivedAt)} · 접수번호 ${escape(result.previousBest.submissionId)}</p></section>` : '<p class="hint">이전 공개 최고점 정보 없음</p>'}
 ${view.items.map(item => `<section class="card ${item.needsWork ? "needs-work" : ""}"><h3>${item.comparable ? item.needsWork ? "수정 필요" : "충족" : "참고 · 판정 없음"} · ${escape(item.title)}</h3>
 <p>${item.comparable ? `${item.score} / ${item.maxScore}점` : "배점 정보 없음"}</p><p>${escape(item.feedback ?? "공개된 상세 피드백이 없습니다.")}</p></section>`).join("")}
 ${diagnostics.length ? `<section class="card"><h2>추가 피드백 (${diagnostics.length}건)</h2>${diagnostics.slice(0, 5).map(item => `<p>${escape(diagnostic(item))}</p>`).join("")}</section>` : ""}

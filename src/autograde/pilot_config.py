@@ -31,7 +31,7 @@ _REQUIRED_KEYS = frozenset(
 )
 _OPTIONAL_KEYS = frozenset(
     {"grading_runtime", "bundle_worker_count", "external_access_mode", "web_public_base_url", "web_port",
-     "instructor_assignment_web_enabled", "roster_bootstrap_mode"}
+     "instructor_assignment_web_enabled", "instructor_rubric_web_enabled", "instructor_auth_mode", "roster_bootstrap_mode"}
 )
 _ALLOWED_KEYS = _REQUIRED_KEYS | _OPTIONAL_KEYS
 _SECRET_KEY_PARTS = frozenset(
@@ -113,6 +113,20 @@ def load_pilot_config(path: str | Path) -> PilotConfig:
     if enabled not in {"true", "false"}:
         raise PilotConfigError("instructor_assignment_web_enabled must be true or false")
     values["instructor_assignment_web_enabled"] = enabled == "true"
+    instructor_mode = raw_values.get('instructor_auth_mode', 'shared')
+    if instructor_mode not in {'shared', 'personal'}:
+        raise PilotConfigError('instructor_auth_mode must be shared or personal')
+    if instructor_mode == 'personal' and (not values['instructor_assignment_web_enabled'] or not {'web_port', 'web_public_base_url'} <= raw_values.keys()):
+        raise PilotConfigError('personal instructor auth requires instructor web and web origin/port')
+    values['instructor_auth_mode'] = instructor_mode
+    rubric_enabled = raw_values.get("instructor_rubric_web_enabled", "false")
+    if rubric_enabled not in {"true", "false"}:
+        raise PilotConfigError("instructor_rubric_web_enabled must be true or false")
+    values["instructor_rubric_web_enabled"] = rubric_enabled == "true"
+    if values["instructor_rubric_web_enabled"] and not values["instructor_assignment_web_enabled"]:
+        raise PilotConfigError("rubric web requires instructor_assignment_web_enabled=true")
+    if values["instructor_rubric_web_enabled"] and not {"web_port", "web_public_base_url"} <= raw_values.keys():
+        raise PilotConfigError("rubric web requires web_port and web_public_base_url")
     mode = raw_values.get("roster_bootstrap_mode", "csv")
     if mode not in {"csv", "web"}:
         raise PilotConfigError("roster_bootstrap_mode must be csv or web")
@@ -147,6 +161,8 @@ def apply_pilot_config(
     precedence is therefore CLI > pilot CSV > environment > built-in default.
     """
 
+    if config.values.get('instructor_auth_mode') == 'personal' and getattr(namespace, 'command', None) == 'serve':
+        raise PilotConfigError('personal instructor auth requires autograde.pilot_portal_cli, not legacy platform serve')
     for key, value in config.values.items():
         if not hasattr(namespace, key):
             # ``listen`` and other serve-only options are intentionally ignored

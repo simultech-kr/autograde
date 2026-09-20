@@ -24,6 +24,7 @@ namespace Autograde.Core
         public string Summary { get; private set; }
         public string NextStep { get; private set; }
         public string Details { get; private set; }
+        public string PreviousBest { get; private set; } = "이전 최고점 정보 없음";
         public double? Percent { get; private set; }
         public IReadOnlyList<CriterionPresentation> Criteria { get; private set; } = new List<CriterionPresentation>();
         public IReadOnlyList<string> DiagnosticPreview { get; private set; } = new List<string>();
@@ -50,6 +51,10 @@ namespace Autograde.Core
         public static ResultPresentation From(JObject result)
         {
             var model = new ResultPresentation();
+            if (result.Property("previous_best") != null) model.PreviousBest = "이전 공개 점수 없음";
+            if (result["previous_best"] is JObject best && Valid(Number(best["score"]), Number(best["max_score"])))
+                model.PreviousBest = "이전 최고점: " + Format(Number(best["score"]).Value) + " / " + Format(Number(best["max_score"]).Value) +
+                    "점 · " + (string)best["received_at"] + "\n접수번호: " + (string)best["submission_id"];
             var state = (string)result["state"];
             model.Headline = GradingPoller.Label(state);
             model.Summary = "아직 완성 여부를 판단할 수 없습니다.";

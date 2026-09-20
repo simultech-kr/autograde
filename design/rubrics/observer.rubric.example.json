@@ -1,0 +1,76 @@
+{
+  "schema_version": "autograde.rubric.design-example.v1",
+  "status": "design_only",
+  "runtime_ready": false,
+  "apply_supported": false,
+  "notice": "Synthetic rubric contract example; no grading code, parser, binding, approval or production assignment is created.",
+  "rubric_id": "observer_cpp_review",
+  "version": 1,
+  "title": "C++ 옵저버 패턴: 통지 동작과 의존성 분리",
+  "scoring": {
+    "method": "weighted_levels.v1",
+    "maximum_points": "100",
+    "decimal_places_display": 2,
+    "rounding": "half_up_after_total",
+    "incomplete_total": "null",
+    "not_applicable": "requires_approved_exception"
+  },
+  "criteria": [
+    {
+      "criterion_id": "observer.notification",
+      "title": "등록된 구독자에게 상태 변경 통지",
+      "description": "구독 등록과 해제 후 통지 대상이 요구사항과 일치한다.",
+      "maximum_points": "40",
+      "required": true,
+      "evaluator_kind": "deterministic",
+      "levels": [
+        {"level_id": "not_met", "ratio": "0", "description": "유효하게 실행한 두 검사 모두 기준 미충족"},
+        {"level_id": "partial", "ratio": "0.5", "description": "유효하게 실행한 두 검사 중 하나 충족"},
+        {"level_id": "met", "ratio": "1", "description": "유효하게 실행한 두 검사 모두 충족"}
+      ],
+      "evidence": {"kind": "test_case_results", "case_ids": ["notify_registered", "detach_stops"]},
+      "rule": {
+        "operator": "passed_case_count",
+        "all_cases_must_have_valid_results": true,
+        "level_by_count": {"0": "not_met", "1": "partial", "2": "met"}
+      },
+      "infrastructure_failure": "blocked_not_zero"
+    },
+    {
+      "criterion_id": "observer.decoupling",
+      "title": "발행자와 구독자의 추상 인터페이스 분리",
+      "description": "발행자는 구체 구독자 타입을 알지 않고 공통 인터페이스를 통해 통지한다.",
+      "maximum_points": "35",
+      "required": true,
+      "evaluator_kind": "instructor",
+      "levels": [
+        {"level_id": "not_met", "ratio": "0", "description": "구체 구독자별 분기가 필요하고 공통 인터페이스를 사용하지 않는다."},
+        {"level_id": "partial", "ratio": "0.5", "description": "공통 인터페이스는 있으나 발행자가 일부 구체 타입에 의존한다."},
+        {"level_id": "met", "ratio": "1", "description": "새 구독자 구현을 추가해도 발행자 변경 없이 공통 인터페이스로 통지한다."}
+      ],
+      "evidence": {"kind": "source_review", "requires_source_digest": true, "requires_file_and_line_reference": true},
+      "review_reason_required": true
+    },
+    {
+      "criterion_id": "observer.lifecycle",
+      "title": "구독 해제와 객체 수명 정책 설명",
+      "description": "구독자가 파괴된 뒤 유효하지 않은 참조를 호출하지 않도록 소유권과 해제 책임을 설명하고 구현한다.",
+      "maximum_points": "25",
+      "required": true,
+      "evaluator_kind": "instructor",
+      "levels": [
+        {"level_id": "not_met", "ratio": "0", "description": "해제 책임이 없고 파괴된 객체 참조가 남는 근거가 확인된다."},
+        {"level_id": "partial", "ratio": "0.5", "description": "정상 해제 경로는 있으나 객체 수명 예외에서 책임이 불명확하다."},
+        {"level_id": "met", "ratio": "1", "description": "소유권·해제 책임이 명확하고 제출 코드 및 설명에서 해당 정책을 확인할 수 있다."}
+      ],
+      "evidence": {"kind": "source_and_explanation_review", "requires_source_digest": true, "requires_file_and_line_reference": true},
+      "review_reason_required": true
+    }
+  ],
+  "illustrative_checks": [
+    {"name": "partial_structure", "ratios": ["1", "0.5", "1"], "expected_total": "82.5"},
+    {"name": "lifecycle_not_met", "ratios": ["1", "0.5", "0"], "expected_total": "57.5"},
+    {"name": "structure_not_reviewed", "ratios": ["1", null, "1"], "expected_total": null, "partial_earned": "65", "partial_maximum": "65"}
+  ],
+  "activation_blockers": ["server_rubric_evaluator_not_integrated", "case_ids_not_bound_to_approved_assignment", "rubric_not_approved"]
+}

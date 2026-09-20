@@ -34,8 +34,14 @@ namespace Autograde.VisualStudio
         public static void Label(TextBlock label) =>
             label.SetResourceReference(TextBlock.ForegroundProperty, EnvironmentColors.ToolWindowTextBrushKey);
 
-        public static void Button(Button button) =>
+        public static void Button(Button button)
+        {
             button.SetResourceReference(FrameworkElement.StyleProperty, VsResourceKeys.ThemedDialogButtonStyleKey);
+            button.MinHeight = 32;
+            button.Padding = new Thickness(10, 4, 10, 4);
+            button.HorizontalContentAlignment = HorizontalAlignment.Center;
+            button.VerticalContentAlignment = VerticalAlignment.Center;
+        }
 
         public static void Tabs(TabControl tabs)
         {

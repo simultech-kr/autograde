@@ -1,5 +1,24 @@
 # Documentation
 
+- [교수자 개인 인증·분반 권한](operations/instructor-personal-auth.md): 개인 계정 발급·분반 할당·세션 회수, 웹/제출 조회 인가와 루브릭 등록자 기록. 기본 공유 모드와 학생 인증은 유지.
+- [실제 제출물 루브릭 평가](operations/rubric-connected-assessment.md): 검증된 제출 원본·개인 교수자 판정·비공개 평가 이력. 자동 검사 근거와 학생 공개는 후속 범위.
+- [교수자 웹 루브릭 관리](operations/rubric-web-mvp.md): 선택적 기준 입력·검토·불변 버전 등록/조회, 수업 범위 검증.
+- [루브릭 모듈 1차 구현·로컬 시험](operations/rubric-local-mvp.md): 별도 SQLite/CLI 등록·승인·자동/수동 평가·이력과 제한된 SES 미리보기. 실제 제출/학생 결과 공개는 미연결.
+
+- [제공 루브릭 기반 평가 모듈](architecture/rubric-evaluation-plugin.md): 교수자 기준 입력·구조화·검증·버전 고정, 자동/수동/혼합 평가, 선택적 AI 제안, 근거·총점·공개 계약. 설계 단계.
+- [SES 소프트웨어 제품군(SPL) 사업화 설계](architecture/software-product-line.md): 공통 자산·제품별 변이점·제품 도출·사용권/권한 분리·고객별 배포·지원 조합·출시 gate.
+
+- [전체 기능 플러그인·SES 조합 설계](architecture/platform-plugin-ses.md): 최소 Host와 필수/선택 provider, 전체 기능 경계, 구성 검증·활성화·권한·이벤트·단계적 이전. 설계이며 운영 전환은 미실시.
+- [교수자 성취도 평가 플러그인](architecture/learning-achievement-plugin.md): 학습목표·루브릭·제출 증거, 성취 점수와 증거 충족률, 수동 검토·확정 이력·교수자 화면.
+
+- [교수자 UI/UX 서버 적용](operations/instructor-ux-update.md): 수업 전환·통합 과제 목록·입력 복구·미저장 경고·케이스 편집·검증 자동 조회, 배포 확인과 후속 범위.
+
+- [교수자 UI/UX 단계 0 시안·검사](testing/instructor-ux-wireframe.md): 승인된 상호작용 시안과 당시 반응형·테마·입력·점수 구분 시험 기록. 서버 시험과 구분.
+
+- [교수자 서버 UI/UX 개선 계획](architecture/instructor-ui-ux-improvement-plan.md): 단일 운영 홈·교과목/분반 문맥, 통합 과제 목록, 검증/공개/마감 안내, 학생별 결과 검토, 단계별 구현·인수 기준과 1차 적용 연결.
+
+- [학생별 제출 이력·점수 변화·코드 비교](operations/submission-timeline.md): 0.5.4 재제출·통신 재시도 구분, 현재 점수와 이전 최고점, 관리자 이력·비교 화면과 배포 절차.
+
 - [관리자 결과 화면 반응형 지원](operations/instructor-responsive-results.md): 표·카드 자동 전환, 분반 현황·제출 코드, 브라우저 검증과 적용 방법.
 
 - [확장 0.5.2 · 간결한 UI와 다운로드 진단](operations/extension-download-diagnostics.md): 구현 범위, 학생/교수자 확인 방법, DB 업그레이드와 미구현·현장 검증 항목.

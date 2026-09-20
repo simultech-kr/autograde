@@ -54,6 +54,23 @@ def test_idempotency_out_of_order_and_terminal_conflicts(bundle_platform):
         assert error.value.status == 409
 
 
+def test_open_only_retry_updates_status_without_redownload(bundle_platform):
+    state, _, service, token, *_ = bundle_platform
+    service.get_bundle_starter(token, 'basn_lab01')
+    failed = dict(report(), stage='opening', outcome='succeeded', open_outcome='open_failed',
+                  error_code='AG-DL-OPEN-WORKSPACE', extension_version='0.5.5')
+    service.report_download_diagnostic(token, 'basn_lab01', failed)
+    service._now = lambda: NOW + timedelta(seconds=1)
+    retry = dict(report(), stage='opening', outcome='succeeded', open_outcome='opened',
+                 error_code=None, extension_version='0.5.5')
+    service.report_download_diagnostic(token, 'basn_lab01', retry)
+    row = service.instructor_dashboard(auth())['rows'][0]
+    assert row['download_status'] == '파일 준비 완료 · IDE 열림'
+    assert row['download_count'] == 1
+    assert row['download_attempts'][0]['attempt_id'] == retry['attempt_id']
+    assert {item['open_outcome'] for item in row['download_attempts']} == {'opened', 'open_failed'}
+
+
 @pytest.mark.parametrize('changes', [
     {'password':'secret'}, {'message':'/Users/student/token'}, {'attempt_id':None},
     {'seq':True}, {'seq':100}, {'error_code':'raw secret'}, {'stage':'<script>'},

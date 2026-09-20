@@ -37,7 +37,9 @@ namespace Autograde.VisualStudio
         readonly TextBox diagnosticText = new TextBox { IsReadOnly = true, TextWrapping = TextWrapping.Wrap, AcceptsReturn = true, MaxHeight = 160, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
         readonly Expander diagnosticDetails = new Expander { Header = "다운로드 상세 · 문의번호" };
         readonly Expander settingsExpander = new Expander { Header = "서버 설정" };
-        Button downloadButton, submitButton, folderButton, cancelButton;
+        readonly Expander assignmentManagement = new Expander { Header = "과제 선택 · 새로고침" };
+        readonly Expander folderManagement = new Expander { Header = "폴더 관리 · 다시 다운로드" };
+        Button downloadButton, submitButton, folderButton, cancelButton, logoutButton;
         DownloadDiagnostic downloadDiagnostic;
         bool showingInspected;
         readonly TextBox gradingOutput = new TextBox { IsReadOnly = true, AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, MinHeight = 90, MaxHeight = 220, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
@@ -83,12 +85,28 @@ namespace Autograde.VisualStudio
             layout.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
             layout.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             Content = layout;
-            var header = new StackPanel(); layout.Children.Add(header);
-            var chrome = new WrapPanel(); header.Children.Add(chrome);
-            AddLabel(chrome, "Autograde " + typeof(AssignmentControl).Assembly.GetName().Version.ToString(3));
-            var settings = new Button { Content = "설정", Margin = new Thickness(6, 0, 0, 0) };
+            var header = new StackPanel { Margin = new Thickness(0, 0, 0, 8) }; layout.Children.Add(header);
+            var toolbar = new Grid(); header.Children.Add(toolbar);
+            toolbar.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            toolbar.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            toolbar.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            toolbar.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            var brand = new TextBlock { Text = "Autograde " + typeof(AssignmentControl).Assembly.GetName().Version.ToString(3),
+                VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
+            ThemeResources.Label(brand); toolbar.Children.Add(brand);
+            var chrome = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
+            Grid.SetColumn(chrome, 1); toolbar.Children.Add(chrome);
+            // Explicit rows prevent WrapPanel's independent margins from shifting toolbar buttons.
+            toolbar.SizeChanged += (_, __) => {
+                bool narrow = toolbar.ActualWidth < 300;
+                Grid.SetRow(chrome, narrow ? 1 : 0); Grid.SetColumn(chrome, narrow ? 0 : 1);
+                Grid.SetColumnSpan(chrome, narrow ? 2 : 1);
+                chrome.Margin = new Thickness(0, narrow ? 6 : 0, 0, 0);
+            };
+            var settings = new Button { Content = "설정" };
             ThemeResources.Button(settings); settings.Click += (_, __) => { pages.SelectedIndex = 0; settingsExpander.IsExpanded = !settingsExpander.IsExpanded; };
             chrome.Children.Add(settings);
+            status.Margin = new Thickness(0, 6, 0, 0);
             header.Children.Add(status); ThemeResources.Label(identity); header.Children.Add(identity);
             Grid.SetRow(pages, 1); layout.Children.Add(pages);
             var taskPanel = new StackPanel(); var resultPanel = new StackPanel(); var historyPanel = new StackPanel();
@@ -130,12 +148,12 @@ namespace Autograde.VisualStudio
                 await ReloadAsync(id, ct); settingsExpander.IsExpanded = false; pages.SelectedIndex = 0;
                 output.Text = "수락 완료 · 아래 과제 다운로드를 눌러 새 폴더에 받으세요.";
             });
-            var management = new StackPanel(); taskPanel.Children.Add(new Expander { Header = "과제 선택 · 새로고침", Content = management }); panel = management;
+            var management = new StackPanel(); assignmentManagement.Content = management; taskPanel.Children.Add(assignmentManagement); panel = management;
             AddButton(panel, "과제 새로고침", ct => ReloadAsync(null, ct));
             panel.Children.Add(assignments);
             assignments.SelectionChanged += (_, __) => { history.Items.Clear(); inspectedResult.Clear(); UpdateCompactState(); };
             downloadButton = AddButton(footerActions, "과제 다운로드 · 열기", DownloadAsync);
-            var folderPanel = new StackPanel(); taskPanel.Children.Add(new Expander { Header = "폴더 관리 · 다시 다운로드", Content = folderPanel }); panel = folderPanel;
+            var folderPanel = new StackPanel(); folderManagement.Content = folderPanel; taskPanel.Children.Add(folderManagement); panel = folderPanel;
             AddButton(panel, "새 폴더에 다시 받기", DownloadAsync);
             AddLabel(panel, "제출 폴더 (다운로드 폴더를 사용)"); panel.Children.Add(folder);
             folderButton = AddButton(footerActions, "과제 폴더 열기", async ct =>
@@ -143,7 +161,11 @@ namespace Autograde.VisualStudio
                 RequireClient();
                 if (string.IsNullOrWhiteSpace(folder.Text)) throw new InvalidOperationException("먼저 과제를 다운로드하거나 기존 과제 폴더를 선택하세요.");
                 Bundle.VerifyWorkspace(folder.Text, client.BaseUrl, Id);
-                await OpenDownloadedFolderAsync(folder.Text, ct);
+                var diagnostic = downloadDiagnostic = new DownloadDiagnostic { Stage = "opening", Outcome = "succeeded" };
+                diagnosticDetails.Visibility = Visibility.Visible;
+                await OpenDownloadedFolderAsync(folder.Text, ct, diagnostic);
+                await ReportDownloadAsync(Id, diagnostic);
+                ShowDownloadDiagnostic(diagnostic, folder.Text);
             });
             AddButton(panel, "기존 과제 폴더 선택", ct =>
             {
@@ -168,11 +190,13 @@ namespace Autograde.VisualStudio
                 showingInspected = false;
                 receiptWatch = new ReceiptWatch { SubmissionId = submission,
                     Title = (string)Selected["course_key"] + " / " + (string)Selected["title"],
-                    Deadline = DateTimeOffset.UtcNow.AddMinutes(2), Stopped = GradingPoller.IsFinished((string)submitted["state"]) };
+                    Deadline = DateTimeOffset.UtcNow.AddMinutes(2), Stopped = false };
                 receiptStatus.Text = "제출 접수 완료 · " + receiptWatch.Title + "\n접수번호: " + submission +
                     "\n서버 접수 시각: " + (string)submitted["received_at"];
                 gradingOutput.Text = "채점 상태: " + GradingPoller.Label((string)submitted["state"]) + "\n다른 작업을 해도 서버 채점은 계속됩니다.";
-                liveResult.Show(submitted, "마지막 접수 · " + receiptWatch.Title);
+                var initial = (JObject)submitted.DeepClone();
+                if ((string)initial["state"] == "published") initial["state"] = "graded";
+                liveResult.Show(initial, "이번 제출 · " + receiptWatch.Title);
                 pages.SelectedIndex = 1;
                 liveResult.BringIntoView();
                 output.Text = "제출이 접수되었습니다. 상단의 내 제출 결과를 확인하세요.";
@@ -226,18 +250,25 @@ namespace Autograde.VisualStudio
                     output.Text = "복원 완료: " + target + "\n자동 제출·빌드를 실행하지 않았습니다. 파일 → 열기 → 폴더에서 여세요.";
                 }
             });
-            AddButton(chrome, "로그아웃", async ct =>
+            logoutButton = AddButton(chrome, "로그아웃", async ct =>
             {
                 // Logout must work even when the address textbox is invalid or unapplied.
                 ClearScreen();
                 try { if (client != null) await client.LogoutAsync(ct); }
                 finally { ClearScreen(); status.Text = "로그아웃됨 · 서버 연결은 별도 확인"; output.Text = "이 IDE의 로그인 정보를 지웠습니다."; }
             });
+            foreach (Button button in chrome.Children.OfType<Button>()) {
+                button.Margin = new Thickness(8, 0, 0, 0);
+                button.MinWidth = 64;
+                button.VerticalAlignment = VerticalAlignment.Center;
+            }
             var cancel = cancelButton = new Button { Content = "현재 작업 취소", Margin = new Thickness(0, 5, 0, 0), Visibility = Visibility.Collapsed };
             ThemeResources.Button(cancel);
             cancel.Click += (_, __) => operation?.Cancel(); footer.Children.Add(cancel);
             // Persistent, bounded status: errors are not lost in a disappearing notification.
             footer.Children.Add(output);
+            output.TextChanged += (_, __) => UpdateOutputVisibility();
+            UpdateOutputVisibility();
             try { if (File.Exists(SettingsPath) && new FileInfo(SettingsPath).Length < 2048) address.Text = ServiceClient.NormalizeAddress(File.ReadAllText(SettingsPath)); }
             catch (Exception) { }
             try { client = new ServiceClient(ServiceClient.NormalizeAddress(address.Text)); } catch (Exception) { settingsExpander.IsExpanded = true; }
@@ -255,7 +286,7 @@ namespace Autograde.VisualStudio
         }
         Button AddButton(Panel panel, string title, Func<CancellationToken, Task> action)
         {
-            var button = new Button { Content = new TextBlock { Text = title, TextWrapping = TextWrapping.Wrap }, Margin = new Thickness(0, 5, 0, 0), Padding = new Thickness(6) };
+            var button = new Button { Content = new TextBlock { Text = title, TextWrapping = TextWrapping.Wrap }, Margin = new Thickness(0, 6, 0, 0) };
             ThemeResources.Button(button);
             button.Click += (_, __) => jobs.RunAsync(async () =>
             {
@@ -282,10 +313,16 @@ namespace Autograde.VisualStudio
             actions.Add(button); panel.Children.Add(button);
             return button;
         }
+        void UpdateOutputVisibility() => output.Visibility = string.IsNullOrWhiteSpace(output.Text) ? Visibility.Collapsed : Visibility.Visible;
+
         void UpdateCompactState()
         {
             bool authenticated = client?.HasSession == true;
             loginPanel.Visibility = authenticated ? Visibility.Collapsed : Visibility.Visible;
+            if (logoutButton != null) logoutButton.Visibility = authenticated ? Visibility.Visible : Visibility.Collapsed;
+            assignmentManagement.Visibility = folderManagement.Visibility = authenticated ? Visibility.Visible : Visibility.Collapsed;
+            ((TabItem)pages.Items[1]).IsEnabled = ((TabItem)pages.Items[2]).IsEnabled = authenticated;
+            if (!authenticated) pages.SelectedIndex = 0;
             var selected = (assignments.SelectedItem as AssignmentItem)?.Value;
             identity.Text = selected == null ? "수령 코드로 과제를 시작하세요." : (string)selected["course_key"] + " · " + (string)selected["title"];
             bool ready = false;
@@ -322,14 +359,20 @@ namespace Autograde.VisualStudio
                 }
                 catch (Exception ex) { diagnostic.Fail(ex, ct.IsCancellationRequested); }
                 await ReportDownloadAsync(id, diagnostic);
-                if (downloadDiagnostic == diagnostic) {
-                    downloadStatus.Text = diagnostic.Summary + "\n" + DownloadDiagnostic.Guidance(diagnostic.Code);
-                    diagnosticText.Text = diagnostic.Details;
-                    output.Text = diagnostic.Summary + " · " + diagnostic.Delivery +
-                        (diagnostic.Code == null ? "" : "\n" + diagnostic.Code + " · " + DownloadDiagnostic.Guidance(diagnostic.Code));
-                    diagnosticDetails.IsExpanded = diagnostic.Code != null;
-                }
+                ShowDownloadDiagnostic(diagnostic, target);
             }
+        }
+        void ShowDownloadDiagnostic(DownloadDiagnostic diagnostic, string target)
+        {
+            if (downloadDiagnostic != diagnostic) return;
+            downloadStatus.Text = diagnostic.Summary + "\n" + DownloadDiagnostic.Guidance(diagnostic.Code);
+            diagnosticText.Text = diagnostic.Details;
+            output.Text = diagnostic.Summary + " · " + diagnostic.Delivery +
+                (diagnostic.Code == null ? "" : "\n" + diagnostic.Code + " · " + DownloadDiagnostic.Guidance(diagnostic.Code));
+            if (diagnostic.Outcome == "succeeded")
+                output.AppendText("\n" + (diagnostic.OpenOutcome == "open_failed" || diagnostic.OpenOutcome == "open_cancelled"
+                    ? DownloadDiagnostic.OpenRecoveryGuidance(target) : "저장 위치: " + target));
+            diagnosticDetails.IsExpanded = diagnostic.Code != null;
         }
         async Task ReportDownloadAsync(string id, DownloadDiagnostic diagnostic)
         {
@@ -342,13 +385,13 @@ namespace Autograde.VisualStudio
             try
             {
                 await WorkspaceOpener.OpenAsync(target, ct);
-                if (diagnostic != null) diagnostic.OpenOutcome = "opened";
+                diagnostic?.MarkOpened();
                 output.AppendText("\n다운로드한 위치의 과제 폴더를 열었습니다. IDE의 저장·신뢰 확인이 표시되면 확인하세요.");
             }
             catch (OperationCanceledException ex)
-            { diagnostic?.Fail(ex, true); output.AppendText("\n폴더 열기를 취소했습니다. 다운로드한 파일은 보존됩니다. ‘다운로드한 과제 폴더 열기’로 다시 여세요."); }
+            { diagnostic?.Fail(ex, true); output.AppendText("\n폴더 열기를 취소했습니다.\n" + DownloadDiagnostic.OpenRecoveryGuidance(target)); }
             catch (Exception ex)
-            { diagnostic?.Fail(ex, false); output.AppendText("\n자동 열기가 완료되지 않았습니다. 파일은 보존됩니다. ‘다운로드한 과제 폴더 열기’로 재시도하거나 파일 → 열기 → 폴더에서 위 경로를 선택하세요."); }
+            { diagnostic?.Fail(ex, false); output.AppendText("\n자동 열기가 완료되지 않았습니다.\n" + DownloadDiagnostic.OpenRecoveryGuidance(target)); }
         }
         void RequireClient()
         {

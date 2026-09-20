@@ -1,0 +1,58 @@
+{
+  "schema_version": "autograde.rubric.evidence.v1",
+  "course_key": "come2201",
+  "assignment_id": "observer_demo",
+  "submission_id": "synthetic_submission_01",
+  "source_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "grading_run_id": "synthetic_run_01",
+  "rubric_digest": "ce8232e81ef6e7c7c2ab13be19515918c3f0cbc1c08a978eb2cf0844ac212ffd",
+  "files": [
+    {
+      "path": "main.cpp",
+      "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "line_count": 100
+    }
+  ],
+  "tests": [
+    {
+      "case_id": "notify_registered",
+      "status": "passed"
+    },
+    {
+      "case_id": "detach_stops",
+      "status": "passed"
+    }
+  ],
+  "reviews": [
+    {
+      "criterion_id": "observer.decoupling",
+      "level_id": "partial",
+      "reviewer_id": "synthetic_instructor",
+      "reason": "합성 시험용 선택값입니다. 실제 코드 평가 결과가 아닙니다.",
+      "source_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "references": [
+        {
+          "path": "main.cpp",
+          "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "start_line": 1,
+          "end_line": 10
+        }
+      ]
+    },
+    {
+      "criterion_id": "observer.lifecycle",
+      "level_id": "met",
+      "reviewer_id": "synthetic_instructor",
+      "reason": "합성 시험용 선택값입니다. 실제 코드 평가 결과가 아닙니다.",
+      "source_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "references": [
+        {
+          "path": "main.cpp",
+          "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "start_line": 1,
+          "end_line": 10
+        }
+      ]
+    }
+  ]
+}

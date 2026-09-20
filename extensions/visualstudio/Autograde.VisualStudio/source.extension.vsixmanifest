@@ -1,9 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <PackageManifest Version="2.0.0" xmlns="http://schemas.microsoft.com/developer/vsx-schema/2011" xmlns:d="http://schemas.microsoft.com/developer/vsx-schema-design/2011">
   <Metadata>
-    <Identity Id="Autograde.VisualStudio.74db5571-a3ad-4451-a5f4-e8cc28d20536" Version="0.5.2" Language="en-US" Publisher="Autograde" />
+    <Identity Id="Autograde.VisualStudio.74db5571-a3ad-4451-a5f4-e8cc28d20536" Version="0.5.5" Language="en-US" Publisher="Autograde" />
     <DisplayName>Autograde for Visual Studio</DisplayName>
-    <Description xml:space="preserve">C/C++ 실습 과제 수령, 다운로드 후 폴더 자동 열기, 제출 접수, 채점 피드백 및 이전 제출 복원. Visual Studio 2022/2026 Community x64용 Autograde 파일럿 확장.</Description>
+    <Description xml:space="preserve">C/C++ 수업용 학생 확장입니다. 도구 → Autograde 과제에서 교수자가 안내한 API 주소를 설정하고, 학생 웹에서 학번·비밀번호로 발급받은 과제 수령 코드로 로그인하세요. 수업 서버와 수강 등록이 필요합니다.
+수락한 과제 다운로드·폴더 자동 열기, 저장된 코드 제출, 접수·채점 상태, 이번 제출 점수와 이전 공개 최고점, 제출 이력·새 폴더 복원을 제공합니다. 채점은 서버에서 수행하며 접수 완료와 채점 완료는 다릅니다.
+IDE 열기에 실패해도 받은 파일은 보존됩니다. 기존 작업 저장 후 ‘과제 폴더 열기’로 재시도하거나 파일 → 열기 → 폴더에서 안내된 저장 위치를 여세요. 재다운로드할 필요는 없습니다. 계속 실패하면 문의번호·오류 코드·VS 버전을 교수자에게 알려주세요.
+Windows x64의 Visual Studio 2022/2026 Community 대상 파일럿입니다(VS Code용 아님). C/C++ 개발 도구가 필요하며 Windows 전용 API 서버 채점은 지원하지 않습니다. 공용 PC에서는 사용 후 로그아웃하세요. 인증 정보는 파일에 저장하지 않지만 다운로드한 코드는 남습니다.</Description>
   </Metadata>
   <Installation>
     <InstallationTarget Id="Microsoft.VisualStudio.Community" Version="[17.0,)"><ProductArchitecture>amd64</ProductArchitecture></InstallationTarget>

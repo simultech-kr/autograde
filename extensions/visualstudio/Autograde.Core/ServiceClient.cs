@@ -40,7 +40,6 @@ namespace Autograde.Core
         readonly object stateLock = new object();
         readonly CancellationTokenSource lifetime = new CancellationTokenSource();
         readonly Dictionary<string, string> pending = new Dictionary<string, string>();
-        readonly Dictionary<string, JObject> receipts = new Dictionary<string, JObject>();
         bool disposed;
         int sessionVersion;
         string access, refresh;
@@ -183,7 +182,7 @@ namespace Autograde.Core
                 var device = Parse(await Send("POST", "/v1/device-authorizations", new JObject
                 {
                     ["client"] = "visualstudio-extension",
-                    ["extension_version"] = "0.5.2",
+                    ["extension_version"] = "0.5.5",
                     ["device_name"] = "Visual Studio / Windows",
                     ["claim_code"] = claim
                 }, null, null, null, cancel).ConfigureAwait(false));
@@ -339,10 +338,9 @@ namespace Autograde.Core
                 lock (stateLock)
                 {
                     if (!HasSession || version != sessionVersion) throw new ServiceError(401, "login_required");
-                    if (receipts.TryGetValue(fingerprint, out var cached)) return (JObject)cached.DeepClone();
                     if (!pending.TryGetValue(fingerprint, out key))
                     {
-                        if (pending.Count + receipts.Count >= 128) throw new InvalidOperationException("세션의 제출 기록 한도입니다. 결과 확인 후 다시 로그인하세요.");
+                        if (pending.Count >= 128) throw new InvalidOperationException("확인되지 않은 제출 요청이 많습니다. 결과 확인 후 다시 로그인하세요.");
                         pending[fingerprint] = key = Guid.NewGuid().ToString("N");
                     }
                 }
@@ -360,7 +358,6 @@ namespace Autograde.Core
                         {
                             if (sessionVersion != version || !HasSession) throw new ServiceError(401, "login_required");
                             pending.Remove(fingerprint);
-                            receipts[fingerprint] = (JObject)result.DeepClone();
                         }
                         return result;
                     }
@@ -408,7 +405,7 @@ namespace Autograde.Core
             }
             finally { Clear(); gate.Release(); }
         }
-        void Clear() { lock (stateLock) { sessionVersion++; access = null; refresh = null; pending.Clear(); receipts.Clear(); } }
+        void Clear() { lock (stateLock) { sessionVersion++; access = null; refresh = null; pending.Clear(); } }
         public void Dispose()
         {
             lock (stateLock) { if (disposed) return; disposed = true; Clear(); }

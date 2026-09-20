@@ -6,6 +6,25 @@ import { resultHtml, summarizeResult } from "../resultSummary";
 import type { GradeResult } from "../types";
 
 const full: GradeResult = { state: "published", score: 10, maxScore: 10, rubric: [], diagnostics: [] };
+test("current result and prior public best are separate, including pending current submission", () => {
+  const best = {submissionId:"bsub_old", receivedAt:"2026-09-17T00:00:00Z", score:8, maxScore:10};
+  const current = {...full, score:3, previousBest:best};
+  assert.equal(summarizeResult(current).score, "3 / 10점");
+  const html = resultHtml({id:"a", title:"Lab"}, current, "bsub_new", "이번 제출");
+  assert.match(html, /3 \/ 10점/); assert.match(html, /8 \/ 10점/); assert.match(html, /이번 제출 이전 최고점/);
+  assert.equal(summarizeResult({...current, state:"queued"}).score, "점수 미공개");
+});
+test("new bundle receipt replaces result panel and latest lookup refreshes server identity", () => {
+  const source = readFileSync(resolve(__dirname, "../../src/extension.ts"), "utf8");
+  const submit = source.split("async function submitCurrentBundle")[1]?.split("async function viewSubmissionHistory")[0];
+  assert.ok(submit);
+  assert.match(submit, /showResultPanel\(assignment/);
+  assert.match(submit, /submission.id, "이번 제출"/);
+  const latest = source.split("async function viewLatestResult")[1];
+  assert.ok(latest);
+  assert.match(latest, /await client.getAssignments\(\)/);
+  assert.match(latest, /fresh\?\.latestSubmission\?\.id/);
+});
 test("result panel is read-only and clears at authentication and address boundaries", () => {
   const panel = readFileSync(resolve(__dirname, "../../src/resultPanel.ts"), "utf8");
   const extension = readFileSync(resolve(__dirname, "../../src/extension.ts"), "utf8");

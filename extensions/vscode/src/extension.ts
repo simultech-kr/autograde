@@ -65,7 +65,7 @@ import type { Assignment, GradeResult, ResultDiagnostic, SubmissionSummary } fro
 import { clearResultPanel, showResultPanel } from "./resultPanel";
 import { DownloadDiagnostic, DownloadFailure, stageLabels } from "./downloadDiagnostic";
 import { clearDownloadDiagnostic, rememberDownloadDiagnostic, showDownloadDiagnostic } from "./downloadDiagnosticPanel";
-let diagnosticExtensionVersion = "0.5.2";
+let diagnosticExtensionVersion = "0.5.4";
 
 const SUCCESSFUL_SUBMISSION_STATES = new Set(["accepted", "queued", "running", "graded", "published"]);
 const FAILED_SUBMISSION_STATES = new Set(["rejected", "infra_failed", "assessment_failed"]);
@@ -549,6 +549,12 @@ async function submitCurrentBundle(
   }
   await rememberSubmission(studentState, client.transport.getBaseUrl(), assignment.id, submission.id);
   await clearSubmissionAttempt(studentState, attemptRequest, attempt.idempotencyKey);
+
+  // A new receipt supersedes the previous result panel immediately.
+  if (submission.sourceDigest) showResultPanel(assignment, {
+    state: submission.state === "published" ? "graded" : submission.state,
+    sourceDigest: submission.sourceDigest, previousBest: submission.previousBest, rubric: [], diagnostics: [],
+  }, submission.id, "이번 제출");
 
   if (
     !SUCCESSFUL_SUBMISSION_STATES.has(submission.state.toLowerCase()) &&
@@ -1068,7 +1074,9 @@ async function viewLatestResult(
   output.clear();
   diagnostics.clear();
   const stored = getRememberedSubmissions(studentState, serviceBaseUrl);
-  const submissionId = assignment.latestSubmission?.id ?? stored[assignment.id];
+  const fresh = (await client.getAssignments()).find(candidate => candidate.id === assignment.id);
+  if (!studentState.isActive()) return;
+  const submissionId = fresh?.latestSubmission?.id ?? stored[assignment.id];
   if (!submissionId) {
     throw new Error("이 과제의 제출 내역이 없습니다.");
   }
@@ -1078,7 +1086,7 @@ async function viewLatestResult(
     return;
   }
   if (!new Set(["graded", "published"]).has(submission.state.toLowerCase())) {
-    showResultPanel(assignment, { state: submission.state, sourceDigest: submission.sourceDigest, headSha: submission.headSha, rubric: [], diagnostics: [] }, submissionId, "선택 과제의 최신 제출");
+    showResultPanel(assignment, { state: submission.state, sourceDigest: submission.sourceDigest, headSha: submission.headSha, previousBest: submission.previousBest, rubric: [], diagnostics: [] }, submissionId, "선택 과제의 최신 제출");
     output.appendLine(`${assignment.title}`);
     output.appendLine(`상태: ${submission.state}`);
     if (submission.headSha) {

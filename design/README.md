@@ -1,5 +1,14 @@
 # Design
 
+- [루브릭 평가 설계](../docs/architecture/rubric-evaluation-plugin.md), [C++ 옵저버 루브릭 예시](rubrics/observer.rubric.example.json): 설계용이며 현행 평가기에 바로 등록할 수 없음.
+- [SPL 사업화 설계](../docs/architecture/software-product-line.md), [초기 기능/제품 template 카탈로그 예시](ses/product-line.catalog.example.json): 실행/가격/사용권은 미확정.
+
+- [전체 기능 플러그인·SES 설계](../docs/architecture/platform-plugin-ses.md) 및 [성취도 평가 설계](../docs/architecture/learning-achievement-plugin.md).
+- [플랫폼 구성 설계 예시](ses/platform-composition.example.json): come2201/come3105의 목표 조합. **실행 불가**, 기존 관리 SES CLI·pilot CSV와 다른 설계용 schema.
+
+- [교수자 UI/UX 단계 0 시안](prototypes/instructor-ux-wireframe.html): 수업·과제·학생 이력과 6단계 등록의 상호작용 미리보기. 가상 데이터 전용, 서버 미연결.
+  [검토 순서와 자동 검사](../docs/testing/instructor-ux-wireframe.md).
+
 - [과제 다운로드 troubleshooting](../docs/architecture/download-troubleshooting.md): 수락/파일 준비/IDE 열기 분리, 클라이언트 진단과 서버 상태 원장·교수자 화면 설계.
 
 - [관리 기능과 SES 기반 사용자 정의](../docs/architecture/management-ses.md): 보관·보고서·학생 지원 모듈과 SES/MB/PES 경계.

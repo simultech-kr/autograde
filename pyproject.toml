@@ -23,6 +23,8 @@ dev = [
 autograde = "autograde.cli:main"
 autograde-platform = "autograde.platform_cli:main"
 autograde-pilot = "autograde.pilot_portal_cli:main"
+autograde-rubric = "autograde.rubric_cli:main"
+autograde-instructor = "autograde.instructor_identity_cli:main"
 autograde-git-askpass = "autograde.platform_github_app:askpass_main"
 
 [tool.setuptools]

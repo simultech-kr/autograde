@@ -56,6 +56,8 @@ def test_loads_typed_config_and_anchors_relative_data_root_at_csv_parent(
         "bundle_worker_count": 7,
         "external_access_mode": "disabled",
         "instructor_assignment_web_enabled": False,
+        "instructor_auth_mode": "shared",
+        "instructor_rubric_web_enabled": False,
         "roster_bootstrap_mode": "csv",
     }
 
@@ -77,6 +79,23 @@ def test_portal_accepts_distinct_loopback_listeners(tmp_path):
     config = load_pilot_config(write_config(tmp_path / "pilot.csv", extra=
         "web_public_base_url,http://127.0.0.1:18081\nweb_port,18081\n"))
     assert config.values["web_port"] == 18081
+
+
+@pytest.mark.parametrize('extra', [
+    'instructor_rubric_web_enabled,yes\n',
+    'instructor_rubric_web_enabled,true\n',
+    'instructor_rubric_web_enabled,true\ninstructor_assignment_web_enabled,true\n',
+])
+def test_rubric_web_requires_explicit_flag_and_instructor_portal(tmp_path, extra):
+    with pytest.raises(PilotConfigError):
+        load_pilot_config(write_config(tmp_path / 'pilot.csv', extra=extra))
+
+
+def test_rubric_web_opt_in(tmp_path):
+    config = load_pilot_config(write_config(tmp_path / 'pilot.csv', extra=
+        'instructor_rubric_web_enabled,true\ninstructor_assignment_web_enabled,true\n'
+        'web_public_base_url,http://127.0.0.1:18081\nweb_port,18081\n'))
+    assert config.values['instructor_rubric_web_enabled'] is True
 
 
 def test_optional_pilot_values_have_local_defaults(tmp_path: Path) -> None:

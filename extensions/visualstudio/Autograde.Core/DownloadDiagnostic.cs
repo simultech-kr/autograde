@@ -31,6 +31,20 @@ namespace Autograde.Core
             if (Stage == "opening") { Outcome = "succeeded"; OpenOutcome = cancelled ? "open_cancelled" : "open_failed"; }
             else Outcome = cancelled ? "cancelled" : "failed";
         }
+        public void MarkOpened()
+        {
+            Stage = "opening"; Outcome = "succeeded"; OpenOutcome = "opened";
+            Code = null; Status = null;
+        }
+        // Local UI only: never append this path-bearing text to Payload or Details.
+        public static string OpenRecoveryGuidance(string target) =>
+            "다운로드한 파일은 보존됩니다. 다시 수락하거나 재다운로드할 필요는 없습니다.\n" +
+            "저장 위치: " + target + "\n" +
+            "1. 기존 작업을 모두 저장(Ctrl+Shift+S)하고 저장·신뢰 확인창이 열려 있는지 확인하세요. 신뢰할 수 있는 수업 자료만 여세요.\n" +
+            "2. ‘과제 폴더 열기’를 다시 누르세요.\n" +
+            "3. 계속 실패하면 Visual Studio의 파일 → 열기 → 폴더에서 위 저장 위치를 선택하세요. 상위 폴더가 아닌 main.c/main.cpp 또는 README가 있는 과제 폴더입니다.\n" +
+            "4. ‘폴더 관리 · 다시 다운로드’의 제출 폴더가 같은 위치인지 확인하고, 수정 후 모두 저장하여 제출하세요.\n" +
+            "계속 열리지 않으면 ‘다운로드 상세 · 문의번호’의 문의번호·오류 코드와 VS 버전을 교수자에게 전달하세요. 비밀번호·수령 코드는 보내지 마세요.";
         public JObject Payload(string version) => new JObject {
             ["schema_version"] = 1, ["attempt_id"] = AttemptId, ["seq"] = sequence++,
             ["stage"] = Stage, ["outcome"] = Outcome, ["open_outcome"] = OpenOutcome,
@@ -76,7 +90,7 @@ namespace Autograde.Core
                 case "AG-DL-AUTH-EXPIRED": return "로그인이 만료되었습니다. 새 수령 코드로 로그인하세요. 기존 파일은 보존됩니다.";
                 case "AG-DL-ACCESS-DENIED": return "과제 접근이 거부됐습니다. 교수자에게 수강·과제 권한 확인을 요청하세요.";
                 case "AG-DL-NETWORK-TLS": return "도메인과 인증서를 확인하세요. 인증서 검증을 해제하지 마세요.";
-                case "AG-DL-OPEN-WORKSPACE": return "파일은 준비됐습니다. 재다운로드하지 않고 ‘과제 폴더 열기’를 다시 시도하세요.";
+                case "AG-DL-OPEN-WORKSPACE": return "다운로드 완료 · IDE 자동 열기만 실패했습니다. 기존 작업 저장 후 ‘과제 폴더 열기’로 재시도하거나 파일 → 열기 → 폴더에서 저장 위치를 여세요. 아래 안내에서 경로와 복구 순서를 확인하세요.";
                 case "AG-DL-USER-CANCELLED": return "취소했습니다. 필요할 때 다시 시도하세요.";
                 case "AG-DL-INTEGRITY-HASH": case "AG-DL-INTEGRITY-SIZE": return "받은 파일과 과제 정보가 다릅니다. 과제 정보를 새로고침하고 재시도하거나 문의번호를 알려 주세요.";
                 case "AG-DL-RESPONSE-TYPE": return "과제 파일 대신 다른 응답을 받았습니다. API 주소와 서버 프록시 설정을 확인하세요.";

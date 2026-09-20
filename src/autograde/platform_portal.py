@@ -216,6 +216,13 @@ class CoursePortal:
             response = self.instructor.request(method, path, form, cookies, origin, authorization)
             if response is not None:
                 return response
+        comparison = re.fullmatch(r'/courses/([a-z0-9_-]{1,96})/instructor/submissions/(bsub_[A-Za-z0-9_-]+)/compare/(bsub_[A-Za-z0-9_-]+)(?:/files/([0-9]{1,5}))?', path)
+        if comparison and method == 'GET' and comparison[1] in self.services:
+            return self.services[comparison[1]].instructor_submission_page(authorization or '', comparison[2],
+                int(comparison[4]) if comparison[4] else None, compare_id=comparison[3])
+        history = re.fullmatch(r'/courses/([a-z0-9_-]{1,96})/instructor/submissions/(bsub_[A-Za-z0-9_-]+)/history/([0-9]{1,6})', path)
+        if history and method == 'GET' and history[1] in self.services:
+            return self.services[history[1]].instructor_submission_page(authorization or '', history[2], history_offset=int(history[3]))
         review = re.fullmatch(r'/courses/([a-z0-9_-]{1,96})/instructor/submissions/(bsub_[A-Za-z0-9_-]+)(?:/files/([0-9]{1,5}))?', path)
         if review and method == 'GET' and review[1] in self.services:
             return self.services[review[1]].instructor_submission_page(

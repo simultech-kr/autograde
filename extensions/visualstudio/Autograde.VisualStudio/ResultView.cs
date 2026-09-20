@@ -34,6 +34,7 @@ namespace Autograde.VisualStudio
             Text(context, 13, true);
             Text(model.Headline, 20, true);
             Text(model.Score, 28, true);
+            Text(model.PreviousBest, 12);
             if (model.Percent.HasValue)
             {
                 var progress = new ProgressBar { Minimum = 0, Maximum = 100, Value = model.Percent.Value, Height = 8, Margin = new Thickness(0, 4, 0, 8) };

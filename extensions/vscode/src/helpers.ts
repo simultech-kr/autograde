@@ -5,6 +5,7 @@ import type {
   Assignment,
   AssignedRepository,
   GradeResult,
+  PreviousBestScore,
   ResultDiagnostic,
   RubricItem,
   SubmissionSummary,
@@ -581,6 +582,15 @@ function normalizeRepository(raw: JsonRecord): AssignedRepository | undefined {
   return { githubRepositoryId, fullName, name, cloneUrl, sshUrl, htmlUrl, targetRef, state, ready };
 }
 
+function previousBest(value: unknown): PreviousBestScore | undefined {
+  if (!isRecord(value)) return undefined;
+  const submissionId = firstString(value, ["submission_id"]), receivedAt = firstString(value, ["received_at"]);
+  const score = firstNumber(value, ["score"]), maxScore = firstNumber(value, ["max_score"]);
+  if (!submissionId || !receivedAt || !Number.isFinite(Date.parse(receivedAt)) || score === undefined || maxScore === undefined ||
+      !Number.isFinite(score) || !Number.isFinite(maxScore) || maxScore <= 0 || score < 0 || score > maxScore) return undefined;
+  return { submissionId, receivedAt, score, maxScore };
+}
+
 export function normalizeSubmission(payload: unknown): SubmissionSummary | undefined {
   const raw = isRecord(payload) && isRecord(payload.submission) ? payload.submission : payload;
   if (!isRecord(raw)) {
@@ -593,6 +603,7 @@ export function normalizeSubmission(payload: unknown): SubmissionSummary | undef
   const sourceSha = firstString(raw, ["source_sha"]);
   return {
     id,
+    previousBest: previousBest(raw.previous_best),
     state: firstString(raw, ["state", "status"]) ?? "received",
     headSha:
       firstString(raw, ["head_sha", "commit_sha", "requested_sha"]) ??
@@ -614,6 +625,7 @@ export function normalizeGradeResult(payload: unknown): GradeResult | undefined 
   const diagnosticsRaw = Array.isArray(raw.diagnostics) ? raw.diagnostics : [];
   const sourceSha = firstString(raw, ["source_sha"]);
   return {
+    previousBest: previousBest(raw.previous_best),
     state: firstString(raw, ["state", "status"]) ?? "published",
     headSha:
       firstString(raw, ["head_sha", "commit_sha"]) ??

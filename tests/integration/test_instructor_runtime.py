@@ -274,7 +274,9 @@ def free_port():
         return sock.getsockname()[1]
 
 
-def test_feature_enabled_real_cli_process_launch_and_readiness(tmp_path):
+@pytest.mark.parametrize('rubric_enabled', [False, True])
+@pytest.mark.parametrize('auth_mode', ['shared', 'personal'])
+def test_feature_enabled_real_cli_process_launch_and_readiness(tmp_path, rubric_enabled, auth_mode):
     api_port, web_port = free_port(), free_port()
     while web_port == api_port:
         web_port = free_port()
@@ -283,9 +285,17 @@ def test_feature_enabled_real_cli_process_launch_and_readiness(tmp_path):
         f'port,{api_port}\npublic_base_url,http://127.0.0.1:{api_port}\n'
         f'web_port,{web_port}\nweb_public_base_url,http://127.0.0.1:{web_port}\n'
         'grading_runtime,pilot-local\nbundle_worker_count,4\n'
-        'instructor_assignment_web_enabled,true\nroster_bootstrap_mode,web\n', encoding='utf-8')
+        'instructor_assignment_web_enabled,true\nroster_bootstrap_mode,web\n'
+        f'instructor_rubric_web_enabled,{str(rubric_enabled).lower()}\n'
+        f'instructor_auth_mode,{auth_mode}\n', encoding='utf-8')
     config.chmod(0o600)
     assert load_pilot_config(config).values['roster_bootstrap_mode'] == 'web'
+    if auth_mode == 'personal':
+        from autograde.instructor_identity import InstructorIdentityStore
+        (tmp_path / 'data').mkdir(mode=0o700)
+        identities = InstructorIdentityStore(tmp_path / 'data' / 'instructor-identities.sqlite3')
+        identities.initialize()
+        identities.create('owner', 'Synthetic owner', 'admin', 'synthetic-owner-password-2026')
     process = subprocess.Popen([sys.executable, '-m', 'autograde.pilot_portal_cli', '--config', str(config)],
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     web = SimpleNamespace(server_address=('127.0.0.1', web_port))
@@ -305,9 +315,16 @@ def test_feature_enabled_real_cli_process_launch_and_readiness(tmp_path):
         assert request(web, '/instructor')[0] == 401
         token = (tmp_path / 'data' / 'platform-instructor-token').read_text().strip()
         auth = 'Basic ' + base64.b64encode(('instructor:' + token).encode()).decode()
+        if auth_mode == 'personal':
+            assert request(web, '/instructor', authorization=auth)[0] == 401
+            auth = 'Basic ' + base64.b64encode(b'owner:synthetic-owner-password-2026').decode()
         status, headers, body = request(web, '/instructor', authorization=auth)
         assert status == 200, body
-        assert '수업 관리'.encode() in body
+        assert '<h2>관리자 · 교과목별 현황</h2>'.encode() in body
+        assert request(web, '/courses/come2201/instructor/rubrics', authorization=auth)[0] == (200 if rubric_enabled else 404)
+        assert (tmp_path / 'data' / 'rubric-catalog.sqlite3').exists() is rubric_enabled
+        assert request(api, '/courses/come2201/instructor/rubrics', authorization=auth)[0] == 404
+        assert request(web, '/courses/come2201/instructor/submissions', authorization=auth)[0] == 200
         instructor_cookie, instructor_csrf = cookie(headers), csrf(body)
         origin = f'http://127.0.0.1:{web_port}'
         status, headers, body = request(web, '/instructor/courses', method='POST', authorization=auth,
@@ -332,6 +349,27 @@ def test_feature_enabled_real_cli_process_launch_and_readiness(tmp_path):
         assert status == 200 and '학생 인증은 완료되었습니다'.encode() in body
         assert request(api, '/instructor', authorization=auth)[0] == 404
         assert not (tmp_path / 'student_roster.csv').exists()
+        # Optional instructor stores degrade only web readiness, not student API.
+        # Move only synthetic test databases and restore them before shutdown.
+        optional_stores = []
+        if auth_mode == 'personal':
+            optional_stores.append('instructor-identities.sqlite3')
+        if rubric_enabled:
+            optional_stores.append('rubric-catalog.sqlite3')
+        for filename in optional_stores:
+            original = tmp_path / 'data' / filename
+            held = original.with_suffix('.held')
+            original.rename(held)
+            try:
+                assert request(web, '/readyz')[0] == 503
+                assert request(web, '/healthz')[0] == 200
+                assert request(api, '/readyz')[0] == 200
+                if filename == 'instructor-identities.sqlite3':
+                    assert request(web, '/instructor', authorization=auth)[0] == 503
+                assert not original.exists()
+            finally:
+                held.rename(original)
+            assert request(web, '/readyz')[0] == 200
     finally:
         process.terminate()
         try:

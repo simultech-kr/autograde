@@ -138,7 +138,7 @@ internal static class ExceptionChecks
             try { await login; } catch (OperationCanceledException) { } catch (ObjectDisposedException) { }
             Check(!client.HasSession, "session resurrected after disposal");
         });
-        await Case("concurrent identical submits have one idempotency key", async () =>
+        await Case("new submissions get new keys; transport retry retains its key", async () =>
         {
             var keys = new List<string>(); byte[] archive = Encoding.UTF8.GetBytes("immutable snapshot");
             using var client = new ServiceClient("https://example.edu", new Handler { Action = request =>
@@ -151,9 +151,9 @@ internal static class ExceptionChecks
             } });
             await client.LoginAsync("AK1-ABCD-EFGH-IJKL", None);
             await Task.WhenAll(client.SubmitAsync("asn_one", archive, None), client.SubmitAsync("asn_one", archive, None));
-            // Repeat after success as a double-click/retry, not a request to re-grade.
+            // A subsequent explicit submission is a new attempt, even for unchanged bytes.
             await client.SubmitAsync("asn_one", archive, None);
-            Check(keys.Distinct().Count() == 1, "duplicate logical submission");
+            Check(keys.Count == 4 && keys[0] == keys[1] && keys.Distinct().Count() == 3, "new attempt versus retry identity");
         });
         await Case("receipt must belong to the submitted assignment", async () =>
         {
@@ -225,6 +225,26 @@ internal static class ExceptionChecks
             Check(diagnostic.Outcome == "succeeded" && diagnostic.OpenOutcome == "open_failed", "file readiness lost");
             Check(DownloadDiagnostic.Classify(new OperationCanceledException(), false, "requesting") == "AG-DL-NETWORK-TIMEOUT", "timeout classification");
             Check(DownloadDiagnostic.Classify(new OperationCanceledException(), true, "requesting") == "AG-DL-USER-CANCELLED", "cancel classification");
+            return Task.CompletedTask;
+        });
+        await Case("IDE open recovery guidance retains local path without sending it", () =>
+        {
+            var diagnostic = new DownloadDiagnostic { Stage = "opening", Outcome = "succeeded" };
+            diagnostic.Fail(new InvalidOperationException("private native exception"), false);
+            var guidance = DownloadDiagnostic.OpenRecoveryGuidance(@"C:\Users\student\한글 과제");
+            Check(guidance.Contains(@"C:\Users\student\한글 과제") && guidance.Contains("파일 → 열기 → 폴더") && guidance.Contains("과제 폴더 열기"), "missing recovery steps or path");
+            Check(guidance.Contains("재다운로드할 필요는 없습니다") && guidance.Contains("모두 저장") && guidance.Contains("문의번호"), "missing preservation/support instructions");
+            var remote = diagnostic.Payload("0.5.5").ToString() + diagnostic.Details;
+            Check(!remote.Contains("C:\\Users") && !remote.Contains("private native exception"), "local recovery information leaked");
+            return Task.CompletedTask;
+        });
+        await Case("successful IDE retry clears previous open failure", () =>
+        {
+            var diagnostic = new DownloadDiagnostic { Stage = "opening", Outcome = "succeeded" };
+            diagnostic.Fail(new InvalidOperationException(), false);
+            diagnostic.MarkOpened();
+            Check(diagnostic.OpenOutcome == "opened" && diagnostic.Outcome == "succeeded" && diagnostic.Code == null && diagnostic.Status == null, "old failure remains after retry");
+            Check(!diagnostic.Details.Contains("IDE 열기 실패"), "old failure summary remains");
             return Task.CompletedTask;
         });
         foreach (int status in new[] { 401, 404, 503 })

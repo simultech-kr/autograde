@@ -306,6 +306,8 @@ class AssignmentAdminService:
                                  for role, files in _template_materials(result).items()]
         result["max_score"] = 10 if result["mode"] == "template" else sum(test["weight"] for test in result["tests"])
         result["can_publish"] = bool(not result["published_assignment_id"] and result["latest_check"] and result["latest_check"]["status"] == "succeeded" and result["latest_check"]["revision"] == result["revision"])
+        if result['due_at'] and result['due_at'] <= utc_iso():
+            result['can_publish'] = False
         return result
 
     def preview_files(self, course, draft_id):
@@ -411,6 +413,8 @@ class AssignmentAdminService:
                 check = connection.execute("SELECT status FROM bundle_release_checks WHERE assignment_id=? ORDER BY id DESC LIMIT 1", (assignment_id,)).fetchone()
                 if not release or not release["active"] or not check or check[0] != "passed":
                     raise PlatformConflict("검증된 공개본을 확인할 수 없습니다.")
+                if release['due_at'] and release['due_at'] <= utc_iso():
+                    raise PlatformConflict('마감이 지난 과제는 새로 공개할 수 없습니다. 일정을 수정하고 다시 검증하세요.')
                 if connection.execute("SELECT 1 FROM bundle_assignment_releases WHERE course_key=? AND assignment_key=? AND assignment_id<>? AND ready=1 AND active=1", (course, release["assignment_key"], assignment_id)).fetchone():
                     raise PlatformConflict("다른 버전이 이미 공개되어 있습니다.")
                 connection.execute("UPDATE bundle_assignment_releases SET ready=1,updated_at=? WHERE assignment_id=?", (utc_iso(), assignment_id))

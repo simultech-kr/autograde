@@ -1,5 +1,9 @@
 # 시스템 아키텍처
 
+후속 구조: [전체 기능 플러그인·SES 조합](platform-plugin-ses.md)과
+[교수자 성취도 평가](learning-achievement-plugin.md)를 설계했다.
+아래는 현행 파일럿 구조이며, 후속 설계가 실행 서버에 적용된 상태가 아니다.
+
 ## 파일럿 실행 구조
 
 파일럿의 입력은 환경변수가 아니라 명시적으로 선택한 pilot config CSV와 roster CSV입니다.

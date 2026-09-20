@@ -695,7 +695,10 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
     ) -> tuple[Any, int]:
         facade = self.platform_server.facade
         if route == "portal":
-            if query:
+            path = parameters['path']
+            query_fields = ({'course_key'} if path == '/instructor/switch' else
+                            {'q', 'visibility', 'page'} if re.fullmatch(r'/courses/[a-z0-9_-]{1,96}/instructor/assignments', path) else set())
+            if query and (self.command != 'GET' or getattr(facade, 'instructor', None) is None or not set(query) <= query_fields):
                 raise PlatformHTTPError(400, "invalid_request", "Unexpected query parameter")
             if self.command == "POST":
                 path = parameters["path"]
@@ -728,7 +731,7 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
                     form = self._read_form()
             else:
                 self._ensure_no_body()
-                form = {}
+                form = dict(query)
             return facade.portal_request(
                 self.command, parameters["path"], form, self._cookies(),
                 self.headers.get("Origin"), self.headers.get("Authorization"),
@@ -1206,6 +1209,10 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
         for name, value in _SECURITY_HEADERS.items():
             if name == "Content-Security-Policy" and callable(getattr(self.platform_server.facade, "portal_request", None)):
                 value += "; style-src 'unsafe-inline'"
+                instructor = getattr(self.platform_server.facade, 'instructor', None)
+                if instructor is not None and instructor.matches(urlsplit(self.path).path) and content_type.startswith('text/html'):
+                    from .instructor_browser import SCRIPT_CSP
+                    value += SCRIPT_CSP
             if name == "Referrer-Policy" and callable(getattr(self.platform_server.facade, "portal_request", None)):
                 # Native form POSTs under no-referrer may send Origin: null.
                 # Preserve the same-origin checks without relying on a proxy fix.

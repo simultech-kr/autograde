@@ -38,6 +38,13 @@ internal static class ResultPresentationChecks
         Check(ResultPresentation.From(result).Percent == null && ResultPresentation.From(result).Headline == "결과 확인이 필요합니다", "zero maximum not success");
         result["max_score"] = 10;
         Check(ResultPresentation.From(result).Headline == "수정이 필요합니다", "zero score is graded failure not pending");
+        result["previous_best"] = new JObject { ["submission_id"] = "bsub_earlier", ["received_at"] = "2026-09-17T00:00:00Z", ["score"] = 8, ["max_score"] = 10 };
+        result["score"] = 3;
+        model = ResultPresentation.From(result);
+        Check(model.Score == "3 / 10점" && model.PreviousBest.Contains("8 / 10점") && model.PreviousBest.Contains("bsub_earlier"), "current score distinct from earlier best");
+        result["state"] = "queued";
+        model = ResultPresentation.From(result);
+        Check(model.Score == "점수 미공개" && model.PreviousBest.Contains("8 / 10점"), "earlier public best does not replace pending current score");
         return checks;
     }
 }

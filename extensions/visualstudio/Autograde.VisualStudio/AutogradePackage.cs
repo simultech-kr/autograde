@@ -9,7 +9,7 @@ using Task = System.Threading.Tasks.Task;
 namespace Autograde.VisualStudio
 {
     [PackageRegistration(UseManagedResourcesOnly = true, AllowsBackgroundLoading = true)]
-    [InstalledProductRegistration("Autograde", "C/C++ assignment pilot", "0.5.2")]
+    [InstalledProductRegistration("Autograde", "C/C++ 과제 수령·제출·서버 채점 결과 확인. 도구 → Autograde 과제에서 시작하세요.", "0.5.5")]
     [ProvideMenuResource("Menus.ctmenu", 1)]
     [ProvideToolWindow(typeof(AssignmentWindow))]
     [Guid("74db5571-a3ad-4451-a5f4-e8cc28d20536")]

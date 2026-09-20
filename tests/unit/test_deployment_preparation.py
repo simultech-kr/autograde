@@ -154,6 +154,45 @@ def test_readiness_requires_real_schema(tmp_path):
     assert not check()
 
 
+def test_enabled_web_stores_fail_readiness_without_stopping_core(readiness, tmp_path):
+    from autograde.instructor_identity import InstructorIdentityStore
+    from autograde.rubric_store import RubricStore
+    identities = InstructorIdentityStore(tmp_path / 'identity.sqlite3')
+    identities.initialize()
+    identities.create('owner', 'Owner', 'admin', 'synthetic-readiness-password')
+    rubrics = RubricStore(tmp_path / 'rubric.sqlite3')
+    rubrics.initialize()
+    web = PortalReadiness(readiness.paths, readiness.workers, readiness.stopping, min_free_bytes=0,
+                          module_checks={'instructor_identity': identities.check_ready,
+                                         'rubric_catalog': rubrics.check_available})
+    assert web.status() == {'core': True, 'instructor_identity': True, 'rubric_catalog': True}
+    assert web() and readiness()
+    identity_path, rubric_path = identities.path, rubrics.path
+    identities.path = tmp_path / 'missing-identity.sqlite3'
+    assert not web() and readiness()
+    assert web.status()['instructor_identity'] is False
+    assert not identities.path.exists()
+    identities.path = identity_path
+    rubrics.path = tmp_path / 'missing-rubric.sqlite3'
+    assert not web() and readiness()
+    assert web.status()['rubric_catalog'] is False
+    assert not rubrics.path.exists()
+    rubrics.path = rubric_path
+    assert web()
+    with running_server(object(), readiness_check=web) as server:
+        assert request(server, 'GET', '/readyz')[0] == 200
+        rubrics.path = tmp_path / 'missing-rubric.sqlite3'
+        assert request(server, 'GET', '/readyz')[0] == 503
+        assert request(server, 'GET', '/healthz')[0] == 200
+
+
+@pytest.mark.parametrize('outcome,expected', [(None, True), (True, True), (False, False), (1, False), ('yes', False)])
+def test_module_probe_contract_is_explicit(readiness, outcome, expected):
+    readiness.module_checks = {'synthetic': lambda: outcome}
+    assert readiness.status()['synthetic'] is expected
+    assert readiness() is expected
+
+
 @pytest.mark.parametrize("web", [False, True])
 def test_http_separates_liveness_and_readiness(readiness, web):
     facade = SimpleNamespace(portal_request=lambda *args: {"page": True}) if web else object()

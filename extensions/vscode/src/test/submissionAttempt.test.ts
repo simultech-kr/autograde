@@ -77,6 +77,15 @@ test("bundle digest persists an idempotency key independently from Git fields", 
   assert.equal(next.idempotencyKey, "changed-key");
 });
 
+test("a confirmed bundle resubmission gets a new key even when bytes are unchanged", async () => {
+  const storage = new TestMemento();
+  const request = {serviceBaseUrl:"https://grade.example.edu", assignmentId:"asn_one", bundleSha256:"a".repeat(64)};
+  const first = await getOrCreateSubmissionAttempt(storage, request, () => "first", 1000);
+  await clearSubmissionAttempt(storage, request, first.idempotencyKey);
+  const next = await getOrCreateSubmissionAttempt(storage, request, () => "next", 2000);
+  assert.notEqual(next.idempotencyKey, first.idempotencyKey);
+});
+
 test("submission attempts reject ambiguous or malformed source identities", async () => {
   const storage = new TestMemento();
   await assert.rejects(

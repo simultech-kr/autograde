@@ -6410,50 +6410,9 @@ class PlatformStateStore:
                     "bundle assignment is unavailable for this enrollment"
                 )
 
-            semantic = connection.execute(
-                """
-                SELECT * FROM bundle_submission_requests
-                WHERE student_id = ? AND assignment_id = ?
-                  AND source_digest = ? AND source_size_bytes = ?
-                  AND state NOT IN (
-                      'rejected', 'infra_failed', 'assessment_failed'
-                  )
-                ORDER BY received_at, submission_id
-                LIMIT 1
-                """,
-                (
-                    student.id,
-                    assignment_id,
-                    source_digest,
-                    source_size_bytes,
-                ),
-            ).fetchone()
-            if semantic is not None:
-                try:
-                    connection.execute(
-                        """
-                        INSERT INTO bundle_submission_idempotency_keys (
-                            student_id, endpoint, assignment_id, idempotency_key,
-                            request_hash, submission_id, created_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?)
-                        """,
-                        (
-                            student.id,
-                            endpoint,
-                            assignment_id,
-                            idempotency_key,
-                            request_hash,
-                            semantic["submission_id"],
-                            now,
-                        ),
-                    )
-                except sqlite3.IntegrityError as exc:
-                    raise PlatformConflict(
-                        "bundle idempotency key could not be recorded"
-                    ) from exc
-                return BundleSubmissionCreateOutcome(
-                    self._bundle_submission(semantic), True
-                )
+            # A new idempotency key is an intentional new attempt, even when the
+            # archive is unchanged. Only transport retries of that key replay.
+            # Content-addressed bundle storage still shares identical bytes.
 
             outstanding = connection.execute(
                 """
@@ -6793,16 +6752,18 @@ class PlatformStateStore:
             ).fetchone()
         return self._bundle_submission(request), self._bundle_result(result)
 
-    def get_instructor_submission_review(self, *, course_key: str, submission_id: str):
+    def get_instructor_submission_review(self, *, course_key: str, submission_id: str, offset: int = 0):
         """Course-fenced immutable submission and bounded same-student history.
 
         Caller must authenticate the instructor. Retains access to historical
         submissions after enrollment or release deactivation.
         """
+        if type(offset) is not int or not 0 <= offset <= 100000:
+            raise PlatformNotFound('history page unavailable')
         with self._connection() as connection:
             row = connection.execute(
-                """SELECT r.*, p.student_key, a.title, a.assignment_key, a.release_id,
-                          a.max_score, result.score
+                """SELECT r.*, r.rowid AS receipt_order, p.student_key, a.title, a.assignment_key, a.release_id,
+                          COALESCE(result.max_score, a.max_score) AS max_score, result.score
                    FROM bundle_submission_requests r
                    JOIN bundle_assignment_releases a ON a.assignment_id = r.assignment_id
                    JOIN platform_students p ON p.id = r.student_id
@@ -6813,12 +6774,39 @@ class PlatformStateStore:
             if row is None:
                 raise PlatformNotFound("submission not found in this course")
             history = connection.execute(
-                """SELECT submission_id, received_at, state FROM bundle_submission_requests
-                   WHERE student_id = ? AND assignment_id = ?
-                   ORDER BY received_at DESC, submission_id DESC LIMIT 101""",
-                (row['student_id'], row['assignment_id']),
+                """WITH attempts AS (
+                     SELECT r.*, r.rowid AS receipt_order, g.score, g.max_score
+                     FROM bundle_submission_requests r
+                     LEFT JOIN bundle_submission_results g ON g.submission_id=r.submission_id
+                     WHERE r.student_id=? AND r.assignment_id=?
+                   ), timeline AS (
+                     SELECT *, ROW_NUMBER() OVER w AS version,
+                       LAG(submission_id) OVER w AS previous_id,
+                       LAG(score) OVER w AS previous_score,
+                       LAG(max_score) OVER w AS previous_max_score,
+                       LAG(source_digest) OVER w AS previous_digest
+                     FROM attempts WINDOW w AS (ORDER BY received_at, receipt_order)
+                   ) SELECT * FROM timeline ORDER BY received_at DESC, receipt_order DESC LIMIT 101 OFFSET ?""",
+                (row['student_id'], row['assignment_id'], offset),
             ).fetchall()
         return dict(row), [dict(item) for item in history]
+
+    def get_bundle_previous_best(self, submission_id: str):
+        """Caller must authorize the current submission first. Never disclose provisional grades."""
+        with self._connection() as connection:
+            row = connection.execute(
+                """SELECT p.submission_id, p.received_at, g.score, g.max_score
+                   FROM bundle_submission_requests current
+                   JOIN bundle_submission_requests p ON p.student_id=current.student_id
+                     AND p.assignment_id=current.assignment_id
+                   JOIN bundle_submission_results g ON g.submission_id=p.submission_id
+                   WHERE current.submission_id=? AND p.state='published' AND g.published_at IS NOT NULL
+                     AND (p.received_at < current.received_at OR
+                          (p.received_at=current.received_at AND p.rowid < current.rowid))
+                   ORDER BY g.score DESC, p.received_at DESC, p.rowid DESC LIMIT 1""",
+                (_required_text(submission_id, 'submission_id'),),
+            ).fetchone()
+        return dict(row) if row else None
 
     def get_bundle_submission(self, submission_id: str) -> BundleSubmissionRequest:
         with self._connection() as connection:
@@ -6899,7 +6887,7 @@ class PlatformStateStore:
                 WHERE r.assignment_id = ? AND r.student_id = ? AND a.course_key = ?
                   AND EXISTS (SELECT 1 FROM platform_enrollments AS e
                     WHERE e.student_id = r.student_id AND e.course_key = a.course_key AND e.active = 1)
-                ORDER BY r.received_at DESC, r.submission_id DESC LIMIT 101
+                ORDER BY r.received_at DESC, r.rowid DESC LIMIT 101
                 """,
                 (_required_text(assignment_id, "assignment_id"), student.id,
                  _required_text(course_key, "course_key")),
@@ -6931,7 +6919,7 @@ class PlatformStateStore:
                       WHERE e.student_id = r.student_id
                         AND e.course_key = a.course_key AND e.active = 1
                   )
-                ORDER BY r.received_at DESC, r.submission_id DESC
+                ORDER BY r.received_at DESC, r.rowid DESC
                 LIMIT 1
                 """,
                 (
@@ -7111,7 +7099,7 @@ class PlatformStateStore:
                         WHERE candidate.student_id = r.student_id
                           AND candidate.assignment_id = r.assignment_id
                         ORDER BY candidate.received_at DESC,
-                                 candidate.submission_id DESC
+                                 candidate.rowid DESC
                         LIMIT 1
                     )
                 )
