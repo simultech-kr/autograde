@@ -31,6 +31,7 @@ MAX_EXPANDED_BYTES = 20 * 1024 * 1024
 MAX_DRAFT_BYTES = 50 * 1024 * 1024
 MAX_FILES = 1000
 MAX_QUEUED = 10
+DOCUMENT_FIELDS = {"title", "description", "language", "mode", "platform", "opens_at", "due_at", "result_policy", "tests", "negative_score"}
 
 
 class _ValidationGrader(PilotLocalGrader):
@@ -146,8 +147,7 @@ def _zip_files(content, language):
 
 
 def _document(fields):
-    allowed = {"title", "description", "language", "mode", "platform", "opens_at", "due_at", "result_policy", "tests", "negative_score"}
-    if set(fields) - allowed:
+    if set(fields) - DOCUMENT_FIELDS:
         raise ValueError("지원하지 않는 과제 설정입니다.")
     result = {"title": "Hello World", "description": "Hello, World! 한 줄과 줄바꿈을 출력하세요.",
               "language": "cpp", "mode": "template", "platform": "linux", "opens_at": None,
@@ -224,6 +224,90 @@ def _template_archive(document):
     # difficult for a later template change to accidentally add private files.
     _zip_files(content, document["language"])
     return content
+
+
+def _archive_files(files):
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for name, content in sorted(files.items()):
+            entry = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+            entry.create_system = 3
+            entry.compress_type = zipfile.ZIP_DEFLATED
+            entry.external_attr = (stat.S_IFREG | 0o600) << 16
+            archive.writestr(entry, content)
+    return output.getvalue()
+
+
+def _grading_template_archive(document):
+    """Build one private instructor bundle containing positive/negative examples and tests."""
+    materials = _template_materials(document)
+    filename = "main.c" if document["language"] == "c" else "main.cpp"
+    tests = document.get("tests") or [{
+        "title": "예시 출력 테스트 - 과제에 맞게 수정",
+        "input": "",
+        "output": "Hello, World!\n",
+        "weight": 10,
+        "public": True,
+    }]
+    configuration = {"negative_score": document.get("negative_score", 0), "tests": tests}
+    files = {
+        f"solution/{filename}": materials["solution"][filename],
+        f"negative/{filename}": materials["negative"][filename],
+        "tests.json": (json.dumps(configuration, ensure_ascii=False, indent=2) + "\n").encode("utf-8"),
+        "README.md": (
+            "# Autograde 채점 템플릿\n\n"
+            "solution과 negative 코드를 실제 과제에 맞게 수정하고 tests.json의 입력, 예상 출력, "
+            "배점 및 공개 여부를 확인하세요. 이 ZIP은 학생에게 제공하지 않습니다.\n"
+        ).encode("utf-8"),
+    }
+    return _archive_files(files)
+
+
+def _grading_bundle(content, language):
+    """Validate and decode the exact instructor grading-template contract."""
+    if not isinstance(content, bytes) or len(content) > MAX_ZIP_BYTES:
+        raise ValueError("채점 템플릿 ZIP은 5 MiB 이하이어야 합니다.")
+    filename = "main.c" if language == "c" else "main.cpp"
+    required = {f"solution/{filename}", f"negative/{filename}", "tests.json"}
+    allowed = required | {"README.md"}
+    try:
+        archive = zipfile.ZipFile(io.BytesIO(content))
+    except (zipfile.BadZipFile, ValueError) as exc:
+        raise ValueError("올바른 채점 템플릿 ZIP이 필요합니다.") from exc
+    files, seen, total = {}, set(), 0
+    with archive:
+        entries = archive.infolist()
+        if not entries or len(entries) > len(allowed):
+            raise ValueError("채점 템플릿 파일 구성을 확인하세요.")
+        for entry in entries:
+            name = unicodedata.normalize("NFC", entry.filename)
+            mode = (entry.external_attr >> 16) & 0xffff
+            if (entry.is_dir() or name not in allowed or name.casefold() in seen or entry.flag_bits & 1
+                    or stat.S_IFMT(mode) not in (0, stat.S_IFREG)):
+                raise ValueError("채점 템플릿에 허용되지 않은 파일이나 링크가 있습니다.")
+            seen.add(name.casefold())
+            total += entry.file_size
+            if total > MAX_EXPANDED_BYTES or entry.file_size > MAX_EXPANDED_BYTES:
+                raise ValueError("채점 템플릿 해제 용량은 20 MiB 이하이어야 합니다.")
+            try:
+                with archive.open(entry) as stream:
+                    data = stream.read(MAX_EXPANDED_BYTES + 1)
+            except (zipfile.BadZipFile, RuntimeError, EOFError, NotImplementedError, zlib.error) as exc:
+                raise ValueError("채점 템플릿 ZIP이 손상되었습니다.") from exc
+            if len(data) != entry.file_size or len(data) > MAX_EXPANDED_BYTES:
+                raise ValueError("채점 템플릿 파일 크기가 올바르지 않습니다.")
+            files[name] = data
+    if not required <= set(files):
+        raise ValueError(f"solution/{filename}, negative/{filename}, tests.json이 필요합니다.")
+    if len(files[f"solution/{filename}"]) > 1024 * 1024 or len(files[f"negative/{filename}"]) > 1024 * 1024:
+        raise ValueError("정답·오답 소스는 각각 1 MiB 이하이어야 합니다.")
+    try:
+        configuration = json.loads(files["tests.json"].decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("tests.json은 UTF-8 JSON이어야 합니다.") from exc
+    if not isinstance(configuration, dict) or set(configuration) != {"tests", "negative_score"}:
+        raise ValueError("tests.json에는 tests와 negative_score만 입력하세요.")
+    return files, configuration
 
 
 class AssignmentAdminService:
@@ -331,20 +415,19 @@ class AssignmentAdminService:
         draft = self.get_draft(course, draft_id)
         return {upload["role"]: upload["files"] for upload in draft["uploads"]}
 
-    def _cached_template(self, document):
+    def _cached_archive(self, content, namespace):
         """Materialize one immutable, content-addressed download in managed cache."""
-        content = _template_archive(document)
         digest = hashlib.sha256(content).hexdigest()
-        directory = self.paths.cache / "assignment-templates"
+        directory = self.paths.cache / namespace
         if os.path.lexists(directory) and directory.is_symlink():
-            raise OSError("assignment template cache must not be a symlink")
+            raise OSError("template cache must not be a symlink")
         directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         directory.chmod(0o700)
         target = directory / f"{digest}.zip"
         if os.path.lexists(target):
             info = target.lstat()
             if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or target.read_bytes() != content:
-                raise OSError("assignment template cache entry is not trusted")
+                raise OSError("template cache entry is not trusted")
         else:
             descriptor, temporary_name = tempfile.mkstemp(prefix="template-", suffix=".tmp", dir=directory)
             temporary = Path(temporary_name)
@@ -362,8 +445,11 @@ class AssignmentAdminService:
                 temporary.unlink(missing_ok=True)
         info = target.lstat()
         if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or target.read_bytes() != content:
-            raise OSError("assignment template cache entry is not trusted")
+            raise OSError("template cache entry is not trusted")
         return {"path": target, "sha256": digest, "size_bytes": len(content)}
+
+    def _cached_template(self, document):
+        return self._cached_archive(_template_archive(document), "assignment-templates")
 
     def default_starter_template(self, language, platform):
         document = _document({"language": language, "platform": platform, "mode": "direct"})
@@ -373,12 +459,64 @@ class AssignmentAdminService:
         draft = self.get_draft(course, draft_id)
         return self._cached_template(draft)
 
+    def default_grading_template(self, language, platform):
+        document = _document({"language": language, "platform": platform, "mode": "direct", "negative_score": 0})
+        return self._cached_archive(_grading_template_archive(document), "grading-templates")
+
+    def draft_grading_template(self, course, draft_id):
+        draft = self.get_draft(course, draft_id)
+        return self._cached_archive(_grading_template_archive(draft), "grading-templates")
+
     def save_starter_template(self, course, draft_id, revision):
         """Save the generated starter as the direct draft's real student upload."""
         draft = self.get_draft(course, draft_id)
         if draft["mode"] != "direct":
             raise PlatformConflict("예제 모드는 설정 자체가 서버 템플릿으로 저장됩니다.")
         return self.upload_zip(course, draft_id, revision, "starter", _template_archive(draft))
+
+    def import_grading_template(self, course, draft_id, revision, content):
+        """Atomically replace direct-mode positive/negative sources and test configuration."""
+        self._course(course)
+        draft = self.get_draft(course, draft_id)
+        if draft["mode"] != "direct":
+            raise PlatformConflict("예제 모드는 채점 자료가 고정되어 있습니다. 직접 만들기를 사용하세요.")
+        files, configuration = _grading_bundle(content, draft["language"])
+        document = _document({key: draft[key] for key in DOCUMENT_FIELDS} | configuration)
+        filename = "main.c" if draft["language"] == "c" else "main.cpp"
+        archives = {
+            role: _archive_files({filename: files[f"{role}/{filename}"]})
+            for role in ("solution", "negative")
+        }
+        metadata = {}
+        for role, archive in archives.items():
+            source = files[f"{role}/{filename}"]
+            metadata[role] = {
+                "role": role,
+                "files": [filename],
+                "size_bytes": len(source),
+                "sha256": hashlib.sha256(archive).hexdigest(),
+                "source_sha256": hashlib.sha256(source).hexdigest(),
+            }
+        with self.state._write() as connection:
+            self._editable(connection, course, draft_id, revision)
+            existing = [json.loads(row[0]) for row in connection.execute(
+                "SELECT metadata_json FROM instructor_assignment_uploads WHERE draft_id=? AND role NOT IN ('solution','negative')",
+                (draft_id,),
+            )]
+            if sum(item["size_bytes"] for item in metadata.values()) + sum(item["size_bytes"] for item in existing) > MAX_DRAFT_BYTES:
+                raise ValueError("초안 전체 자료는 50 MiB 이하이어야 합니다.")
+            connection.execute(
+                "UPDATE instructor_assignment_drafts SET document_json=?,revision=revision+1,updated_at=? WHERE draft_id=?",
+                (json.dumps(document), utc_iso(), draft_id),
+            )
+            for role in ("solution", "negative"):
+                connection.execute(
+                    "INSERT INTO instructor_assignment_uploads VALUES (?,?,?,?) "
+                    "ON CONFLICT(draft_id,role) DO UPDATE SET archive=excluded.archive,metadata_json=excluded.metadata_json",
+                    (draft_id, role, archives[role], json.dumps(metadata[role])),
+                )
+            self._event(connection, course, draft_id, "imported_grading_template")
+        return self.get_draft(course, draft_id)
 
     def list_drafts(self, course):
         with self.state._connection() as connection:

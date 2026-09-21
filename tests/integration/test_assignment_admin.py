@@ -62,6 +62,39 @@ def test_default_starter_download_contains_only_student_files(admin, language, p
         assert not {"solution.c", "solution.cpp", "tests.json", "grade.py"} & set(generated.namelist())
 
 
+def test_grading_template_download_and_atomic_import(admin):
+    draft = admin.create_draft("come2201", mode="direct", language="cpp", negative_score=0)
+    template = admin.draft_grading_template("come2201", draft["draft_id"])
+    with zipfile.ZipFile(template["path"]) as generated:
+        assert set(generated.namelist()) == {"README.md", "solution/main.cpp", "negative/main.cpp", "tests.json"}
+        configuration = json.loads(generated.read("tests.json"))
+        assert set(configuration) == {"tests", "negative_score"}
+        assert configuration["tests"][0]["weight"] == 10
+
+    imported = admin.import_grading_template("come2201", draft["draft_id"], 1, template["path"].read_bytes())
+    assert imported["revision"] == 2
+    assert imported["tests"][0]["output"] == "Hello, World!\n"
+    assert {item["role"] for item in imported["uploads"]} == {"solution", "negative"}
+    ready = admin.save_starter_template("come2201", draft["draft_id"], imported["revision"])
+    job = admin.queue_check("come2201", draft["draft_id"], ready["revision"], True)
+    assert admin.run_one()
+    assert admin.get_check("come2201", job["job_id"])["status"] == "succeeded"
+
+
+def test_grading_template_rejects_extra_file_without_partial_update(admin):
+    draft = admin.create_draft("come2201", mode="direct", language="c", negative_score=0)
+    invalid = archive({
+        "solution/main.c": "int main(void){return 0;}",
+        "negative/main.c": "int main(void){return 1;}",
+        "tests.json": json.dumps({"tests": [{"title": "x", "input": "", "output": "", "weight": 1, "public": False}], "negative_score": 0}),
+        "private-key.txt": "not allowed",
+    })
+    with pytest.raises(ValueError):
+        admin.import_grading_template("come2201", draft["draft_id"], 1, invalid)
+    current = admin.get_draft("come2201", draft["draft_id"])
+    assert current["revision"] == 1 and not current["uploads"] and not current["tests"]
+
+
 @pytest.mark.parametrize("language", ["c", "cpp"])
 def test_template_real_validation_publish_and_revision(admin, language):
     draft = admin.create_draft("come2201", language=language)

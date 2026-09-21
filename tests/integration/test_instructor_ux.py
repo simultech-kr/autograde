@@ -134,7 +134,7 @@ def test_published_validation_and_internal_jobs_not_duplicated(setup, tmp_path):
     published=assignments.publish('come2201',draft['draft_id'],1)
     catalog=browser.web.catalog.list('come2201')
     assert catalog['count']==1 and catalog['items'][0]['origin']=='web'
-    page=browser.get(BASE+'/drafts/'+draft['draft_id']+'/step/5')
+    page=browser.get(BASE+'/drafts/'+draft['draft_id'])
     assert '공개본 등록 완료' in page.body and '아직 학생에게 공개되지 않았습니다' not in page.body
     detail=browser.get(BASE+'/assignments/'+published.assignment_id)
     assert detail.status==200 and '마감 없는 공개본에는 새 마감을 추가할 수 없습니다' in detail.body
@@ -156,7 +156,7 @@ def test_past_deadline_publish_rejected_transactionally_but_retry_allowed(setup,
     assert not assignments.get_draft('come2201',draft['draft_id'])['can_publish']
     with pytest.raises(PlatformConflict,match='마감이 지난'):
         assignments.publish('come2201',draft['draft_id'],1)
-    page=browser.get(BASE+'/drafts/'+draft['draft_id']+'/step/6')
+    page=browser.get(BASE+'/drafts/'+draft['draft_id'])
     assert '학생에게 과제 공개</button>' not in page.body
     assert not state.get_bundle_assignment(assignments.get_check('come2201',job['job_id'])['assignment_id']).ready
     monkeypatch.setattr('autograde.assignment_admin.utc_iso',lambda:utc_iso())

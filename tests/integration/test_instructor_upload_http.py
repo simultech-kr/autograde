@@ -119,6 +119,26 @@ def test_authenticated_default_and_draft_template_downloads(http_setup):
     assert status == 401
 
 
+def test_authenticated_grading_template_download_and_upload(http_setup):
+    server, browser, _, _, _, assignments = http_setup
+    status, headers, content = download(server, BASE + '/grading-templates/c/linux.zip', browser=browser)
+    assert status == 200
+    assert headers['Content-Disposition'] == 'attachment; filename="autograde-grading-c-linux.zip"'
+    with zipfile.ZipFile(io.BytesIO(content)) as generated:
+        assert {'solution/main.c', 'negative/main.c', 'tests.json'} <= set(generated.namelist())
+
+    draft = assignments.create_draft('come2201', mode='direct', language='c', negative_score=0)
+    path = BASE + '/drafts/' + draft['draft_id']
+    mime, body = multipart([('csrf', browser.csrf), ('revision', '1'), ('grading_confirm', 'yes'), ('file', content)])
+    status, headers, html = send(server, path + '/grading-template', body, mime, browser=browser)
+    assert status == 303, html
+    assert headers['Location'] == path
+    current = assignments.get_draft('come2201', draft['draft_id'])
+    assert current['revision'] == 2
+    assert {item['role'] for item in current['uploads']} == {'solution', 'negative'}
+    assert len(current['tests']) == 1
+
+
 @pytest.mark.parametrize('authorization,origin,expected', [(None, WEB, 401), ('Bearer student', WEB, 401),
                                                          (AUTH, None, 403), (AUTH, 'null', 403)])
 def test_reject_auth_before_reading_oversized_upload(http_setup, authorization, origin, expected):

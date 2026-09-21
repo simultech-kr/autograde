@@ -27,7 +27,6 @@ from .instructor_browser import SCRIPT_TAG
 
 _COOKIE = "autograde_instructor_web"
 _COURSE_PATH = re.compile(r"/courses/([a-z0-9_-]{1,96})/instructor(?:/(.*))?")
-_STEPS = ("문제 준비", "학생용 파일", "채점 자료", "서버 검증", "결과 확인·수정", "공개 설정")
 _STATUS = {"preparation": "준비", "active": "운영", "archived": "보관",
            "queued": "검증 대기", "running": "검증 중", "succeeded": "검증 통과",
            "failed": "검증 실패", "interrupted": "검증 중단"}
@@ -48,7 +47,7 @@ button,.button{display:inline-block;min-height:44px;padding:10px 16px;border:0;b
 .course-qr svg{width:240px;max-width:100%;height:auto}
 .warning{background:#fff7ed;border-left-color:#c2410c}.error{background:#fef2f2;border-left-color:#b91c1c}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px}
 table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:12px;border-bottom:1px solid #cbd5e1;vertical-align:top;overflow-wrap:anywhere}
-.table-scroll{overflow-x:auto}pre{white-space:pre-wrap;overflow-wrap:anywhere}code{font-size:1.05em}.steps{padding:0;display:flex;flex-wrap:wrap;gap:8px;list-style:none}.steps li{padding:8px;border:1px solid #cbd5e1;border-radius:6px}.steps [aria-current]{font-weight:bold;border:2px solid #2563eb}
+.table-scroll{overflow-x:auto}pre{white-space:pre-wrap;overflow-wrap:anywhere}code{font-size:1.05em}
 :focus-visible{outline:3px solid #0f172a;outline-offset:3px}details{margin:12px 0}summary{cursor:pointer;min-height:44px;padding:8px}.actions{display:flex;gap:12px;flex-wrap:wrap}
 @media(max-width:760px){.shell{display:block}nav{display:flex;flex-wrap:wrap;padding:8px}nav a{padding:8px}main{padding:12px}section,.card{padding:16px}}
 .instructor-header{display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap}
@@ -293,7 +292,7 @@ class InstructorWeb:
     @staticmethod
     def _form(action, session, content, *, multipart=False):
         enctype = 'enctype="multipart/form-data"' if multipart else ''
-        guarded = bool(re.search(r'/instructor/(?:drafts(?:/[a-zA-Z0-9_-]+(?:/(?:uploads/(?:starter|solution|negative)|starter-template))?)?|assignments/[a-zA-Z0-9_-]+/extend|rubrics/preview)$', action))
+        guarded = bool(re.search(r'/instructor/(?:drafts(?:/[a-zA-Z0-9_-]+(?:/(?:uploads/(?:starter|solution|negative)|starter-template|grading-template))?)?|assignments/[a-zA-Z0-9_-]+/extend|rubrics/preview)$', action))
         guarded = guarded or bool(re.search(r'/rubrics/versions/[^/]+/[0-9]+/submissions/bsub_[A-Za-z0-9_-]+$', action))
         guard = 'data-dirty-guard' if guarded else ''
         notice = '<p data-save-status role="status" aria-live="polite">각 영역의 저장 버튼을 눌러야 보존됩니다.</p>' if guarded else ''
@@ -342,12 +341,13 @@ class InstructorWeb:
                 elif route == 'students':
                     target = 'students'
                 elif re.fullmatch(r'drafts/[a-zA-Z0-9_-]+', route):
-                    step = '3' if 'tests_present' in form else '6' if form.get('next_step') == '4' else '1'
-                    target = route + '/step/' + step
+                    target = route
                 elif re.fullmatch(r'drafts/[a-zA-Z0-9_-]+/uploads/(starter|solution|negative)', route):
-                    target = route.split('/uploads/')[0] + '/step/' + ('2' if route.endswith('/starter') else '3')
+                    target = route.split('/uploads/')[0]
                 elif re.fullmatch(r'drafts/[a-zA-Z0-9_-]+/starter-template', route):
-                    target = route.rsplit('/', 1)[0] + '/step/2'
+                    target = route.rsplit('/', 1)[0]
+                elif re.fullmatch(r'drafts/[a-zA-Z0-9_-]+/grading-template', route):
+                    target = route.rsplit('/', 1)[0]
                 elif re.fullmatch(r'assignments/[a-zA-Z0-9_-]+/(extend|hide)', route):
                     target = route.rsplit('/', 1)[0]
                 else:
@@ -464,7 +464,7 @@ class InstructorWeb:
             return '제출·채점 현황', '<p>현재 서버에서 제출 현황 연결이 제공되지 않습니다.</p>'
         if route.startswith('students'):
             return self._student_request(method, course, route, form, session)
-        if route.startswith(('assignments', 'assignment-templates', 'drafts', 'checks')):
+        if route.startswith(('assignments', 'assignment-templates', 'grading-templates', 'drafts', 'checks')):
             return self._assignment_request(method, course, route, form, session)
         if method == 'POST' and route == 'update':
             fields = {name: _value(form, name) for name in ('code', 'name', 'semester', 'section', 'description') if name in form}
@@ -677,18 +677,27 @@ class InstructorWeb:
                 f'<a class="button secondary" href="{base}/assignment-templates/{language}/{platform}.zip">{label}</a>'
                 for language, platform, label in (('c', 'linux', 'C · Linux/macOS/WSL2'), ('cpp', 'linux', 'C++ · Linux/macOS/WSL2'),
                                                   ('c', 'windows', 'C · Visual Studio'), ('cpp', 'windows', 'C++ · Visual Studio'))) + '</div><p class="hint">초안을 만든 뒤 문제 설명을 반영한 템플릿을 다시 다운로드하거나 서버에 바로 저장할 수 있습니다.</p></section>'
-            return '1. 문제 준비', templates + '<section><p>학생이 풀 문제와 사용할 언어를 알려주세요.</p>' + self._form(base + '/drafts', session,
+            grading = '<section><h3>채점 기본 템플릿</h3><p>정답·오답 코드와 tests.json을 함께 작성할 교수자 전용 ZIP입니다. 학생에게 배포하지 마세요.</p><div class="actions">' + ''.join(
+                f'<a class="button secondary" href="{base}/grading-templates/{language}/{platform}.zip">{label}</a>'
+                for language, platform, label in (('c', 'linux', 'C 채점 · Linux'), ('cpp', 'linux', 'C++ 채점 · Linux'),
+                                                  ('c', 'windows', 'C 채점 · Windows'), ('cpp', 'windows', 'C++ 채점 · Windows'))) + '</div></section>'
+            return '새 과제 준비', templates + grading + '<section><p>기본 정보를 저장하면 과제와 채점 자료를 한 화면에서 계속 작성합니다.</p>' + self._form(base + '/drafts', session,
                 f'<input type="hidden" name="creation_key" value="{secrets.token_urlsafe(32)}">' +
                 _select('mode', '만드는 방법', [('template', 'Hello World 예제에서 만들기'), ('direct', '직접 만들기')], 'template') +
-                self._basic_draft_fields({}) + _button('학생용 파일 준비')) + '</section>'
+                self._basic_draft_fields({}) + _button('통합 과제·채점 작성 시작')) + '</section>'
         template_match = re.fullmatch(r'assignment-templates/(c|cpp)/(linux|windows)\.zip', route)
         if method == 'GET' and template_match:
             language, platform = template_match.groups()
             return self._template_download(self.assignments.default_starter_template(language, platform),
                                            f'autograde-starter-{language}-{platform}.zip')
+        grading_template_match = re.fullmatch(r'grading-templates/(c|cpp)/(linux|windows)\.zip', route)
+        if method == 'GET' and grading_template_match:
+            language, platform = grading_template_match.groups()
+            return self._template_download(self.assignments.default_grading_template(language, platform),
+                                           f'autograde-grading-{language}-{platform}.zip')
         if method == 'POST' and route == 'drafts':
             draft = self.assignments.create_draft(key, creation_key=_value(form, 'creation_key') or None, **self._draft_fields(form))
-            return self._redirect(base + '/drafts/' + draft['draft_id'] + '/step/2')
+            return self._redirect(base + '/drafts/' + draft['draft_id'])
         status_match = re.fullmatch(r'checks/([a-zA-Z0-9_-]+)/status', route)
         if method == 'GET' and status_match:
             job = self.assignments.get_check(key, status_match[1])
@@ -701,7 +710,7 @@ class InstructorWeb:
         if method == 'GET' and check_match:
             job = self.assignments.get_check(key, check_match[1])
             draft = self.assignments.get_draft(key, job['draft_id'])
-            return self._draft_page(course, draft, 5, session, job=job)
+            return self._draft_page(course, draft, session, job=job)
         release_match = re.fullmatch(r'assignments/([a-zA-Z0-9_-]+)/(copy|hide|extend)', route)
         if method == 'POST' and release_match:
             assignment_id, action = release_match.groups()
@@ -715,7 +724,7 @@ class InstructorWeb:
             else:
                 self.assignments.extend_deadline(key, assignment_id, _utc(_value(form, 'due_at')), _value(form, 'reason'))
             return self._redirect(base + '/assignments')
-        draft_match = re.fullmatch(r'drafts/([a-zA-Z0-9_-]+)(?:/(step/[1-6]|uploads/(?:starter|solution|negative)|starter-template(?:\.zip)?|checks|publish))?', route)
+        draft_match = re.fullmatch(r'drafts/([a-zA-Z0-9_-]+)(?:/(uploads/(?:starter|solution|negative)|starter-template(?:\.zip)?|grading-template(?:\.zip)?|checks|publish))?', route)
         if not draft_match:
             raise PlatformNotFound()
         draft_id, action = draft_match.groups()
@@ -723,9 +732,11 @@ class InstructorWeb:
         if method == 'GET' and action == 'starter-template.zip':
             filename = f'autograde-{draft["language"]}-{draft["platform"]}-starter.zip'
             return self._template_download(self.assignments.draft_starter_template(key, draft_id), filename)
-        if method == 'GET' and (action is None or action.startswith('step/')):
-            step = int(action[-1]) if action else (6 if draft.get('published_assignment_id') else 1)
-            return self._draft_page(course, draft, step, session)
+        if method == 'GET' and action == 'grading-template.zip':
+            filename = f'autograde-{draft["language"]}-{draft["platform"]}-grading.zip'
+            return self._template_download(self.assignments.draft_grading_template(key, draft_id), filename)
+        if method == 'GET' and action is None:
+            return self._draft_page(course, draft, session)
         if method != 'POST':
             raise PlatformNotFound()
         revision = int(_value(form, 'revision'))
@@ -733,7 +744,15 @@ class InstructorWeb:
             if _value(form, 'template_confirm') != 'yes':
                 raise ValueError('기존 학생용 파일을 기본 템플릿으로 교체하는 데 동의해 주세요.')
             self.assignments.save_starter_template(key, draft_id, revision)
-            return self._redirect(base + '/drafts/' + draft_id + '/step/2')
+            return self._redirect(base + '/drafts/' + draft_id)
+        if action == 'grading-template':
+            content = form.get('file')
+            if not isinstance(content, bytes):
+                raise ValueError('채점 템플릿 ZIP 파일을 선택해 주세요.')
+            if _value(form, 'grading_confirm') != 'yes':
+                raise ValueError('채점 템플릿의 정답·오답·테스트 내용을 검토했는지 확인해 주세요.')
+            self.assignments.import_grading_template(key, draft_id, revision, content)
+            return self._redirect(base + '/drafts/' + draft_id)
         if action and action.startswith('uploads/'):
             content = form.get('file')
             if not isinstance(content, bytes):
@@ -742,24 +761,21 @@ class InstructorWeb:
             if role == 'starter' and _value(form, 'starter_confirm') != 'yes':
                 raise ValueError('학생용 자료에 정답과 비공개 입력이 없는지 확인해 주세요.')
             self.assignments.upload_zip(key, draft_id, revision, role, content)
-            return self._redirect(base + '/drafts/' + draft_id + '/step/' + ('2' if role == 'starter' else '3'))
+            return self._redirect(base + '/drafts/' + draft_id)
         if action == 'checks':
             if _value(form, 'trusted_code') != 'yes':
                 raise ValueError('서버에서 실행할 정답·오답 코드를 검토했는지 확인해 주세요.')
             job = self.assignments.queue_check(key, draft_id, revision, trusted_code_confirmed=True)
-            return self._redirect(base + '/checks/' + job['job_id'])
+            return self._redirect(base + '/drafts/' + draft_id)
         if action == 'publish':
             if _value(form, 'confirm') != 'yes':
                 raise ValueError('현재 검증된 과제의 학생 공개를 승인해 주세요.')
             self.assignments.publish(key, draft_id, revision)
-            return self._redirect(base + '/drafts/' + draft_id + '/step/6')
+            return self._redirect(base + '/drafts/' + draft_id)
         if action is None:
             fields = self._draft_fields(form)
             self.assignments.update_draft(key, draft_id, revision, **fields)
-            step = _value(form, 'next_step', '1')
-            if step not in {str(n) for n in range(1, 7)}:
-                step = '1'
-            return self._redirect(base + '/drafts/' + draft_id + '/step/' + step)
+            return self._redirect(base + '/drafts/' + draft_id)
         raise PlatformNotFound()
 
     @staticmethod
@@ -820,7 +836,7 @@ class InstructorWeb:
         if item['draft_id']:
             draft = self.assignments.get_draft(course['course_key'], item['draft_id'])
             path = base + '/drafts/' + draft['draft_id']
-            body += f'<p><a href="{path}/step/5">준비 자료·검증 결과 확인</a></p>'
+            body += f'<p><a href="{path}">과제·채점 자료와 검증 결과 확인</a></p>'
             if course['status'] != 'archived':
                 body += self._publish_section(course, draft, draft.get('latest_check') or {}, session, '', path, False)
         else:
@@ -848,79 +864,83 @@ class InstructorWeb:
         fields += _select('result_policy', '점수 공개 시점', [('immediate', '채점 완료 즉시'), ('after_deadline', '마감 이후')], draft.get('result_policy', 'immediate'))
         return fields
 
-    def _draft_page(self, course, draft, step, session, *, job=None):
+    def _draft_page(self, course, draft, session, *, job=None):
         base = self._base(course)
         path = base + '/drafts/' + draft['draft_id']
         revision_field = f'<input type="hidden" name="revision" value="{draft["revision"]}">'
         job = job or draft.get('latest_check') or {}
         locked = job.get('status') in {'queued', 'running'} or bool(draft.get('published_assignment_id'))
         current_check = job.get('status') == 'succeeded' and job.get('revision') == draft['revision']
-        items = []
-        for number, label in enumerate(_STEPS, 1):
-            current = 'aria-current="step"' if number == step else ''
-            items.append(f'<li {current}><a href="{path}/step/{number}">{number}. {_e(label)}</a></li>')
-        body = '<ol class="steps" aria-label="과제 등록 단계">' + ''.join(items) + '</ol>'
+        body = '<div class="notice"><strong>통합 과제·채점 작성</strong> · 문제부터 검증과 공개까지 이 화면에서 처리합니다. 각 저장 후 화면이 갱신되며 저장 버전이 증가합니다.</div>'
         body += f'<p><strong>{_e(draft["title"])}</strong> · 저장 버전 {draft["revision"]} · {_e(draft["language"])} · {"예제" if draft["mode"] == "template" else "직접 만들기"}</p>'
-        body += f'<p class="meta">마지막 저장: {_e(_timestamp(draft.get("updated_at")))} KST · 각 단계의 저장 버튼을 누른 내용만 보존됩니다.</p>'
+        body += f'<p class="meta">마지막 저장: {_e(_timestamp(draft.get("updated_at")))} KST · 각 영역의 저장 버튼을 누른 내용만 보존됩니다.</p>'
         if not draft.get('published_assignment_id') and draft.get('due_at') and draft['due_at'] <= utc_iso():
             body += '<div class="notice warning">이미 지난 마감입니다. 초안은 유지되지만 학생에게 새로 공개할 수 없습니다. 일정을 수정한 뒤 다시 검증하세요.</div>'
         body += '<div class="notice">등록 중인 과제는 학생에게 보이지 않습니다. 자료를 변경하면 다시 검증해야 합니다.</div>' if not draft.get('published_assignment_id') else '<div class="notice">공개본은 덮어쓰지 않습니다. 변경은 새 초안 복제 또는 마감 연장을 사용하세요.</div>'
         if locked and not draft.get('published_assignment_id'):
-            body += '<div class="notice warning">검증 대기·실행 중에는 편집할 수 없습니다. 결과 확인 단계에서 상태를 확인하세요.</div>'
-        if step == 1:
-            if locked:
-                body += '<pre>' + _e(draft.get('description')) + '</pre><p>편집이 잠겨 있습니다.</p>'
-            else:
-                body += self._form(path, session, revision_field + self._basic_draft_fields(draft) + '<input type="hidden" name="next_step" value="2">' + _button('저장 · 학생용 파일 준비'))
-        elif step == 2:
-            body += '<p>학생에게 내려줄 미완성 코드만 올려주세요. 정답은 다음 단계에 등록합니다.</p>'
-            body += f'<p><a class="button secondary" href="{path}/starter-template.zip">현재 설정의 기본 starter ZIP 다운로드</a></p>'
-            if draft['mode'] == 'direct' and not locked:
-                replacement = '현재 등록된 학생용 ZIP을 교체합니다.' if any(item['role'] == 'starter' for item in draft.get('uploads', [])) else '생성한 ZIP을 학생용 파일로 등록합니다.'
-                body += self._form(path + '/starter-template', session, revision_field +
-                    f'<p>{replacement} 문제 설명은 README.md에 저장됩니다.</p>' +
-                    _checkbox('template_confirm', '기본 템플릿에는 정답·비공개 입력이 없음을 확인했으며 학생용 파일로 저장합니다.') +
-                    _button('기본 템플릿을 서버에 저장'))
-            body += self._upload_section(path, draft, 'starter', session, revision_field, locked)
-            body += f'<a class="button" href="{path}/step/3">채점 자료 준비</a>'
-        elif step == 3:
-            body += '<div class="notice">이 자료는 교수자와 서버만 사용하며 학생에게 배포하지 않습니다.</div>'
+            body += '<div class="notice warning">검증 대기·실행 중에는 편집할 수 없습니다. 아래 검증 상태를 확인하세요.</div>'
+
+        if not locked:
+            body += '<section><h3>1. 문제·일정</h3>' + self._form(
+                path, session, revision_field + self._basic_draft_fields(draft) + _button('문제·일정 저장'),
+            ) + '</section>'
+        else:
+            body += '<section><h3>1. 문제·일정</h3><pre>' + _e(draft.get('description')) + '</pre><p>편집이 잠겨 있습니다.</p></section>'
+
+        body += '<section><h3>2. 학생 배포 자료</h3><p>학생에게 내려줄 미완성 코드만 등록하세요.</p>'
+        body += f'<p><a class="button secondary" href="{path}/starter-template.zip">현재 설정의 기본 starter ZIP 다운로드</a></p>'
+        if draft['mode'] == 'direct' and not locked:
+            replacement = '현재 등록된 학생용 ZIP을 교체합니다.' if any(item['role'] == 'starter' for item in draft.get('uploads', [])) else '생성한 ZIP을 학생용 파일로 등록합니다.'
+            body += self._form(path + '/starter-template', session, revision_field +
+                f'<p>{replacement} 문제 설명은 README.md에 저장됩니다.</p>' +
+                _checkbox('template_confirm', '기본 템플릿에는 정답·비공개 입력이 없음을 확인했으며 학생용 파일로 저장합니다.') +
+                _button('기본 템플릿을 서버에 저장'))
+        body += self._upload_section(path, draft, 'starter', session, revision_field, locked) + '</section>'
+
+        body += '<section><h3>3. 교수자 채점 자료</h3><div class="notice warning">정답·오답·비공개 테스트는 교수자 전용이며 학생용 starter에 포함되지 않습니다.</div>'
+        body += f'<p><a class="button secondary" href="{path}/grading-template.zip">현재 설정의 채점 템플릿 ZIP 다운로드</a></p>'
+        if draft['mode'] == 'direct' and not locked:
+            fields = revision_field + _field('file', '수정한 채점 템플릿 ZIP', kind='file', required=True, extra='accept=".zip,application/zip"')
+            fields += _checkbox('grading_confirm', 'solution, negative, tests.json을 검토했으며 기존 채점 자료를 교체합니다.')
+            body += self._form(path + '/grading-template', session, fields + _button('채점 템플릿 한 번에 저장'), multipart=True)
+            body += '<details><summary>정답·오답 ZIP을 각각 등록</summary>'
             for role in ('solution', 'negative'):
                 body += self._upload_section(path, draft, role, session, revision_field, locked)
-            if draft['mode'] == 'template':
-                body += '<p>Hello World 예제의 기대 점수와 채점 규칙은 고정입니다. 정답 10점 / 오답 5점. 규칙 변경은 직접 만들기를 사용하세요.</p>'
-            elif not locked:
-                body += '<section><h3>표준 입출력 테스트</h3><p>CRLF/LF만 동등 취급하며 추가 공백·출력은 오답입니다. 1~50개 케이스, 배점 합계가 만점입니다. 웹 입력 요청은 64 KiB 이하로 작성하세요.</p>'
-                fields = revision_field + '<input type="hidden" name="tests_present" value="yes"><input type="hidden" name="next_step" value="4">'
-                fields += '<div data-case-editor><p data-case-total role="status" aria-live="polite">저장 전 각 케이스의 배점을 확인하세요.</p><div data-case-list>'
-                tests = draft.get('tests') or []
-                for index in range(50):
-                    test = tests[index] if index < len(tests) else {}
-                    fields += f'<details data-case {"open" if index < max(1, len(tests)) else ""}><summary>케이스 {index + 1}{" · 등록됨" if test else " · 미입력"}</summary>'
-                    fields += _field(f'test_{index}_title', '케이스 제목', test.get('title')) + _textarea(f'test_{index}_input', '입력', test.get('input'))
-                    fields += _textarea(f'test_{index}_output', '예상 출력', test.get('output')) + _field(f'test_{index}_weight', '배점', test.get('weight'), kind='number', extra='min="0" step="any"')
-                    checked = 'checked' if test.get('public') else ''
-                    fields += f'<label><input type="checkbox" name="test_{index}_public" value="yes" {checked}> 학생에게 이 케이스 공개</label>'
-                    fields += '<div class="actions"><button type="button" class="secondary" data-case-control data-case-copy hidden>복제</button><button type="button" class="secondary" data-case-control data-case-remove hidden>삭제</button></div></details>'
-                fields += '</div><button type="button" class="secondary" data-case-control data-case-add hidden>케이스 추가</button></div>'
-                fields += _field('negative_score', '오답 기대 점수 (만점보다 낮게)', draft.get('negative_score', 0), kind='number', required=True, extra='min="0" step="any"') + _button('채점 자료 저장 · 검증 내용 확인')
-                body += self._form(path, session, fields) + '</section>'
-            body += f'<a class="button secondary" href="{path}/step/4">저장된 검증 내용 확인</a>'
-        elif step == 4:
-            tests = draft.get('tests') or []
-            criteria = '예제 고정 기준 · 만점 10점' if draft['mode'] == 'template' else f'테스트 {len(tests)}개 · 만점 {draft.get("max_score")}점'
-            body += f'<section><h3>서버 검증 대상</h3><p>저장 버전 {draft["revision"]} · {_e(criteria)} · 오답 기대 점수 {_e(draft.get("negative_score"))}</p>'
-            body += '<p>등록한 정답·오답 코드를 서버에서 실행합니다. pilot-local은 보안 격리가 아닙니다. 사전 검토한 코드만 실행하세요.</p>'
-            if not locked:
-                body += self._form(path + '/checks', session, revision_field + _checkbox('trusted_code', '정답·오답 코드를 직접 검토했으며 서버 실행을 승인합니다.') + _button('서버에서 검증 시작'))
-            body += f'<p><a href="{path}/step/5">저장된 검증 결과 확인</a></p></section>'
-        elif step == 5:
-            body += self._check_result(job, draft, path)
-            body += f'<a class="button" href="{path}/step/{6 if current_check else 3}">{"공개 설정으로" if current_check else "채점 자료 확인·수정"}</a>'
+            body += '</details>' + self._test_case_editor(path, draft, session, revision_field)
         else:
-            body += self._publish_section(course, draft, job, session, revision_field, path, current_check)
-        body += f'<div class="actions"><a class="button secondary" href="{path}/step/{max(1,step-1)}">이전 단계</a><a class="button secondary" href="{base}/assignments">저장된 초안 목록으로</a></div><p class="hint">입력 중인 내용은 각 저장 버튼을 눌러야 보존됩니다. 파일 선택값은 새로고침하면 다시 선택해야 합니다.</p>'
-        return f'{step}. {_STEPS[step-1]}', body
+            body += '<p>예제 모드는 정답·오답·테스트와 점수가 고정되어 있으며 현재 설정의 채점 템플릿을 검토용으로 받을 수 있습니다.</p>'
+        body += '</section>'
+
+        body += '<section><h3>4. 서버 검증</h3>'
+        if job:
+            body += self._check_result(job, draft, path)
+        else:
+            body += '<p>아직 서버 검증을 실행하지 않았습니다.</p>'
+        if not locked and not current_check:
+            body += self._form(path + '/checks', session, revision_field +
+                _checkbox('trusted_code', '정답·오답 코드를 직접 검토했으며 서버 실행을 승인합니다.') +
+                _button('현재 저장 버전 검증 시작'))
+        body += '</section><h3>5. 학생 공개</h3>'
+        body += self._publish_section(course, draft, job, session, revision_field, path, current_check)
+        body += f'<div class="actions"><a class="button secondary" href="{base}/assignments">과제 목록으로</a></div><p class="hint">입력 중인 내용은 각 저장 버튼을 눌러야 보존됩니다. 파일 선택값은 새로고침하면 다시 선택해야 합니다.</p>'
+        return '과제·채점 통합 작성', body
+
+    def _test_case_editor(self, path, draft, session, revision_field):
+        body = '<section><h3>표준 입출력 테스트</h3><p>CRLF/LF만 동등 취급하며 추가 공백·출력은 오답입니다. 1~50개 케이스, 배점 합계가 만점입니다. 웹 입력 요청은 64 KiB 이하로 작성하세요.</p>'
+        fields = revision_field + '<input type="hidden" name="tests_present" value="yes">'
+        fields += '<div data-case-editor><p data-case-total role="status" aria-live="polite">저장 전 각 케이스의 배점을 확인하세요.</p><div data-case-list>'
+        tests = draft.get('tests') or []
+        for index in range(50):
+            test = tests[index] if index < len(tests) else {}
+            fields += f'<details data-case {"open" if index < max(1, len(tests)) else ""}><summary>케이스 {index + 1}{" · 등록됨" if test else " · 미입력"}</summary>'
+            fields += _field(f'test_{index}_title', '케이스 제목', test.get('title')) + _textarea(f'test_{index}_input', '입력', test.get('input'))
+            fields += _textarea(f'test_{index}_output', '예상 출력', test.get('output')) + _field(f'test_{index}_weight', '배점', test.get('weight'), kind='number', extra='min="0" step="any"')
+            checked = 'checked' if test.get('public') else ''
+            fields += f'<label><input type="checkbox" name="test_{index}_public" value="yes" {checked}> 학생에게 이 케이스 공개</label>'
+            fields += '<div class="actions"><button type="button" class="secondary" data-case-control data-case-copy hidden>복제</button><button type="button" class="secondary" data-case-control data-case-remove hidden>삭제</button></div></details>'
+        fields += '</div><button type="button" class="secondary" data-case-control data-case-add hidden>케이스 추가</button></div>'
+        fields += _field('negative_score', '오답 기대 점수 (만점보다 낮게)', draft.get('negative_score', 0), kind='number', required=True, extra='min="0" step="any"') + _button('테스트·배점 저장')
+        return body + self._form(path, session, fields) + '</section>'
 
     def _upload_section(self, path, draft, role, session, revision_field, locked):
         titles = {'starter': '학생용 starter ZIP', 'solution': '정답 ZIP · 만점을 받아야 하는 코드', 'negative': '오답 ZIP · 일부 기준을 만족하지 않는 코드'}
@@ -946,7 +966,7 @@ class InstructorWeb:
         status = job.get('status')
         body = '<section><h3>' + _e(_STATUS.get(status, '아직 검증하지 않았습니다')) + '</h3>'
         if not status:
-            return body + f'<a href="{path}/step/4">서버 검증 단계로 이동</a></section>'
+            return body + '<p>아직 서버 검증을 실행하지 않았습니다.</p></section>'
         body += f'<p>작업 {_e(job.get("job_id"))} · 검증 버전 {_e(job.get("revision"))} / 현재 {_e(draft["revision"])}</p>'
         body += '<p class="hint">' + ' · '.join(label + ': ' + _e(_timestamp(job.get(field)) or '아직 없음') + ' (KST)'
             for label, field in [('접수', 'created_at'), ('시작', 'started_at'), ('종료', 'completed_at')]) + '</p>'
@@ -962,7 +982,7 @@ class InstructorWeb:
             if draft.get('published_assignment_id'):
                 body += f'<p>공개본 등록 완료 · 현재 {_e(_VISIBILITY.get(draft.get("visibility"), "상태 확인 필요"))}. 실제 수령 가능 여부는 수업 상태와 일정에 따라 달라집니다.</p>'
             else:
-                body += '<p>아직 학생에게 공개되지 않았습니다. 공개 설정 단계에서 별도로 승인하세요.</p>'
+                body += '<p>아직 학생에게 공개되지 않았습니다. 아래 학생 공개 영역에서 별도로 승인하세요.</p>'
         if job.get('revision') != draft['revision']:
             body += '<div class="notice warning">이 결과는 이전 자료의 결과입니다. 현재 자료를 다시 검증해야 합니다.</div>'
         details = job.get('details') or {}
@@ -972,7 +992,7 @@ class InstructorWeb:
         if status in {'failed', 'interrupted'}:
             error = details.get('error_type') or status
             body += f'<div class="notice error">오류 분류: {_e(error)}. 점수 불일치는 정답·오답·테스트를 확인하세요. 컴파일러 부재나 실행 환경 장애·중단은 서버 운영자가 확인한 뒤 재검증하세요.</div>'
-        body += f'<a class="button secondary" href="{path}/step/5">검증 상태 새로고침</a></section>'
+        body += f'<a class="button secondary" href="{path}">검증 상태 새로고침</a></section>'
         return body
 
     def _publish_section(self, course, draft, job, session, revision_field, path, current_check):
@@ -1012,5 +1032,5 @@ class InstructorWeb:
                 body += '<p>현재 버전의 검증 성공, 수업 운영 상태, 마감 시각을 확인해야 공개할 수 있습니다.</p>'
             if job.get('status') not in {'queued', 'running'}:
                 body += '<details><summary>일정·결과 공개 정책 변경</summary><p>변경하면 저장 버전이 바뀌므로 반드시 다시 검증해야 합니다.</p>'
-                body += self._form(path, session, revision_field + self._schedule_fields(draft) + '<input type="hidden" name="next_step" value="4">' + _button('일정 저장 · 재검증 준비')) + '</details>'
+                body += self._form(path, session, revision_field + self._schedule_fields(draft) + _button('일정 저장 · 재검증 준비')) + '</details>'
         return body + '</section>'

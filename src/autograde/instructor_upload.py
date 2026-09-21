@@ -28,7 +28,7 @@ def parse_instructor_upload(content_type: str, body: bytes, *, file_limit: int) 
     def part_begin():
         nonlocal count
         count += 1
-        if count > 6:
+        if count > 7:
             raise ValueError("업로드 항목이 너무 많습니다.")
         headers.clear()
         data.clear()
@@ -51,7 +51,7 @@ def parse_instructor_upload(content_type: str, body: bytes, *, file_limit: int) 
     def headers_finished():
         disposition, attrs = parse_options_header(headers.get(b"content-disposition", b""))
         name = attrs.get(b"name", b"").decode("ascii", "strict")
-        if disposition != b"form-data" or name not in {"csrf", "revision", "file", "auto_generate", "starter_confirm"} or name in result:
+        if disposition != b"form-data" or name not in {"csrf", "revision", "file", "auto_generate", "starter_confirm", "grading_confirm"} or name in result:
             raise ValueError("중복되거나 허용되지 않은 업로드 항목입니다.")
         is_file = b"filename" in attrs
         if (name == "file") != is_file:

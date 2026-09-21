@@ -710,7 +710,7 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
                 if is_admin:
                     admin.authorize_upload(path, self._cookies(), self.headers.get("Origin"),
                                            self.headers.get("Authorization"))
-                    upload = re.fullmatch(r"/courses/[^/]+/instructor/drafts/[^/]+/uploads/(starter|solution|negative)", path)
+                    upload = re.fullmatch(r"/courses/[^/]+/instructor/drafts/[^/]+/(?:uploads/(starter|solution|negative)|grading-template)", path)
                     csv_upload = re.fullmatch(r"/courses/[^/]+/instructor/students/import/preview", path)
                     if upload or csv_upload:
                         if not facade.admin_upload_slots.acquire(blocking=False):

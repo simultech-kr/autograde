@@ -57,13 +57,13 @@ def test_guard_only_edit_forms_and_no_js_fallback(setup):
     browser, _, _, _, assignments = setup
     draft = assignments.create_draft('come2201', mode='direct', negative_score=0, tests=[dict(title='one', input='', output='ok', weight=2, public=False)])
     path = BASE+'/drafts/'+draft['draft_id']
-    forms = Forms(browser.get(path+'/step/3').body).forms
-    assert len([form for form in forms if 'data-dirty-guard' in form]) == 3
-    page = browser.get(path+'/step/3').body
+    forms = Forms(browser.get(path).body).forms
+    assert len([form for form in forms if 'data-dirty-guard' in form]) == 8
+    page = browser.get(path).body
     assert page.count('<details data-case ') == 50
     assert 'name="test_49_weight"' in page
     assert 'data-case-add hidden' in page
-    assert all('data-dirty-guard' not in form for form in Forms(browser.get(path+'/step/4').body).forms)
+    assert any('data-dirty-guard' not in form for form in forms)  # 검증 접수는 입력 편집 폼이 아니다.
     # Invalid negative score restores attempted deletion, not removed saved tests.
     result = browser.post(path, revision='1', tests_present='yes', negative_score='bad')
     assert result.status == 400 and 'data-recovered' in result.body
@@ -75,7 +75,7 @@ def test_emit_actual_browser_fixtures(http_setup, tmp_path):
     draft = assignments.create_draft('come2201', mode='direct', negative_score=0, tests=[dict(title='one', input='input', output='ok', weight=2, public=False)])
     path = BASE+'/drafts/'+draft['draft_id']
     fixtures = {}
-    for name, url in [('cases', path+'/step/3'), ('edit', path+'/step/1'), ('new', BASE+'/assignments/new')]:
+    for name, url in [('integrated', path), ('new', BASE+'/assignments/new')]:
         status, headers, body = request(server, url, authorization=AUTH)
         assert status == 200
         fixtures[name] = dict(url=WEB+url, html=body.decode(), csp=headers['Content-Security-Policy'])

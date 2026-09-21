@@ -155,25 +155,26 @@ def test_student_explicit_reset_and_deactivation_confirmation(setup):
     assert not students.get_student('come2201', '001')['active']
 
 
-def test_six_step_template_validation_publish_real_grader(setup):
+def test_unified_template_validation_publish_real_grader(setup):
     browser, state, _, _, assignments = setup
     created = browser.post(BASE + '/drafts', mode='template', title='C Hello', description='Print Hello', language='c', platform='linux', opens_at='', due_at='', no_deadline='yes', result_policy='immediate')
     assert created.status == 303
-    draft_path = created.headers['Location'].removesuffix('/step/2')
-    for step in range(1, 7):
-        page = browser.get(draft_path + f'/step/{step}')
-        assert page.status == 200
-        assert 'aria-current="step"' in page.body
-        assert '학생에게 과제 공개</button>' not in page.body
+    draft_path = created.headers['Location']
+    page = browser.get(draft_path)
+    assert page.status == 200
+    assert '통합 과제·채점 작성' in page.body
+    assert '1. 문제·일정' in page.body and '4. 서버 검증' in page.body and '5. 학생 공개' in page.body
+    assert '학생에게 과제 공개</button>' not in page.body
     draft_id = draft_path.split('/')[-1]
     assert browser.post(draft_path + '/checks', revision='1').status == 400
     job_response = browser.post(draft_path + '/checks', revision='1', trusted_code='yes')
     assert job_response.status == 303
-    assert '검증 대기' in browser.get(job_response.headers['Location']).body
+    assert job_response.headers['Location'] == draft_path
+    assert '검증 대기' in browser.get(draft_path).body
     assert assignments.run_one()
-    results = browser.get(draft_path + '/step/5')
+    results = browser.get(draft_path)
     assert '검증 통과' in results.body and '<td>10.0</td>' in results.body
-    assert '학생에게 과제 공개</button>' in browser.get(draft_path + '/step/6').body
+    assert '학생에게 과제 공개</button>' in results.body
     published = browser.post(draft_path + '/publish', revision='1', confirm='yes')
     assert published.status == 303
     draft = assignments.get_draft('come2201', draft_id)
@@ -194,8 +195,8 @@ def test_direct_upload_roles_and_case_form_then_stale_revision(setup):
         archive.writestr('main.c', 'int main(void){return 0;}')
     assert browser.post(path + '/uploads/starter', revision='1', file=data.getvalue()).status == 400
     assert browser.post(path + '/uploads/starter', revision='1', file=data.getvalue(), starter_confirm='yes').status == 303
-    assert 'main.c' in browser.get(path + '/step/2').body
-    saved = browser.post(path, revision='2', tests_present='yes', test_0_title='Test', test_0_input='', test_0_output='hello\n', test_0_weight='10', negative_score='0', next_step='4')
+    assert 'main.c' in browser.get(path).body
+    saved = browser.post(path, revision='2', tests_present='yes', test_0_title='Test', test_0_input='', test_0_output='hello\n', test_0_weight='10', negative_score='0')
     assert saved.status == 303
     assert assignments.get_draft('come2201', draft['draft_id'])['tests'][0]['output'] == 'hello\n'
     assert browser.post(path, revision='2', title='stale').status == 409
@@ -205,6 +206,8 @@ def test_course_scope_and_unknown_routes(setup):
     browser, _, _, _, assignments = setup
     draft = assignments.create_draft('come3105')
     assert browser.get(BASE + '/drafts/' + draft['draft_id']).status == 404
+    own_draft = assignments.create_draft('come2201')
+    assert browser.get(BASE + '/drafts/' + own_draft['draft_id'] + '/step/2').status == 404
     assert browser.get('/courses/unknown/instructor').status == 404
     assert browser.get('/instructor/nonexistent').status == 404
     assert browser.web.request('GET', '/courses/come2201/login', {}, {}, authorization=AUTH) is None
@@ -215,7 +218,7 @@ def test_schedule_kst_and_explicit_no_deadline(setup):
     rejected = browser.post(BASE + '/drafts', title='No deadline?', due_at='')
     assert rejected.status == 400
     result = browser.post(BASE + '/drafts', title='KST', opens_at='2027-01-01T09:00', due_at='2027-01-02T09:00', result_policy='after_deadline')
-    draft = assignments.get_draft('come2201', result.headers['Location'].split('/')[-3])
+    draft = assignments.get_draft('come2201', result.headers['Location'].split('/')[-1])
     assert draft['opens_at'].startswith('2027-01-01T00:00')
     assert draft['result_policy'] == 'after_deadline'
 
@@ -245,7 +248,7 @@ def test_archive_views_do_not_offer_unavailable_edits_or_dangerous_reset(setup):
 def test_template_file_preview_precedes_server_execution(setup):
     browser, _, _, _, assignments = setup
     draft = assignments.create_draft('come2201', mode='template', language='cpp', platform='windows')
-    response = browser.get(BASE + '/drafts/' + draft['draft_id'] + '/step/2')
+    response = browser.get(BASE + '/drafts/' + draft['draft_id'])
     assert '템플릿 파일 미리보기' in response.body
     assert 'main.cpp' in response.body and 'README.md' in response.body and 'CMakeLists.txt' in response.body
     assert not draft['latest_check']
@@ -259,7 +262,7 @@ def test_assignment_template_actions_are_visible_and_save_direct_starter(setup):
 
     draft = assignments.create_draft('come2201', mode='direct', language='c', description='직접 문제', negative_score=0)
     path = BASE + '/drafts/' + draft['draft_id']
-    page = browser.get(path + '/step/2')
+    page = browser.get(path)
     assert path + '/starter-template.zip' in page.body
     assert '기본 템플릿을 서버에 저장' in page.body
     rejected = browser.post(path + '/starter-template', revision='1')
@@ -269,6 +272,24 @@ def test_assignment_template_actions_are_visible_and_save_direct_starter(setup):
     current = assignments.get_draft('come2201', draft['draft_id'])
     assert current['revision'] == 2
     assert next(item for item in current['uploads'] if item['role'] == 'starter')['files'] == ['README.md', 'main.c']
+
+
+def test_integrated_assignment_and_grading_editor(setup):
+    browser, _, _, _, assignments = setup
+    create = browser.get(BASE + '/assignments/new')
+    assert '채점 기본 템플릿' in create.body
+    assert BASE + '/grading-templates/cpp/windows.zip' in create.body
+    draft = assignments.create_draft('come2201', mode='direct', language='cpp', negative_score=0)
+    path = BASE + '/drafts/' + draft['draft_id']
+    page = browser.get(path)
+    assert '통합 과제·채점 작성' in page.body
+    assert '1. 문제·일정' in page.body
+    assert '2. 학생 배포 자료' in page.body
+    assert '3. 교수자 채점 자료' in page.body
+    assert path + '/grading-template.zip' in page.body
+    assert '채점 템플릿 한 번에 저장' in page.body
+    assert '표준 입출력 테스트' in page.body
+    assert '현재 저장 버전 검증 시작' in page.body
 
 
 def test_name_edit_explicit_global_warning_and_concurrency(setup):
