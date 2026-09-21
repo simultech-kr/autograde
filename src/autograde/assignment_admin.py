@@ -209,6 +209,23 @@ def _template_materials(document):
     return result
 
 
+def _template_archive(document):
+    """Build a reproducible student-only starter archive for one document."""
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for name, content in sorted(_template_materials(document)["starter"].items()):
+            entry = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+            entry.create_system = 3
+            entry.compress_type = zipfile.ZIP_DEFLATED
+            entry.external_attr = (stat.S_IFREG | 0o600) << 16
+            archive.writestr(entry, content)
+    content = output.getvalue()
+    # Keep generation and upload validation on one contract. This also makes it
+    # difficult for a later template change to accidentally add private files.
+    _zip_files(content, document["language"])
+    return content
+
+
 class AssignmentAdminService:
     def __init__(self, state, paths, course_status=None):
         self.state, self.paths, self.course_status = state, paths, course_status
@@ -313,6 +330,55 @@ class AssignmentAdminService:
     def preview_files(self, course, draft_id):
         draft = self.get_draft(course, draft_id)
         return {upload["role"]: upload["files"] for upload in draft["uploads"]}
+
+    def _cached_template(self, document):
+        """Materialize one immutable, content-addressed download in managed cache."""
+        content = _template_archive(document)
+        digest = hashlib.sha256(content).hexdigest()
+        directory = self.paths.cache / "assignment-templates"
+        if os.path.lexists(directory) and directory.is_symlink():
+            raise OSError("assignment template cache must not be a symlink")
+        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        directory.chmod(0o700)
+        target = directory / f"{digest}.zip"
+        if os.path.lexists(target):
+            info = target.lstat()
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or target.read_bytes() != content:
+                raise OSError("assignment template cache entry is not trusted")
+        else:
+            descriptor, temporary_name = tempfile.mkstemp(prefix="template-", suffix=".tmp", dir=directory)
+            temporary = Path(temporary_name)
+            try:
+                with os.fdopen(descriptor, "wb") as stream:
+                    stream.write(content)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                temporary.chmod(0o600)
+                try:
+                    os.link(temporary, target)
+                except FileExistsError:
+                    pass
+            finally:
+                temporary.unlink(missing_ok=True)
+        info = target.lstat()
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or target.read_bytes() != content:
+            raise OSError("assignment template cache entry is not trusted")
+        return {"path": target, "sha256": digest, "size_bytes": len(content)}
+
+    def default_starter_template(self, language, platform):
+        document = _document({"language": language, "platform": platform, "mode": "direct"})
+        return self._cached_template(document)
+
+    def draft_starter_template(self, course, draft_id):
+        draft = self.get_draft(course, draft_id)
+        return self._cached_template(draft)
+
+    def save_starter_template(self, course, draft_id, revision):
+        """Save the generated starter as the direct draft's real student upload."""
+        draft = self.get_draft(course, draft_id)
+        if draft["mode"] != "direct":
+            raise PlatformConflict("예제 모드는 설정 자체가 서버 템플릿으로 저장됩니다.")
+        return self.upload_zip(course, draft_id, revision, "starter", _template_archive(draft))
 
     def list_drafts(self, course):
         with self.state._connection() as connection:

@@ -45,6 +45,19 @@ def send(server, path, body, content_type, *, browser, authorization=AUTH, origi
         connection.close()
 
 
+def download(server, path, *, browser, authorization=AUTH):
+    headers = {'Cookie': '; '.join(f'{key}={value}' for key, value in browser.cookies.items())}
+    if authorization is not None:
+        headers['Authorization'] = authorization
+    connection = http.client.HTTPConnection(*server.server_address[:2], timeout=5)
+    try:
+        connection.request('GET', path, headers=headers)
+        response = connection.getresponse()
+        return response.status, dict(response.getheaders()), response.read()
+    finally:
+        connection.close()
+
+
 @pytest.fixture
 def http_setup(setup):
     browser, *rest = setup
@@ -83,6 +96,27 @@ def test_actual_direct_starter_upload_and_multiline_metadata(http_setup):
                            'application/x-www-form-urlencoded', browser=browser)
     assert status == 303, html
     assert courses.get_course('come2201')['description'] == 'First line\nSecond line'
+
+
+def test_authenticated_default_and_draft_template_downloads(http_setup):
+    server, browser, _, _, _, assignments = http_setup
+    status, headers, content = download(server, BASE + '/assignment-templates/cpp/windows.zip', browser=browser)
+    assert status == 200
+    assert headers['Content-Type'] == 'application/zip'
+    assert headers['Content-Disposition'] == 'attachment; filename="autograde-starter-cpp-windows.zip"'
+    assert headers['Cache-Control'] == 'no-store'
+    assert headers['X-Autograde-SHA256']
+    with zipfile.ZipFile(io.BytesIO(content)) as generated:
+        assert set(generated.namelist()) == {'main.cpp', 'README.md', 'CMakeLists.txt'}
+
+    draft = assignments.create_draft('come2201', mode='direct', language='c', description='초안 전용 설명', negative_score=0)
+    status, headers, content = download(server, BASE + '/drafts/' + draft['draft_id'] + '/starter-template.zip', browser=browser)
+    assert status == 200
+    with zipfile.ZipFile(io.BytesIO(content)) as generated:
+        assert generated.read('README.md').decode() == '초안 전용 설명\n'
+
+    status, _, _ = download(server, BASE + '/assignment-templates/c/linux.zip', browser=browser, authorization=None)
+    assert status == 401
 
 
 @pytest.mark.parametrize('authorization,origin,expected', [(None, WEB, 401), ('Bearer student', WEB, 401),

@@ -15,7 +15,7 @@ import secrets
 from urllib.parse import quote, urlencode
 
 from .platform_auth import InvalidSignedValue, sign_browser_value, verify_browser_value
-from .platform_service import PlatformAPIError, PlatformResponse
+from .platform_service import PlatformAPIError, PlatformFileResponse, PlatformResponse
 from .platform_state import PlatformAccessDenied, PlatformConflict, PlatformNotFound, utc_iso
 from .platform_qr import course_login_qr_svg
 from .web_theme import THEME_CSS
@@ -219,7 +219,7 @@ class InstructorWeb:
                 response = self._course_request(method, course, match[2] or "", form, session, authorization)
             else:
                 response = self._root_request(method, path, form, session)
-            if isinstance(response, PlatformResponse):
+            if isinstance(response, (PlatformResponse, PlatformFileResponse)):
                 return response
             title, body = response
             return self._page(title, body, course=course, cookie=cookie, current_path=path)
@@ -293,7 +293,7 @@ class InstructorWeb:
     @staticmethod
     def _form(action, session, content, *, multipart=False):
         enctype = 'enctype="multipart/form-data"' if multipart else ''
-        guarded = bool(re.search(r'/instructor/(?:drafts(?:/[a-zA-Z0-9_-]+(?:/uploads/(?:starter|solution|negative))?)?|assignments/[a-zA-Z0-9_-]+/extend|rubrics/preview)$', action))
+        guarded = bool(re.search(r'/instructor/(?:drafts(?:/[a-zA-Z0-9_-]+(?:/(?:uploads/(?:starter|solution|negative)|starter-template))?)?|assignments/[a-zA-Z0-9_-]+/extend|rubrics/preview)$', action))
         guarded = guarded or bool(re.search(r'/rubrics/versions/[^/]+/[0-9]+/submissions/bsub_[A-Za-z0-9_-]+$', action))
         guard = 'data-dirty-guard' if guarded else ''
         notice = '<p data-save-status role="status" aria-live="polite">각 영역의 저장 버튼을 눌러야 보존됩니다.</p>' if guarded else ''
@@ -346,6 +346,8 @@ class InstructorWeb:
                     target = route + '/step/' + step
                 elif re.fullmatch(r'drafts/[a-zA-Z0-9_-]+/uploads/(starter|solution|negative)', route):
                     target = route.split('/uploads/')[0] + '/step/' + ('2' if route.endswith('/starter') else '3')
+                elif re.fullmatch(r'drafts/[a-zA-Z0-9_-]+/starter-template', route):
+                    target = route.rsplit('/', 1)[0] + '/step/2'
                 elif re.fullmatch(r'assignments/[a-zA-Z0-9_-]+/(extend|hide)', route):
                     target = route.rsplit('/', 1)[0]
                 else:
@@ -462,7 +464,7 @@ class InstructorWeb:
             return '제출·채점 현황', '<p>현재 서버에서 제출 현황 연결이 제공되지 않습니다.</p>'
         if route.startswith('students'):
             return self._student_request(method, course, route, form, session)
-        if route.startswith(('assignments', 'drafts', 'checks')):
+        if route.startswith(('assignments', 'assignment-templates', 'drafts', 'checks')):
             return self._assignment_request(method, course, route, form, session)
         if method == 'POST' and route == 'update':
             fields = {name: _value(form, name) for name in ('code', 'name', 'semester', 'section', 'description') if name in form}
@@ -671,10 +673,19 @@ class InstructorWeb:
         if method == 'GET' and release_detail and release_detail[1] != 'new':
             return self._release_detail(course, release_detail[1], session)
         if method == 'GET' and route == 'assignments/new':
-            return '1. 문제 준비', '<section><p>학생이 풀 문제와 사용할 언어를 알려주세요.</p>' + self._form(base + '/drafts', session,
+            templates = '<section><h3>과제 기본 템플릿</h3><p>먼저 구조를 확인하거나 직접 수정하려면 학생용 starter ZIP을 내려받으세요. 정답과 비공개 채점 자료는 포함하지 않습니다.</p><div class="actions">' + ''.join(
+                f'<a class="button secondary" href="{base}/assignment-templates/{language}/{platform}.zip">{label}</a>'
+                for language, platform, label in (('c', 'linux', 'C · Linux/macOS/WSL2'), ('cpp', 'linux', 'C++ · Linux/macOS/WSL2'),
+                                                  ('c', 'windows', 'C · Visual Studio'), ('cpp', 'windows', 'C++ · Visual Studio'))) + '</div><p class="hint">초안을 만든 뒤 문제 설명을 반영한 템플릿을 다시 다운로드하거나 서버에 바로 저장할 수 있습니다.</p></section>'
+            return '1. 문제 준비', templates + '<section><p>학생이 풀 문제와 사용할 언어를 알려주세요.</p>' + self._form(base + '/drafts', session,
                 f'<input type="hidden" name="creation_key" value="{secrets.token_urlsafe(32)}">' +
                 _select('mode', '만드는 방법', [('template', 'Hello World 예제에서 만들기'), ('direct', '직접 만들기')], 'template') +
                 self._basic_draft_fields({}) + _button('학생용 파일 준비')) + '</section>'
+        template_match = re.fullmatch(r'assignment-templates/(c|cpp)/(linux|windows)\.zip', route)
+        if method == 'GET' and template_match:
+            language, platform = template_match.groups()
+            return self._template_download(self.assignments.default_starter_template(language, platform),
+                                           f'autograde-starter-{language}-{platform}.zip')
         if method == 'POST' and route == 'drafts':
             draft = self.assignments.create_draft(key, creation_key=_value(form, 'creation_key') or None, **self._draft_fields(form))
             return self._redirect(base + '/drafts/' + draft['draft_id'] + '/step/2')
@@ -704,17 +715,25 @@ class InstructorWeb:
             else:
                 self.assignments.extend_deadline(key, assignment_id, _utc(_value(form, 'due_at')), _value(form, 'reason'))
             return self._redirect(base + '/assignments')
-        draft_match = re.fullmatch(r'drafts/([a-zA-Z0-9_-]+)(?:/(step/[1-6]|uploads/(?:starter|solution|negative)|checks|publish))?', route)
+        draft_match = re.fullmatch(r'drafts/([a-zA-Z0-9_-]+)(?:/(step/[1-6]|uploads/(?:starter|solution|negative)|starter-template(?:\.zip)?|checks|publish))?', route)
         if not draft_match:
             raise PlatformNotFound()
         draft_id, action = draft_match.groups()
         draft = self.assignments.get_draft(key, draft_id)
+        if method == 'GET' and action == 'starter-template.zip':
+            filename = f'autograde-{draft["language"]}-{draft["platform"]}-starter.zip'
+            return self._template_download(self.assignments.draft_starter_template(key, draft_id), filename)
         if method == 'GET' and (action is None or action.startswith('step/')):
             step = int(action[-1]) if action else (6 if draft.get('published_assignment_id') else 1)
             return self._draft_page(course, draft, step, session)
         if method != 'POST':
             raise PlatformNotFound()
         revision = int(_value(form, 'revision'))
+        if action == 'starter-template':
+            if _value(form, 'template_confirm') != 'yes':
+                raise ValueError('기존 학생용 파일을 기본 템플릿으로 교체하는 데 동의해 주세요.')
+            self.assignments.save_starter_template(key, draft_id, revision)
+            return self._redirect(base + '/drafts/' + draft_id + '/step/2')
         if action and action.startswith('uploads/'):
             content = form.get('file')
             if not isinstance(content, bytes):
@@ -742,6 +761,14 @@ class InstructorWeb:
                 step = '1'
             return self._redirect(base + '/drafts/' + draft_id + '/step/' + step)
         raise PlatformNotFound()
+
+    @staticmethod
+    def _template_download(template, filename):
+        return PlatformFileResponse(200, template['path'], 'application/zip', {
+            'Content-Disposition': f'attachment; filename="{filename}"',
+            'ETag': f'"{template["sha256"]}"',
+            'X-Autograde-SHA256': template['sha256'],
+        })
 
     def _assignment_list(self, course, form):
         base = self._base(course)
@@ -847,6 +874,13 @@ class InstructorWeb:
                 body += self._form(path, session, revision_field + self._basic_draft_fields(draft) + '<input type="hidden" name="next_step" value="2">' + _button('저장 · 학생용 파일 준비'))
         elif step == 2:
             body += '<p>학생에게 내려줄 미완성 코드만 올려주세요. 정답은 다음 단계에 등록합니다.</p>'
+            body += f'<p><a class="button secondary" href="{path}/starter-template.zip">현재 설정의 기본 starter ZIP 다운로드</a></p>'
+            if draft['mode'] == 'direct' and not locked:
+                replacement = '현재 등록된 학생용 ZIP을 교체합니다.' if any(item['role'] == 'starter' for item in draft.get('uploads', [])) else '생성한 ZIP을 학생용 파일로 등록합니다.'
+                body += self._form(path + '/starter-template', session, revision_field +
+                    f'<p>{replacement} 문제 설명은 README.md에 저장됩니다.</p>' +
+                    _checkbox('template_confirm', '기본 템플릿에는 정답·비공개 입력이 없음을 확인했으며 학생용 파일로 저장합니다.') +
+                    _button('기본 템플릿을 서버에 저장'))
             body += self._upload_section(path, draft, 'starter', session, revision_field, locked)
             body += f'<a class="button" href="{path}/step/3">채점 자료 준비</a>'
         elif step == 3:

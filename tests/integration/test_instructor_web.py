@@ -251,6 +251,26 @@ def test_template_file_preview_precedes_server_execution(setup):
     assert not draft['latest_check']
 
 
+def test_assignment_template_actions_are_visible_and_save_direct_starter(setup):
+    browser, _, _, _, assignments = setup
+    create = browser.get(BASE + '/assignments/new')
+    for suffix in ('c/linux.zip', 'cpp/linux.zip', 'c/windows.zip', 'cpp/windows.zip'):
+        assert BASE + '/assignment-templates/' + suffix in create.body
+
+    draft = assignments.create_draft('come2201', mode='direct', language='c', description='직접 문제', negative_score=0)
+    path = BASE + '/drafts/' + draft['draft_id']
+    page = browser.get(path + '/step/2')
+    assert path + '/starter-template.zip' in page.body
+    assert '기본 템플릿을 서버에 저장' in page.body
+    rejected = browser.post(path + '/starter-template', revision='1')
+    assert rejected.status == 400
+    saved = browser.post(path + '/starter-template', revision='1', template_confirm='yes')
+    assert saved.status == 303
+    current = assignments.get_draft('come2201', draft['draft_id'])
+    assert current['revision'] == 2
+    assert next(item for item in current['uploads'] if item['role'] == 'starter')['files'] == ['README.md', 'main.c']
+
+
 def test_name_edit_explicit_global_warning_and_concurrency(setup):
     browser, _, _, students, _ = setup
     student = students.add_student('come2201', student_key='001', name='Before', password='123456')

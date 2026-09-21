@@ -29,6 +29,39 @@ def archive(files):
     return output.getvalue()
 
 
+def test_downloadable_starter_is_reproducible_and_can_be_saved(admin):
+    draft = admin.create_draft(
+        "come2201", mode="direct", language="cpp", platform="windows",
+        description="학생이 완성할 요구사항입니다.", negative_score=0,
+    )
+    first = admin.draft_starter_template("come2201", draft["draft_id"])
+    second = admin.draft_starter_template("come2201", draft["draft_id"])
+    assert first["sha256"] == second["sha256"]
+    assert first["path"].read_bytes() == second["path"].read_bytes()
+    assert first["path"].stat().st_nlink == 1
+    with zipfile.ZipFile(first["path"]) as generated:
+        assert set(generated.namelist()) == {"main.cpp", "README.md", "CMakeLists.txt"}
+        assert generated.read("README.md").decode() == "학생이 완성할 요구사항입니다.\n"
+        assert b"Hello, World!" not in generated.read("main.cpp")
+
+    saved = admin.save_starter_template("come2201", draft["draft_id"], draft["revision"])
+    assert saved["revision"] == 2
+    starter = next(item for item in saved["uploads"] if item["role"] == "starter")
+    assert not starter.get("virtual")
+    assert starter["sha256"] == first["sha256"]
+
+
+@pytest.mark.parametrize("language,platform,expected", [
+    ("c", "linux", {"main.c", "README.md"}),
+    ("cpp", "windows", {"main.cpp", "README.md", "CMakeLists.txt"}),
+])
+def test_default_starter_download_contains_only_student_files(admin, language, platform, expected):
+    template = admin.default_starter_template(language, platform)
+    with zipfile.ZipFile(template["path"]) as generated:
+        assert set(generated.namelist()) == expected
+        assert not {"solution.c", "solution.cpp", "tests.json", "grade.py"} & set(generated.namelist())
+
+
 @pytest.mark.parametrize("language", ["c", "cpp"])
 def test_template_real_validation_publish_and_revision(admin, language):
     draft = admin.create_draft("come2201", language=language)
