@@ -13,6 +13,8 @@ from .platform_auth import InvalidSignedValue, new_api_token, secret_digest, sig
 from .platform_service import PlatformAPIError, PlatformResponse, StudentPlatformService
 from .platform_state import PlatformNotFound, utc_iso
 from .web_theme import THEME_CSS
+from .student_browser import SCRIPT_TAG
+from .student_portal_view import STYLE, claim_body, deadline, urgency
 
 COURSES = ("come3105", "come2201")
 
@@ -102,7 +104,7 @@ class CoursePortal:
                 f"Max-Age={0 if clear else 600}; HttpOnly; SameSite=Lax{secure}")
 
     @staticmethod
-    def _page(title, body, *, status=200, cookie=None):
+    def _page(title, body, *, status=200, cookie=None, enhanced=False):
         headers = {"Content-Type": "text/html; charset=utf-8"}
         if cookie:
             headers["Set-Cookie"] = cookie
@@ -125,8 +127,8 @@ class CoursePortal:
             '.assignment-choice:has(input:checked){border-color:#2155ba;background:#eff6ff}'
             '.assignment-links{display:flex;gap:16px;flex-wrap:wrap;margin:20px 0}'
             '.error{color:#aa2434}small{color:#536173}code{font-size:1.2em;overflow-wrap:anywhere}'
-            f'{THEME_CSS}</style><main data-audience="student"><a href="/">Autograde · 학생 실습실</a>'
-            f'<h1>{html.escape(title)}</h1>{body}</main></html>'
+            f'{THEME_CSS}{STYLE}</style><main data-audience="student"><a href="/">Autograde · 학생 실습실</a>'
+            f'<h1>{html.escape(title)}</h1>{body}</main>{SCRIPT_TAG if enhanced else ""}</html>'
         )
         return PlatformResponse(status, document, headers)
 
@@ -134,7 +136,8 @@ class CoursePortal:
         csrf = new_api_token()
         signed = sign_browser_value(self.secret, "portal-entry", {"course": course, "csrf": csrf},
                                     lifetime_seconds=600)
-        body = (f'<p>{html.escape(self._course_label(course))}</p><p class="error">{html.escape(message)}</p>'
+        body = (f'<p>{html.escape(self._course_label(course))}</p>'
+                + (f'<p class="error" role="alert">{html.escape(message)}</p>' if message else '') +
                 f'<form method="post" action="/courses/{course}/login">'
                 f'<input type="hidden" name="csrf" value="{csrf}">'
                 '<label>학번<input name="student_key" maxlength="255" autocomplete="off" required></label>'
@@ -177,28 +180,33 @@ class CoursePortal:
             raise PlatformAPIError(403, "login_required", "다시 인증해 주세요.")
         return key, session
 
-    def _assignments(self, course, session):
+    def _assignments(self, course, session, *, message="", status=200):
         state = self.services[course].state
         now = utc_iso()
         assignments = state.list_operator_bundle_assignments(course_key=course, ready_only=True, active_only=True)
         available = [assignment for assignment in assignments
                      if (not assignment.opens_at or assignment.opens_at <= now)
                      and (not assignment.due_at or now < assignment.due_at)]
+        available.sort(key=lambda item: (not bool(item.due_at), item.due_at or '',
+                                         item.title.casefold(), item.assignment_id))
         body = f'<p>교과목: {html.escape(self._course_label(course))}</p>'
+        if message:
+            body += f'<p class="error" role="alert">{html.escape(message)}</p>'
         if available:
-            body += ('<p id="assignment-help">① 아래에서 실습 하나를 선택하세요.<br>'
-                     '② 선택한 실습의 수령 코드를 발급받으세요.<br>'
-                     '③ 코드를 VS Code 또는 Visual Studio 확장에 입력하면 수락이 완료됩니다.</p>'
-                     f'<form method="post" action="/courses/{course}/claims">'
+            body += (f'<p id="assignment-help">수령 가능한 실습 {len(available)}개 · 마감 임박순<br>'
+                     '실습 선택 → 코드 발급 → 실습 PC의 확장에 입력</p>'
+                     '<p class="progress-hint">마감은 모두 한국 시간입니다. 확장에는 수령 코드로 수락한 실습만 표시됩니다.</p>'
+                     f'<form data-assignment-picker method="post" action="/courses/{course}/claims">'
                      f'<input type="hidden" name="csrf" value="{session.csrf}">'
                      '<fieldset aria-describedby="assignment-help"><legend>수락할 실습 선택 (필수)</legend>')
             for assignment in available:
                 body += ('<label class="assignment-choice">'
                          f'<input type="radio" name="assignment_id" value="{html.escape(assignment.assignment_id, quote=True)}" required>'
                          f'<span><strong>{html.escape(assignment.title)}</strong>'
-                         f'<small>마감: {html.escape(assignment.due_at or "미지정")}</small></span></label>')
-            body += ('</fieldset><button type="submit">선택한 실습 수령 코드 발급</button></form>'
-                     '<p><small>확장에는 현재 수령 코드로 수락한 실습만 표시됩니다.</small></p>')
+                         f'<small>마감: {html.escape(deadline(assignment.due_at))}</small>'
+                         f'{urgency(assignment.due_at, now)}</span></label>')
+            body += ('</fieldset><div class="claim-action"><p data-selected-assignment aria-live="polite">실습을 하나 선택하세요</p>'
+                     '<button type="submit">선택한 실습 수령 코드 발급</button></div></form>')
         else:
             body += ('<section role="status"><h2>지금 수령할 수 있는 과제가 없습니다.</h2>'
                      '<p>학생 인증은 완료되었습니다. 비밀번호를 다시 입력할 필요는 없습니다.</p>'
@@ -208,8 +216,8 @@ class CoursePortal:
                  f'<a href="/courses/{course}">과제 목록 새로고침</a>'
                  '<a href="/">다른 교과목 선택</a></nav>')
         body += (f'<form method="post" action="/courses/{course}/logout">'
-                 f'<input type="hidden" name="csrf" value="{session.csrf}"><button>로그아웃</button></form>')
-        return self._page("과제 선택", body)
+                 f'<input type="hidden" name="csrf" value="{session.csrf}"><button class="secondary">로그아웃</button></form>')
+        return self._page("과제 선택", body, status=status, enhanced=bool(available))
 
     def portal_request(self, method, path, form, cookies, origin=None, authorization=None):
         if self.instructor is not None:
@@ -241,7 +249,7 @@ class CoursePortal:
         if self.courses is not None and action != "instructor" and not self.courses.is_active(course):
             return self._page("수업 이용 불가", "<p>현재 운영 중인 수업이 아닙니다. 교수자에게 문의하세요.</p>", status=403)
         service = self.services[course]
-        if method == "GET" and action is None:
+        if method == "GET" and action in {None, "login", "assignments"}:
             with self.lock:
                 try:
                     _, session = self._session(course, cookies)
@@ -306,12 +314,25 @@ class CoursePortal:
                     raise ValueError("assignment not available")
                 grant, code = service.create_authenticated_assignment_claim(session.credential, form["assignment_id"])
                 self.sessions.pop(key)
-                body = (f'<p>{course} · {html.escape(assignment.title)}</p>'
-                        f'<p><code>{html.escape(code)}</code></p>'
-                        '<p>10분 동안 한 번 사용할 수 있습니다. 코드를 복사해 VS Code 또는 Visual Studio의 Autograde 확장에 입력하세요.</p>'
-                        f'<p>확장 API 서버 주소 (VS Code / Visual Studio)<br><code>{html.escape(self.api_url)}</code></p>'
-                        f'<p><a href="/courses/{course}">새 코드 받기</a></p>')
-                return self._page("과제 수령 코드", body, cookie=self._cookie(course, "", clear=True))
+                body = claim_body(self._course_label(course), assignment, code, self.api_url,
+                                  grant.expires_at, course)
+                return self._page("과제 수령 코드", body, cookie=self._cookie(course, "", clear=True), enhanced=True)
         except (ValueError, InvalidSignedValue, PlatformAPIError) as exc:
             status = exc.status if isinstance(exc, PlatformAPIError) else 403
-            return self._entry(course, "학번과 전용 비밀번호를 확인해 주세요. 만료된 경우 다시 인증해 주세요.", status)
+            if isinstance(exc, PlatformAPIError) and exc.code in {'assignment_claim_denied', 'assignment_claim_unavailable'}:
+                with self.lock:
+                    try:
+                        _, session = self._session(course, cookies)
+                    except PlatformAPIError:
+                        pass
+                    else:
+                        message = ('선택한 실습을 지금 수령할 수 없습니다. 공개 여부와 마감 시간을 확인하고 목록에서 다시 선택하세요.'
+                                   if exc.code == 'assignment_claim_denied' else '코드를 발급하지 못했습니다. 잠시 후 다시 시도하세요.')
+                        return self._assignments(course, session, message=message, status=status)
+            if isinstance(exc, PlatformAPIError) and exc.code == 'login_required':
+                message = '인증이 만료되었거나 수업 정보가 변경되었습니다. 학번과 전용 비밀번호로 다시 인증하세요.'
+            elif status == 503:
+                message = '서버가 잠시 바쁩니다. 잠시 후 다시 시도해 주세요.'
+            else:
+                message = '학번과 전용 비밀번호를 확인해 주세요. 만료된 경우 다시 인증해 주세요.'
+            return self._entry(course, message, status)

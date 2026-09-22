@@ -781,10 +781,11 @@ export class AutogradeClient {
     throw new Error("unreachable bundle submission retry state");
   }
 
-  public async getSubmission(submissionId: string): Promise<SubmissionSummary> {
+  public async getSubmission(submissionId: string, signal?: AbortSignal): Promise<SubmissionSummary> {
     const payload = await this.authorizedRequest<unknown>(
       `/v1/submissions/${encodeURIComponent(submissionId)}`,
       { method: "GET" },
+      { signal },
     );
     const submission = normalizeSubmission(payload);
     if (!submission) {
@@ -793,10 +794,11 @@ export class AutogradeClient {
     return submission;
   }
 
-  public async getResult(submissionId: string): Promise<GradeResult> {
+  public async getResult(submissionId: string, signal?: AbortSignal): Promise<GradeResult> {
     const payload = await this.authorizedRequest<unknown>(
       `/v1/submissions/${encodeURIComponent(submissionId)}/result`,
       { method: "GET" },
+      { signal },
     );
     const result = normalizeGradeResult(payload);
     if (!result) {

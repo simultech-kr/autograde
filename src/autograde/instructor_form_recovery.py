@@ -18,6 +18,9 @@ class FormRecovery(HTMLParser):
         attributes = dict(attrs)
         if tag == 'form':
             self.active = attributes.get('action') == self.action and attributes.get('method') == 'post'
+            if self.active and attributes.get('data-form-kind'):
+                submitted_kind = 'tests' if self.values.get('tests_present') == 'yes' else 'problem'
+                self.active = attributes['data-form-kind'] == submitted_kind
             self.found |= self.active
             if self.active:
                 attributes['data-recovered'] = ''
@@ -36,7 +39,7 @@ class FormRecovery(HTMLParser):
                     attributes['checked'] = None
             elif safe and kind not in {'file', 'password', 'hidden', 'submit'}:
                 attributes['value'] = value
-            elif safe and kind == 'hidden' and name in {'revision', 'creation_key'}:
+            elif safe and kind == 'hidden' and name in {'revision', 'delete_revision', 'creation_key'}:
                 # Never silently upgrade a stale edit to the latest revision.
                 attributes['value'] = value
         if self.active and tag == 'select':

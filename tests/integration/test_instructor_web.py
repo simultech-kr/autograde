@@ -184,6 +184,11 @@ def test_unified_template_validation_publish_real_grader(setup):
     assert hidden.status == 303
     assert '현재 숨김 상태입니다' in browser.get(published.headers['Location']).body
     assert '<span class="status-badge">숨김</span>' in browser.get(BASE + '/assignments').body
+    archived = browser.post(BASE + '/assignments/' + draft['published_assignment_id'] + '/archive', confirm='yes')
+    assert archived.status == 303
+    release = state.get_bundle_assignment(draft['published_assignment_id'])
+    assert not release.active and not release.ready
+    assert '<span class="status-badge">보관됨</span>' in browser.get(BASE + '/assignments').body
 
 
 def test_direct_upload_roles_and_case_form_then_stale_revision(setup):
@@ -200,6 +205,37 @@ def test_direct_upload_roles_and_case_form_then_stale_revision(setup):
     assert saved.status == 303
     assert assignments.get_draft('come2201', draft['draft_id'])['tests'][0]['output'] == 'hello\n'
     assert browser.post(path, revision='2', title='stale').status == 409
+
+
+def test_assignment_draft_crud_delete_from_web(setup):
+    browser, _, _, _, assignments = setup
+    created = browser.post(BASE + '/drafts', mode='template', title='CRUD', description='before', language='c',
+        platform='linux', opens_at='', due_at='', no_deadline='yes', result_policy='immediate')
+    path = created.headers['Location']
+    draft = assignments.get_draft('come2201', path.rsplit('/', 1)[1])
+    updated = browser.post(path, revision=str(draft['revision']), title='CRUD updated', description='after',
+        language='c', mode='template', platform='linux', opens_at='', due_at='', no_deadline='yes', result_policy='immediate')
+    assert updated.status == 303
+    draft = assignments.get_draft('come2201', draft['draft_id'])
+    page = browser.get(path)
+    assert 'CRUD updated' in page.body and '미공개 초안 삭제' in page.body
+    assert browser.post(path + '/delete', delete_revision=str(draft['revision'])).status == 400
+    deleted = browser.post(path + '/delete', delete_revision=str(draft['revision']), confirm='yes')
+    assert deleted.status == 303 and deleted.headers['Location'] == BASE + '/assignments'
+    assert browser.get(path).status == 404
+    assert 'CRUD updated' not in browser.get(BASE + '/assignments').body
+
+
+def test_stale_draft_delete_does_not_upgrade_revision(setup):
+    browser, _, _, _, assignments = setup
+    draft = assignments.create_draft('come2201', title='Keep me')
+    path = BASE + '/drafts/' + draft['draft_id']
+    assignments.update_draft('come2201', draft['draft_id'], draft['revision'], title='Changed elsewhere')
+    response = browser.post(path + '/delete', delete_revision='1', confirm='yes')
+    assert response.status == 409
+    form = next(item for item in Forms(response.body).forms if item['action'] == path + '/delete')
+    assert form['fields']['delete_revision'] == '1'
+    assert assignments.get_draft('come2201', draft['draft_id'])['title'] == 'Changed elsewhere'
 
 
 def test_course_scope_and_unknown_routes(setup):

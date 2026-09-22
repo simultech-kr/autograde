@@ -95,6 +95,45 @@ def test_grading_template_rejects_extra_file_without_partial_update(admin):
     assert current["revision"] == 1 and not current["uploads"] and not current["tests"]
 
 
+def test_draft_crud_soft_delete_and_revision_fence(admin):
+    created = admin.create_draft("come2201", title="CRUD draft")
+    assert admin.get_draft("come2201", created["draft_id"])["title"] == "CRUD draft"
+    updated = admin.update_draft("come2201", created["draft_id"], created["revision"], title="Updated draft")
+    assert updated["revision"] == 2 and updated["title"] == "Updated draft"
+    with pytest.raises(PlatformConflict):
+        admin.delete_draft("come2201", created["draft_id"], 1)
+    admin.delete_draft("come2201", created["draft_id"], updated["revision"])
+    with pytest.raises(PlatformNotFound):
+        admin.get_draft("come2201", created["draft_id"])
+    assert not admin.list_drafts("come2201")
+    with admin.state._connection() as connection:
+        row = connection.execute(
+            "SELECT deleted_at FROM instructor_assignment_drafts WHERE draft_id=?", (created["draft_id"],)
+        ).fetchone()
+        assert row["deleted_at"]
+        assert connection.execute(
+            "SELECT 1 FROM instructor_assignment_events WHERE draft_id=? AND action='deleted'", (created["draft_id"],)
+        ).fetchone()
+
+
+def test_draft_delete_blocks_active_validation(admin):
+    draft = admin.create_draft("come2201")
+    admin.queue_check("come2201", draft["draft_id"], draft["revision"], True)
+    with pytest.raises(PlatformConflict, match="검증"):
+        admin.delete_draft("come2201", draft["draft_id"], draft["revision"])
+
+
+def test_published_assignment_archive_preserves_release(admin):
+    draft = admin.create_draft("come2201")
+    admin.queue_check("come2201", draft["draft_id"], draft["revision"], True)
+    assert admin.run_one()
+    release = admin.publish("come2201", draft["draft_id"], draft["revision"])
+    archived = admin.archive_release("come2201", release.assignment_id)
+    assert not archived.active and not archived.ready
+    assert admin.get_draft("come2201", draft["draft_id"])["visibility"] == "inactive"
+    assert admin.archive_release("come2201", release.assignment_id).assignment_id == release.assignment_id
+
+
 @pytest.mark.parametrize("language", ["c", "cpp"])
 def test_template_real_validation_publish_and_revision(admin, language):
     draft = admin.create_draft("come2201", language=language)

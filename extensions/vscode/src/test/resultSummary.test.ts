@@ -18,8 +18,8 @@ test("new bundle receipt replaces result panel and latest lookup refreshes serve
   const source = readFileSync(resolve(__dirname, "../../src/extension.ts"), "utf8");
   const submit = source.split("async function submitCurrentBundle")[1]?.split("async function viewSubmissionHistory")[0];
   assert.ok(submit);
-  assert.match(submit, /showResultPanel\(assignment/);
-  assert.match(submit, /submission.id, "이번 제출"/);
+  assert.match(submit, /const resultScope = resultUi.monitor.begin\(\);[\s\S]*clearResultPanel\(\)/);
+  assert.match(submit, /watchSubmissionResult\(resultUi, resultScope, studentState, client, assignment, submission, "이번 제출"\)/);
   const latest = source.split("async function viewLatestResult")[1];
   assert.ok(latest);
   assert.match(latest, /await client.getAssignments\(\)/);
@@ -31,10 +31,19 @@ test("result panel is read-only and clears at authentication and address boundar
   assert.match(panel, /enableScripts: false/);
   assert.match(panel, /localResourceRoots: \[\]/);
   assert.match(extension, /\{ dispose: clearResultPanel \}/);
-  assert.match(extension, /if \(!authenticated\) \{ clearResultPanel\(\); clearDownloadDiagnostic\(\); \}/);
+  assert.match(extension, /if \(!authenticated\) \{ resultMonitor.cancel\(\); clearResultPanel\(\); clearDownloadDiagnostic\(\); \}/);
   for (const start of ["new AuthenticationController", "new AssignmentClaimController", "const clearSessionUiForAddressChange"]) {
     assert.match(extension.slice(extension.indexOf(start), extension.indexOf(start) + 280), /clearResultPanel\(\)/);
   }
+});
+test("result refresh and pause controls use only fixed allowlisted commands and escaped notices", () => {
+  const html = resultHtml({id: "a", title: "Lab"}, {...full, state: "queued"}, "new", "이번 제출",
+    {canRefresh: true, canPause: true, notice: '<a href="command:evil">bad</a>'});
+  assert.deepEqual([...html.matchAll(/href="command:([^"]+)"/g)].map(match => match[1]),
+    ["autograde.refreshDisplayedResult", "autograde.pauseDisplayedResult"]);
+  assert.match(html, /&lt;a href=&quot;command:evil&quot;&gt;/);
+  assert.match(html, /role="status" aria-live="polite"/);
+  assert.doesNotMatch(resultHtml({id: "a", title: "Lab"}, full, "old", "과거 제출 기록"), /href="command:/);
 });
 test("full score is scoped to automatic grading, not final course completion", () => {
   const result = summarizeResult(full);

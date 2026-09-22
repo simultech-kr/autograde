@@ -217,7 +217,7 @@ def test_v10_migration_preserves_identifiers_credentials_and_bootstrap(tmp_path,
         before = {table: [tuple(r) for r in db.execute(f'SELECT * FROM {table}')] for table in
                   ('platform_students', 'platform_enrollments', 'platform_student_passwords', 'platform_roster_bootstrap')}
     assert state.schema_version() == 10
-    assert state.migrate() == 12
+    assert state.migrate() == 13
     with state._connection() as db:
         after = {table: [tuple(r) for r in db.execute(f'SELECT * FROM {table}')] for table in before}
         assert list(db.execute('PRAGMA foreign_key_check')) == []
@@ -265,7 +265,7 @@ def test_v11_failed_migration_rolls_back_all_new_tables(tmp_path, monkeypatch):
         assert db.execute("SELECT 1 FROM sqlite_master WHERE name='admin_courses'").fetchone() is None
         assert db.execute("SELECT 1 FROM sqlite_master WHERE name='platform_roster_bootstrap'").fetchone()
         assert db.execute("SELECT 1 FROM sqlite_master WHERE name='platform_roster_bootstrap_v9'").fetchone() is None
-    assert state.migrate() == 12
+    assert state.migrate() == 13
 
 
 def free_port():

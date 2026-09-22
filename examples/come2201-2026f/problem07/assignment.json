@@ -1,0 +1,48 @@
+{
+  "title": "Week11 Problem07 — Bridge · Flyweight",
+  "description": "캠퍼스 지도: 마커와 렌더링을 Bridge로 분리하고 공통 색상 스타일을 Flyweight로 공유합니다. 기능 자동채점 100점, 실제 공유 및 패턴 구조는 별도 확인합니다.",
+  "language": "cpp",
+  "mode": "direct",
+  "platform": "windows",
+  "opens_at": null,
+  "due_at": "2026-11-11T13:50:00+09:00",
+  "result_policy": "immediate",
+  "tests": [
+    {
+      "title": "예제: 스타일 공유와 렌더러 교체",
+      "input": "8\nADD gate blue 1 2\nADD lab blue 5 6\nCOUNT\nDRAW gate TEXT\nDRAW lab COMPACT\nMOVE gate -2 3\nDRAW gate COMPACT\nCOUNT\n",
+      "output": "OK\nOK\nSTYLES 1\nTEXT gate blue 1,2\nCOMPACT[lab;blue;5;6]\nOK\nCOMPACT[gate;blue;-2;3]\nSTYLES 1\n",
+      "public": true,
+      "weight": 20
+    },
+    {
+      "title": "빈 캐시와 없는 마커",
+      "input": "5\nCOUNT\nDRAW absent TEXT\nMOVE absent 0 0\nDRAW absent UNKNOWN\nCOUNT\n",
+      "output": "STYLES 0\nERROR missing\nERROR missing\nERROR missing\nSTYLES 0\n",
+      "weight": 20,
+      "public": false
+    },
+    {
+      "title": "좌표 경계와 실패 원자성",
+      "input": "9\nADD a red -1000 1000\nADD b green 1001 0\nCOUNT\nMOVE a 0 -1001\nDRAW a TEXT\nADD b green 0 -1000\nCOUNT\nMOVE b 1000 1000\nDRAW b COMPACT\n",
+      "output": "OK\nERROR position\nSTYLES 1\nERROR position\nTEXT a red -1000,1000\nOK\nSTYLES 2\nOK\nCOMPACT[b;green;1000;1000]\n",
+      "weight": 20,
+      "public": false
+    },
+    {
+      "title": "중복 생성은 캐시를 늘리지 않음",
+      "input": "7\nADD a red 0 0\nADD a blue 2000 0\nCOUNT\nDRAW a UNKNOWN\nDRAW a TEXT\nDRAW a COMPACT\nCOUNT\n",
+      "output": "OK\nERROR duplicate\nSTYLES 1\nERROR renderer\nTEXT a red 0,0\nCOMPACT[a;red;0;0]\nSTYLES 1\n",
+      "weight": 20,
+      "public": false
+    },
+    {
+      "title": "공유 스타일과 개별 위치의 독립성",
+      "input": "10\nADD a red 1 1\nADD b red 2 2\nADD c blue 3 3\nADD d blue 4 4\nMOVE b 8 9\nDRAW a TEXT\nDRAW b TEXT\nDRAW c COMPACT\nDRAW d TEXT\nCOUNT\n",
+      "output": "OK\nOK\nOK\nOK\nOK\nTEXT a red 1,1\nTEXT b red 8,9\nCOMPACT[c;blue;3;3]\nTEXT d blue 4,4\nSTYLES 2\n",
+      "weight": 20,
+      "public": false
+    }
+  ],
+  "negative_score": 0
+}

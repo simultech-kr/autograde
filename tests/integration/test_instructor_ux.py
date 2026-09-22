@@ -35,8 +35,76 @@ class Fields(HTMLParser):
             self.inputs[attrs.get('name')] = attrs
 
 
+class Elements(HTMLParser):
+    def __init__(self, html):
+        super().__init__()
+        self.ids, self.labels, self.links = [], [], []
+        self.feed(html)
+
+    def handle_starttag(self, tag, attrs):
+        attrs = dict(attrs)
+        if 'id' in attrs:
+            self.ids.append(attrs['id'])
+        if tag == 'label' and 'for' in attrs:
+            self.labels.append(attrs['for'])
+        if tag == 'a' and attrs.get('href', '').startswith('#'):
+            self.links.append(attrs['href'][1:])
+
+
 def filtered(browser, **values):
     return browser.web.request('GET', BASE+'/assignments', values, browser.cookies, authorization=AUTH)
+
+
+def test_integrated_draft_has_unique_labels_navigation_and_kst_summary(setup):
+    browser, _, _, _, assignments = setup
+    draft = assignments.create_draft('come2201', mode='direct', title='Week04 Problem01',
+        due_at='2026-09-23T04:50:00Z', tests=[dict(title='example', input='', output='ok', weight=100, public=True)])
+    page = browser.get(BASE+'/drafts/'+draft['draft_id']).body
+    elements = Elements(page)
+    assert len(elements.ids) == len(set(elements.ids))
+    assert set(elements.labels) <= set(elements.ids)
+    assert set(elements.links) <= set(elements.ids)
+    assert '2026-09-23 13:50 KST' in page and '100점 만점' in page
+    assert '미등록: 학생 코드' in page and '미등록: 정답, 오답' in page
+    assert '업로드한 정답·오답 코드의 백업이 아닙니다' in page
+    assert '설계 패턴의 역할 분리와 구조는 제출 코드를 열어 별도로 평가' in page
+
+
+def test_failed_test_edit_recovers_only_test_form_without_resetting_schedule(setup):
+    browser, _, _, _, assignments = setup
+    draft = assignments.create_draft('come2201', mode='direct')
+    path = BASE+'/drafts/'+draft['draft_id']
+    response = browser.post(path, revision='1', tests_present='yes', test_0_title='attempt', test_0_weight='bad')
+    assert response.status == 400
+    recovered = [form for form in Forms(response.body).forms if 'data-recovered' in form]
+    assert len(recovered) == 1 and recovered[0]['data-form-kind'] == 'tests'
+    assert 'checked' in Fields(response.body).inputs['no_deadline']
+
+
+def test_archived_draft_and_new_page_offer_only_read_actions(setup):
+    browser, _, courses, _, assignments = setup
+    draft = assignments.create_draft('come2201', mode='direct')
+    courses.set_status('come2201', 'archived')
+    page = browser.get(BASE+'/drafts/'+draft['draft_id']).body
+    assert not [form for form in Forms(page).forms if form.get('method') == 'post']
+    assert '예제 모드는 정답·오답·테스트와 점수가 고정' not in page
+    assert '보관된 수업입니다' in page
+    new_page = browser.get(BASE+'/assignments/new').body
+    assert not [form for form in Forms(new_page).forms if form.get('method') == 'post']
+
+
+def test_previous_check_link_uses_latest_check_for_edit_lock(setup):
+    browser, _, _, _, assignments = setup
+    draft = assignments.create_draft('come2201', language='c')
+    old = assignments.queue_check('come2201', draft['draft_id'], 1, True)
+    assignments.run_one()
+    assignments.update_draft('come2201', draft['draft_id'], 1, title='New revision')
+    assignments.queue_check('come2201', draft['draft_id'], 2, True)
+    page = browser.get(BASE+'/checks/'+old['job_id']).body
+    assert '이전 검증 작업을 보고 있습니다' in page
+    assert '현재 자료를 다시 검증해야 합니다' in page
+    assert '문제·일정 저장</button>' not in page
+    assert '학생에게 과제 공개</button>' not in page
 
 
 def test_unified_catalog_scope_search_pages_and_private_fields(setup, tmp_path):
@@ -103,9 +171,10 @@ def test_stale_edit_recovery_never_upgrades_revision(setup):
     response = browser.post(path, revision='1', title='Unsaved tab')
     assert response.status == 409
     inputs = Fields(response.body).inputs
-    assert inputs['revision']['value']=='1' and inputs['title']['value']=='Unsaved tab'
+    recovered = next(form for form in Forms(response.body).forms if 'data-recovered' in form)
+    assert recovered['fields']['revision']=='1' and inputs['title']['value']=='Unsaved tab'
     assert assignments.get_draft('come2201',draft['draft_id'])['title']=='Other tab'
-    assert browser.post(path, revision=inputs['revision']['value'], title=inputs['title']['value']).status==409
+    assert browser.post(path, revision=recovered['fields']['revision'], title=inputs['title']['value']).status==409
 
 
 def test_testcase_recovery_and_student_password_not_reflected(setup):

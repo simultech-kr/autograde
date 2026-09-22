@@ -1,0 +1,62 @@
+{
+  "title": "Week09 · Problem05 — Chain of Responsibility",
+  "description": "입력 순서대로 조립한 담당자 체인에 지원 요청을 전달하고 최초 처리 담당자를 결정하는 서비스입니다.",
+  "language": "cpp",
+  "mode": "direct",
+  "platform": "windows",
+  "opens_at": null,
+  "due_at": "2026-10-28T13:50:00+09:00",
+  "result_policy": "immediate",
+  "tests": [
+    {
+      "title": "긴급 요청 우선 체인",
+      "input": "4\nESCALATE AUTH NETWORK BILLING\n5\nr1 LOGIN 1\nr2 NETWORK 3\nr3 BILLING 4\nr4 OTHER 5\nr5 OTHER 2\n",
+      "output": "r1: AUTH_DESK\nr2: NETWORK_DESK\nr3: SENIOR\nr4: SENIOR\nr5: UNHANDLED\n",
+      "weight": 20,
+      "public": true
+    },
+    {
+      "title": "체인 순서에 따른 최초 처리",
+      "input": "4\nAUTH NETWORK BILLING ESCALATE\n4\nr1 LOGIN 5\nr2 NETWORK 4\nr3 BILLING 5\nr4 OTHER 4\n",
+      "output": "r1: AUTH_DESK\nr2: NETWORK_DESK\nr3: BILLING_DESK\nr4: SENIOR\n",
+      "weight": 20,
+      "public": false
+    },
+    {
+      "title": "생략된 담당자와 경계 우선순위",
+      "input": "2\nESCALATE NETWORK\n4\na LOGIN 3\nb LOGIN 4\nc NETWORK 1\nd BILLING 3\n",
+      "output": "a: UNHANDLED\nb: SENIOR\nc: NETWORK_DESK\nd: UNHANDLED\n",
+      "weight": 15,
+      "public": false
+    },
+    {
+      "title": "빈 체인",
+      "input": "0\n3\na LOGIN 1\nb OTHER 5\nc BILLING 2\n",
+      "output": "a: UNHANDLED\nb: UNHANDLED\nc: UNHANDLED\n",
+      "weight": 15,
+      "public": false
+    },
+    {
+      "title": "요청 오류와 처리 계속",
+      "input": "1\nAUTH\n5\na LOGIN 0\nb OTHER 6\nc UNKNOWN 3\nd UNKNOWN 0\ne LOGIN 2\n",
+      "output": "a: ERROR severity\nb: ERROR severity\nc: ERROR category\nd: ERROR category\ne: AUTH_DESK\n",
+      "weight": 10,
+      "public": false
+    },
+    {
+      "title": "중복 체인 구성 차단",
+      "input": "2\nAUTH AUTH\n1\nr LOGIN 1\n",
+      "output": "ERROR config\n",
+      "weight": 10,
+      "public": false
+    },
+    {
+      "title": "알 수 없는 담당자 차단",
+      "input": "1\nUNKNOWN\n1\nr OTHER 5\n",
+      "output": "ERROR config\n",
+      "weight": 10,
+      "public": false
+    }
+  ],
+  "negative_score": 0
+}

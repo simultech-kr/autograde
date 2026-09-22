@@ -58,7 +58,7 @@ def test_guard_only_edit_forms_and_no_js_fallback(setup):
     draft = assignments.create_draft('come2201', mode='direct', negative_score=0, tests=[dict(title='one', input='', output='ok', weight=2, public=False)])
     path = BASE+'/drafts/'+draft['draft_id']
     forms = Forms(browser.get(path).body).forms
-    assert len([form for form in forms if 'data-dirty-guard' in form]) == 8
+    assert len([form for form in forms if 'data-dirty-guard' in form]) == 7
     page = browser.get(path).body
     assert page.count('<details data-case ') == 50
     assert 'name="test_49_weight"' in page

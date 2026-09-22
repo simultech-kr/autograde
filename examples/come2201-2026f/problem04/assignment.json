@@ -1,0 +1,55 @@
+{
+  "title": "Week07 · Problem04 — Iterator & Mediator",
+  "description": "입장·퇴장하는 팀원에게 순서대로 메시지를 전달하는 채팅방을 구현합니다. 참여자 간 직접 참조 없이 Mediator와 Iterator를 사용합니다.",
+  "language": "cpp",
+  "mode": "direct",
+  "platform": "windows",
+  "opens_at": null,
+  "due_at": "2026-10-14T13:50:00+09:00",
+  "result_policy": "immediate",
+  "tests": [
+    {
+      "title": "기본 메시지와 목록",
+      "input": "4\nJOIN ana\nJOIN bob\nSEND ana hello\nLIST\n",
+      "output": "JOINED ana\nJOINED bob\nbob<-ana: hello\nMEMBERS ana,bob\n",
+      "weight": 20,
+      "public": true
+    },
+    {
+      "title": "입장 순서와 재입장",
+      "input": "8\nJOIN c\nJOIN a\nJOIN b\nSEND a hi\nLEAVE c\nJOIN c\nSEND b done\nLIST\n",
+      "output": "JOINED c\nJOINED a\nJOINED b\nc<-a: hi\nb<-a: hi\nLEFT c\nJOINED c\na<-b: done\nc<-b: done\nMEMBERS a,b,c\n",
+      "weight": 20,
+      "public": false
+    },
+    {
+      "title": "중복과 없는 참여자",
+      "input": "5\nJOIN a\nJOIN a\nLEAVE x\nSEND x hello\nLIST\n",
+      "output": "JOINED a\nERROR duplicate\nERROR missing\nERROR missing\nMEMBERS a\n",
+      "weight": 15,
+      "public": false
+    },
+    {
+      "title": "빈 방과 혼자 있는 방",
+      "input": "6\nLIST\nSEND ghost msg\nJOIN lone\nSEND lone hi\nLEAVE lone\nLIST\n",
+      "output": "MEMBERS -\nERROR missing\nJOINED lone\nNO_RECEIVERS\nLEFT lone\nMEMBERS -\n",
+      "weight": 15,
+      "public": false
+    },
+    {
+      "title": "발신자 제외와 탈퇴 반영",
+      "input": "6\nJOIN a\nJOIN b\nSEND b one\nSEND a two\nLEAVE a\nSEND b three\n",
+      "output": "JOINED a\nJOINED b\na<-b: one\nb<-a: two\nLEFT a\nNO_RECEIVERS\n",
+      "weight": 15,
+      "public": false
+    },
+    {
+      "title": "재사용한 이름과 연속 목록",
+      "input": "8\nJOIN z\nJOIN y\nLEAVE z\nJOIN z\nLIST\nSEND z v_2\nLEAVE y\nLIST\n",
+      "output": "JOINED z\nJOINED y\nLEFT z\nJOINED z\nMEMBERS y,z\ny<-z: v_2\nLEFT y\nMEMBERS z\n",
+      "weight": 15,
+      "public": false
+    }
+  ],
+  "negative_score": 0
+}

@@ -17,6 +17,7 @@
 
 - [교수자 서버 UI/UX 개선 계획](architecture/instructor-ui-ux-improvement-plan.md): 단일 운영 홈·교과목/분반 문맥, 통합 과제 목록, 검증/공개/마감 안내, 학생별 결과 검토, 단계별 구현·인수 기준과 1차 적용 연결.
 
+- [학생 화면 사용성 개선](operations/student-ux-update.md): 마감 임박순·한국 시간·모바일 코드 발급, 복사·만료 안내, 미저장 코드 확인·현재 접수 결과 자동 확인과 적용 절차.
 - [학생별 제출 이력·점수 변화·코드 비교](operations/submission-timeline.md): 0.5.4 재제출·통신 재시도 구분, 현재 점수와 이전 최고점, 관리자 이력·비교 화면과 배포 절차.
 
 - [관리자 결과 화면 반응형 지원](operations/instructor-responsive-results.md): 표·카드 자동 전환, 분반 현황·제출 코드, 브라우저 검증과 적용 방법.
@@ -48,6 +49,8 @@
 
 - [교수자 웹 과제 등록 MVP 계획](architecture/instructor-assignment-web-mvp.md): 예제/직접 과제 등록·검증·공개, 업로드 보안과 운영 인수 기준. 로컬 구현·시험과 실제 HTTPS 운영 승인은 구분.
 
+- [COME2201 2026년 2학기 실습 10개](../examples/come2201-2026f/README.md): 주차별 C++ 설계 패턴 문제, 학생용 ZIP·교수자 채점 ZIP, 일괄 등록·검증·공개.
+- [COME2201 실습 검증 기록](testing/come2201-2026f.md): 10개 과제의 실제 채점·수령·재제출 시험, 교수자 UI 개선과 원격 확인 상태.
 - [옵저버·데코레이터 실습 문제](../examples/pattern-workshops/README.md): C++17 문제 → 학생 코드 작성 → 실행 검사 → 프롬프트 검토.
 
 - [학생·교수자 화면과 수락 과제](operations/student-instructor-views.md): 학생 웹/교수자 웹 분리, VS Code 0.4.1의 수락 전용 목록과 서버 권한 검사.

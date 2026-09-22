@@ -6,6 +6,15 @@ namespace Autograde.Core
 {
     public static class AssignmentSelection
     {
+        public static string LatestSubmissionId(JObject assignment)
+        {
+            if (assignment == null) throw new InvalidOperationException("과제를 선택하세요.");
+            var latest = assignment["latest_submission"];
+            // A missing/null latest submission is a normal state for a new assignment.
+            if (latest == null || latest.Type == JTokenType.Null) return null;
+            return ServiceClient.Required(latest, "submission_id");
+        }
+
         public static JObject Select(JArray items, string requestedId)
         {
             var assignments = items.OfType<JObject>().Where(a => (string)a["delivery_mode"] == "bundle").ToArray();

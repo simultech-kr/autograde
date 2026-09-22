@@ -6,7 +6,7 @@ using Newtonsoft.Json.Linq;
 
 namespace Autograde.Core
 {
-    public enum GradingWatchEnd { Finished, Expired, Unavailable }
+    public enum GradingWatchEnd { Finished, Expired, Unavailable, SessionExpired }
 
     // Reads results only. A failed read never reverses acceptance or resubmits source.
     public static class GradingPoller
@@ -33,7 +33,8 @@ namespace Autograde.Core
         public static async Task<GradingWatchEnd> WatchAsync(
             Func<CancellationToken, Task<JObject>> fetch, Action<JObject> update,
             Action<string> notice, DateTimeOffset deadline, CancellationToken cancel,
-            Func<TimeSpan, CancellationToken, Task> delay = null, Func<DateTimeOffset> now = null)
+            Func<TimeSpan, CancellationToken, Task> delay = null, Func<DateTimeOffset> now = null,
+            Func<bool> hasSession = null)
         {
             delay = delay ?? Task.Delay;
             now = now ?? (() => DateTimeOffset.UtcNow);
@@ -54,6 +55,12 @@ namespace Autograde.Core
                         if (now() >= deadline) break;
                         JObject result;
                         try { result = await fetch(window.Token); }
+                        // A failed token refresh can clear the session even when the
+                        // visible exception is a connection or response-format error.
+                        catch (Exception) when (!window.IsCancellationRequested && hasSession?.Invoke() == false)
+                        {
+                            return GradingWatchEnd.SessionExpired;
+                        }
                         catch (Exception ex) when (!window.IsCancellationRequested &&
                             (ex is HttpRequestException || ex is OperationCanceledException ||
                              ex is ServiceError se && (se.Status >= 500 || se.Status == 429)))

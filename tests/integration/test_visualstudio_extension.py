@@ -113,11 +113,11 @@ def test_theme_release_preserves_upgrade_identity_and_versions():
     ns = {'v': 'http://schemas.microsoft.com/developer/vsx-schema/2011'}
     identity = ET.parse(directory / 'source.extension.vsixmanifest').find('v:Metadata/v:Identity', ns)
     assert identity.attrib['Id'] == 'Autograde.VisualStudio.74db5571-a3ad-4451-a5f4-e8cc28d20536'
-    assert identity.attrib['Version'] == '0.5.5'
+    assert identity.attrib['Version'] == '0.5.6'
     project = ET.parse(directory / 'Autograde.VisualStudio.csproj')
     assert project.find('PropertyGroup/Version').text == identity.attrib['Version']
-    assert '"0.5.5")]' in (directory / 'AutogradePackage.cs').read_text()
-    assert '["extension_version"] = "0.5.5"' in (directory.parent / 'Autograde.Core/ServiceClient.cs').read_text()
+    assert '"0.5.6")]' in (directory / 'AutogradePackage.cs').read_text()
+    assert '["extension_version"] = "0.5.6"' in (directory.parent / 'Autograde.Core/ServiceClient.cs').read_text()
     build = (directory.parent / 'build.ps1').read_text()
     assert '$builtIdentity.Id -ne $expectedIdentity.Id' in build
     assert '$builtIdentity.Version -ne $expectedIdentity.Version' in build

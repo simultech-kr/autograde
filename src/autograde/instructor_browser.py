@@ -76,6 +76,11 @@ SCRIPT = r"""(() => {
     refresh();
   });
   guarded.forEach(form => {
+    if (form.hasAttribute('data-recovered')) {
+      for (let parent = form.parentElement; parent; parent = parent.parentElement) {
+        if (parent.tagName === 'DETAILS') parent.open = true;
+      }
+    }
     baselines.set(form, fingerprint(form)); showDirty(form);
     form.addEventListener('input', () => showDirty(form));
     form.addEventListener('change', () => showDirty(form));

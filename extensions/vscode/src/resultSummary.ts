@@ -3,6 +3,7 @@ import type { Assignment, GradeResult } from "./types";
 const labels: Record<string, string> = {
   received: "접수됨 · 서버 검증 대기", accepted: "채점 대기", queued: "채점 대기", running: "채점 중",
   graded: "채점 완료 · 결과 공개 대기", published: "결과 공개됨", rejected: "제출 검증 거절",
+  result_pending: "채점 완료 · 결과 준비 중",
   infra_failed: "채점 환경 오류", assessment_failed: "채점 작업 실패", failed: "채점 작업 실패",
 };
 const valid = (score?: number, max?: number): boolean => Number.isFinite(score) && Number.isFinite(max)
@@ -39,7 +40,9 @@ export function summarizeResult(result: GradeResult) {
   };
 }
 
-export function resultHtml(assignment: Assignment, result: GradeResult, receipt: string, context: string): string {
+export function resultHtml(assignment: Assignment, result: GradeResult, receipt: string, context: string,
+  controls: { readonly canRefresh?: boolean; readonly canPause?: boolean; readonly notice?: string } = {},
+): string {
   const view = summarizeResult(result);
   const diagnostics = result.state === "published" ? result.diagnostics : [];
   const diagnostic = (item: GradeResult["diagnostics"][number]) => `${item.path}${item.line ? `:${item.line}` : ""} ${item.message}`;
@@ -50,7 +53,10 @@ body{font:var(--vscode-font-size)/1.6 var(--vscode-font-family);color:var(--vsco
 h1{font-size:26px;margin:8px 0}.score{font-size:36px;font-weight:700;margin:8px 0}.card{border:1px solid var(--vscode-panel-border,var(--vscode-editor-foreground));padding:18px;margin:16px 0;border-radius:8px}
 .hint{color:var(--vscode-descriptionForeground)}h2{font-size:18px}h3{font-size:16px}p,pre{overflow-wrap:anywhere}pre{white-space:pre-wrap}progress{width:100%;height:12px;accent-color:var(--vscode-progressBar-background)}
 summary{cursor:pointer;padding:10px 0}:focus-visible{outline:2px solid var(--vscode-focusBorder)}.needs-work{border-left:4px solid var(--vscode-editorWarning-foreground)}
+.actions{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0}.action{display:inline-block;padding:8px 12px;background:var(--vscode-button-background);color:var(--vscode-button-foreground);border-radius:4px;text-decoration:none}.action.secondary{background:var(--vscode-button-secondaryBackground);color:var(--vscode-button-secondaryForeground)}
 </style></head><body><p>${escape(assignment.courseLabel)} · ${escape(assignment.title)}</p><p class="hint">${escape(context)} · 접수번호 ${escape(receipt)}</p>
+${controls.notice ? `<p role="status" aria-live="polite">${escape(controls.notice)}</p>` : ""}
+${controls.canRefresh || controls.canPause ? `<div class="actions">${controls.canRefresh ? '<a class="action" href="command:autograde.refreshDisplayedResult">결과 다시 확인</a>' : ""}${controls.canPause ? '<a class="action secondary" href="command:autograde.pauseDisplayedResult">자동 확인 중지</a>' : ""}</div>` : ""}
 <section class="card" aria-label="채점 결과 요약"><h1>${escape(view.headline)}</h1><p class="score">${escape(view.score)}</p>
 ${view.percent === undefined ? "" : `<progress max="100" value="${view.percent}" aria-label="자동채점 총점 달성률"></progress>`}
 <p>${escape(view.summary)}</p><h2>다음 할 일</h2><p>${escape(view.next)}</p></section>

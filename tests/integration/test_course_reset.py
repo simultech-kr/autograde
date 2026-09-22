@@ -90,7 +90,7 @@ def test_unsafe_apply_refused_without_deletion(records, case, tmp_path):
     if case in {"schema", "bootstrap"}:
         with sqlite3.connect(paths.database) as connection:
             if case == "schema":
-                connection.execute("INSERT INTO platform_schema_migrations VALUES (13, 'synthetic')")
+                connection.execute("INSERT INTO platform_schema_migrations VALUES (14, 'synthetic')")
             else:
                 connection.execute("DELETE FROM platform_roster_bootstrap")
     if case == "symlink":

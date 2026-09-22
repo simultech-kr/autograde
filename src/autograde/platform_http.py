@@ -716,11 +716,14 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
                         if not facade.admin_upload_slots.acquire(blocking=False):
                             raise PlatformHTTPError(503, "upload_busy", "파일 처리 중입니다. 잠시 후 다시 시도하세요.")
                         try:
-                            from .instructor_upload import parse_instructor_upload
+                            from .instructor_upload import InstructorUploadUnavailable, parse_instructor_upload
                             limit = (5 if upload else 1) * 1024 * 1024
                             body = self._read_body(expected_media_type="multipart/form-data", max_bytes=limit + 64 * 1024)
                             try:
                                 form = parse_instructor_upload(self.headers.get("Content-Type", ""), body, file_limit=limit)
+                            except InstructorUploadUnavailable as exc:
+                                emit_operator_event("instructor_upload_unavailable", component="http", exception=exc.__cause__ or exc)
+                                raise PlatformHTTPError(503, "upload_unavailable", str(exc)) from exc
                             except ValueError as exc:
                                 raise PlatformHTTPError(400, "invalid_upload", str(exc)) from exc
                         finally:
@@ -1212,6 +1215,9 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
                 instructor = getattr(self.platform_server.facade, 'instructor', None)
                 if instructor is not None and instructor.matches(urlsplit(self.path).path) and content_type.startswith('text/html'):
                     from .instructor_browser import SCRIPT_CSP
+                    value += SCRIPT_CSP
+                elif content_type.startswith('text/html') and b'<script data-student-enhancement>' in body:
+                    from .student_browser import SCRIPT_CSP
                     value += SCRIPT_CSP
             if name == "Referrer-Policy" and callable(getattr(self.platform_server.facade, "portal_request", None)):
                 # Native form POSTs under no-referrer may send Origin: null.

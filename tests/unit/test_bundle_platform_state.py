@@ -209,7 +209,7 @@ def test_v6_migrates_existing_students_and_creates_bundle_tables(
 
     migrated = PlatformStateStore(database)
 
-    assert migrated.schema_version() == 12
+    assert migrated.schema_version() == 13
     assert migrated.get_student_by_key("legacy").identity_kind == (
         StudentIdentityKind.GITHUB
     )

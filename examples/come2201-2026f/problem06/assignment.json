@@ -1,0 +1,48 @@
+{
+  "title": "Week10 Problem06 — Builder · Prototype",
+  "description": "보고서 템플릿 제작소: Builder로 유효한 보고서를 만들고 Prototype으로 독립 복제합니다. 기능 자동채점 100점과 별도 패턴 구조 확인을 수행합니다.",
+  "language": "cpp",
+  "mode": "direct",
+  "platform": "windows",
+  "opens_at": null,
+  "due_at": "2026-11-04T13:50:00+09:00",
+  "result_policy": "immediate",
+  "tests": [
+    {
+      "title": "예제: 복제 후 독립 수정",
+      "input": "8\nBUILD r1 Weekly 3\nADD r1 Intro\nCLONE r1 r2\nTITLE r2 Final\nADD r2 Result\nSHOW r1\nSHOW r2\nSHOW missing\n",
+      "output": "OK\nOK\nOK\nOK\nOK\nr1|Weekly|3|Intro\nr2|Final|3|Intro,Result\nERROR missing\n",
+      "public": true,
+      "weight": 20
+    },
+    {
+      "title": "페이지 범위와 실패 후 재사용",
+      "input": "6\nBUILD a A 0\nBUILD a A 501\nBUILD a A 1\nBUILD b B 500\nSHOW a\nSHOW b\n",
+      "output": "ERROR pages\nERROR pages\nOK\nOK\na|A|1|-\nb|B|500|-\n",
+      "weight": 20,
+      "public": false
+    },
+    {
+      "title": "중복과 없는 원본의 우선순위",
+      "input": "7\nBUILD a A 2\nBUILD a Wrong 0\nCLONE missing a\nCLONE a a\nTITLE missing T\nADD missing S\nSHOW a\n",
+      "output": "OK\nERROR duplicate\nERROR missing\nERROR duplicate\nERROR missing\nERROR missing\na|A|2|-\n",
+      "weight": 20,
+      "public": false
+    },
+    {
+      "title": "연쇄 복제와 원본 변경 분리",
+      "input": "11\nBUILD a One 7\nADD a X\nCLONE a b\nCLONE b c\nADD a Y\nADD b Z\nTITLE c Three\nSHOW a\nSHOW b\nSHOW c\nSHOW x\n",
+      "output": "OK\nOK\nOK\nOK\nOK\nOK\nOK\na|One|7|X,Y\nb|One|7|X,Z\nc|Three|7|X\nERROR missing\n",
+      "weight": 20,
+      "public": false
+    },
+    {
+      "title": "빈 복제와 중복 섹션 순서",
+      "input": "8\nBUILD x Base 12\nCLONE x y\nADD y Part\nADD y Part\nTITLE x Changed\nSHOW x\nSHOW y\nBUILD z Z -9\n",
+      "output": "OK\nOK\nOK\nOK\nOK\nx|Changed|12|-\ny|Base|12|Part,Part\nERROR pages\n",
+      "weight": 20,
+      "public": false
+    }
+  ],
+  "negative_score": 0
+}

@@ -12,7 +12,7 @@ const {chromium} = require(modulePath);
     const context = await browser.newContext();
     const page = await context.newPage();
     page.on('pageerror', error => errors.push(String(error)));
-    let fixture = fixtures.cases, replies = [], calls = 0, loads = 0, status = 200;
+    let fixture = fixtures.integrated, replies = [], calls = 0, loads = 0, status = 200;
     await page.route('**/*', async route => {
       assert.equal(route.request().method(), 'GET', 'browser must not perform automatic writes');
       if (route.request().url().endsWith('/status')) {
@@ -33,7 +33,10 @@ const {chromium} = require(modulePath);
     const active = () => page.locator('[data-case]:not([hidden])');
     const form = () => page.locator('form:has([data-case-editor])');
     const unload = () => page.evaluate(() => !window.dispatchEvent(new Event('beforeunload', {cancelable: true})));
-    await open('cases');
+    await open('integrated');
+    assert.equal(await page.evaluate(() => {const ids = [...document.querySelectorAll('[id]')].map(el => el.id); return ids.length === new Set(ids).size;}), true);
+    assert.equal(await page.locator('input[name=due_at]').count(), 1); checks++;
+    await page.getByText('테스트·배점 직접 편집', {exact: true}).click();
     assert.equal(await active().count(), 1); assert.equal(await unload(), false); checks++;
     await page.locator('[data-case-copy]:visible').click();
     assert.equal(await active().count(), 2);
@@ -72,21 +75,21 @@ const {chromium} = require(modulePath);
     // CSP allows our exact script but rejects newly injected inline code.
     await page.evaluate(() => {const el = document.createElement('script'); el.textContent = 'window.untrustedExecuted = true'; document.body.append(el);});
     assert.equal(await page.evaluate(() => window.untrustedExecuted), undefined); checks++;
-    await open('edit');
+    await open('integrated');
     const title = page.locator('[name=title]'); const initial = await title.inputValue();
     await title.fill('unsaved'); assert.equal(await unload(), true);
     let warned = false;
     page.once('dialog', async dialog => {warned = dialog.type() === 'beforeunload'; await dialog.dismiss();});
-    await page.getByRole('link', {name: '저장된 초안 목록으로', exact: true}).click();
-    assert.equal(warned, true); assert.equal(page.url(), fixtures.edit.url); checks++;
+    await page.getByRole('link', {name: '과제 목록으로', exact: true}).click();
+    assert.equal(warned, true); assert.equal(page.url(), fixtures.integrated.url); checks++;
     await title.fill(initial); assert.equal(await unload(), false); checks++;
-    await open('cases');
+    await open('integrated');
     await page.locator('input[type=file]').first().setInputFiles({name:'example.zip', mimeType:'application/zip', buffer:Buffer.from('synthetic')});
     assert.equal(await unload(), true);
     await page.locator('input[type=file]').first().setInputFiles([]);
     assert.equal(await unload(), false); checks++;
     for (const theme of ['light', 'dark']) for (const width of [320, 375, 768, 1440]) {
-      await open('cases');
+      await open('integrated');
       await page.emulateMedia({colorScheme: theme}); await page.setViewportSize({width, height: 900});
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
       if (width === 375) await page.screenshot({path:path.join(path.dirname(file), `case-editor-${theme}.png`), fullPage:true});
@@ -144,8 +147,8 @@ const {chromium} = require(modulePath);
     // No script support still leaves native POST forms and all 50 case slots.
     const nojs = await browser.newContext({javaScriptEnabled: false});
     const fallback = await nojs.newPage();
-    await fallback.route('**/*', route => route.fulfill({contentType: 'text/html', body: fixtures.cases.html}));
-    await fallback.goto(fixtures.cases.url);
+    await fallback.route('**/*', route => route.fulfill({contentType: 'text/html', body: fixtures.integrated.html}));
+    await fallback.goto(fixtures.integrated.url);
     assert.equal(await fallback.locator('[data-case]').count(), 50);
     assert.equal(await fallback.locator('[name=test_49_output]').isEnabled(), true);
     assert.equal(await fallback.locator('[data-case-add]').isVisible(), false); checks++;

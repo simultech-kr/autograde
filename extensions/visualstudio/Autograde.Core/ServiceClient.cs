@@ -182,7 +182,7 @@ namespace Autograde.Core
                 var device = Parse(await Send("POST", "/v1/device-authorizations", new JObject
                 {
                     ["client"] = "visualstudio-extension",
-                    ["extension_version"] = "0.5.5",
+                    ["extension_version"] = "0.5.6",
                     ["device_name"] = "Visual Studio / Windows",
                     ["claim_code"] = claim
                 }, null, null, null, cancel).ConfigureAwait(false));

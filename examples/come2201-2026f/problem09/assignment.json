@@ -1,0 +1,48 @@
+{
+  "title": "Week13 Problem09 — 패턴 통합: 주문 시스템",
+  "description": "카페 주문 조합기: Factory, Decorator, Composite, Facade를 결합하여 음료·옵션·중첩 세트와 주문을 처리합니다. 기능 100점과 별도 구조 점검.",
+  "language": "cpp",
+  "mode": "direct",
+  "platform": "windows",
+  "opens_at": null,
+  "due_at": "2026-11-25T13:50:00+09:00",
+  "result_policy": "immediate",
+  "tests": [
+    {
+      "title": "예제: 옵션과 세트 주문",
+      "input": "8\nDRINK tea tea\nDRINK coffee coffee\nEXTRA latte coffee milk\nPACK pair 2 tea latte\nQUOTE pair\nORDER pair 3\nQUOTE coffee\nQUOTE latte\n",
+      "output": "OK\nOK\nOK\nOK\nPRICE 7500 ITEMS 2\nTOTAL 22500\nPRICE 4000 ITEMS 1\nPRICE 4500 ITEMS 1\n",
+      "public": true,
+      "weight": 20
+    },
+    {
+      "title": "중첩 세트와 중복 구성원",
+      "input": "9\nDRINK a tea\nEXTRA b a shot\nEXTRA c b milk\nPACK p 3 a c a\nPACK q 2 p p\nQUOTE p\nQUOTE q\nORDER q 2\nQUOTE a\n",
+      "output": "OK\nOK\nOK\nOK\nOK\nPRICE 10500 ITEMS 3\nPRICE 21000 ITEMS 6\nTOTAL 42000\nPRICE 3000 ITEMS 1\n",
+      "weight": 20,
+      "public": false
+    },
+    {
+      "title": "생성 오류와 id 재사용",
+      "input": "10\nDRINK a water\nDRINK a tea\nDRINK a coffee\nEXTRA b absent milk\nEXTRA b a sugar\nEXTRA b a milk\nPACK c 2 a absent\nPACK c 2 a b\nQUOTE c\nQUOTE absent\n",
+      "output": "ERROR kind\nOK\nERROR duplicate\nERROR missing\nERROR extra\nOK\nERROR missing\nOK\nPRICE 6500 ITEMS 2\nERROR missing\n",
+      "weight": 20,
+      "public": false
+    },
+    {
+      "title": "개수 경계와 오류 우선순위",
+      "input": "10\nDRINK a coffee\nPACK p 0\nPACK p 11 a a a a a a a a a a a\nPACK p 1 a\nPACK p 0\nORDER a 0\nORDER a 101\nORDER absent 0\nORDER a 100\nQUOTE p\n",
+      "output": "OK\nERROR count\nERROR count\nOK\nERROR duplicate\nERROR count\nERROR count\nERROR missing\nTOTAL 400000\nPRICE 4000 ITEMS 1\n",
+      "weight": 20,
+      "public": false
+    },
+    {
+      "title": "세트 전체 옵션과 원본 불변성",
+      "input": "9\nDRINK a tea\nDRINK b coffee\nPACK p 2 a b\nEXTRA q p milk\nEXTRA r q shot\nQUOTE p\nQUOTE q\nQUOTE r\nORDER r 1\n",
+      "output": "OK\nOK\nOK\nOK\nOK\nPRICE 7000 ITEMS 2\nPRICE 7500 ITEMS 2\nPRICE 8500 ITEMS 2\nTOTAL 8500\n",
+      "weight": 20,
+      "public": false
+    }
+  ],
+  "negative_score": 0
+}

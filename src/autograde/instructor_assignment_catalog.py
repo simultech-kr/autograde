@@ -21,13 +21,13 @@ class InstructorAssignmentCatalog:
       LEFT JOIN bundle_assignment_releases r ON r.assignment_id=d.published_assignment_id AND r.course_key=d.course_key
       LEFT JOIN instructor_assignment_jobs j ON j.job_id=(SELECT job_id FROM instructor_assignment_jobs
         WHERE draft_id=d.draft_id ORDER BY created_at DESC,rowid DESC LIMIT 1)
-      WHERE d.course_key=:course
+      WHERE d.course_key=:course AND d.deleted_at IS NULL
       UNION ALL
       SELECT r.assignment_id,NULL,r.assignment_id,r.title,NULL,'cli',NULL,NULL,
         (SELECT status FROM bundle_release_checks WHERE assignment_id=r.assignment_id ORDER BY id DESC LIMIT 1),
         r.due_at,r.opens_at,r.active,r.ready,r.updated_at,r.result_policy
       FROM bundle_assignment_releases r WHERE r.course_key=:course
-        AND NOT EXISTS (SELECT 1 FROM instructor_assignment_drafts WHERE published_assignment_id=r.assignment_id)
+        AND NOT EXISTS (SELECT 1 FROM instructor_assignment_drafts WHERE published_assignment_id=r.assignment_id AND deleted_at IS NULL)
         AND NOT EXISTS (SELECT 1 FROM instructor_assignment_jobs WHERE assignment_id=r.assignment_id)
     ), classified AS (
       SELECT *,CASE WHEN assignment_id IS NULL THEN 'draft'

@@ -1,6 +1,7 @@
 """Real HTTP multipart/form limits; synthetic credentials and private examples."""
 import http.client
 import io
+import json
 import zipfile
 from urllib.parse import urlencode
 
@@ -96,6 +97,43 @@ def test_actual_direct_starter_upload_and_multiline_metadata(http_setup):
                            'application/x-www-form-urlencoded', browser=browser)
     assert status == 303, html
     assert courses.get_course('come2201')['description'] == 'First line\nSecond line'
+
+
+@pytest.mark.parametrize('dependency_failure', ['missing', 'old_constructor'])
+def test_upload_dependency_failure_is_actionable_503_without_mutation(http_setup, monkeypatch, capsys, dependency_failure):
+    import builtins
+    import python_multipart
+    server, browser, _, _, _, assignments = http_setup
+    draft = assignments.create_draft('come2201', mode='direct', language='c', negative_score=0)
+    path = BASE + '/drafts/' + draft['draft_id']
+    if dependency_failure == 'missing':
+        importer = builtins.__import__
+        def missing_import(name, *args, **kwargs):
+            if name == 'python_multipart':
+                raise ModuleNotFoundError('synthetic-private-environment-path')
+            return importer(name, *args, **kwargs)
+        monkeypatch.setattr(builtins, '__import__', missing_import)
+    else:
+        def old_parser(boundary, callbacks, max_size):
+            raise AssertionError('Never retry parsing without header limits')
+        monkeypatch.setattr(python_multipart, 'MultipartParser', old_parser)
+    mime, body = multipart([('csrf', browser.csrf), ('revision', '1'), ('starter_confirm', 'yes'), ('file', b'synthetic-private-code')])
+    status, _, response = send(server, path + '/uploads/starter', body, mime, browser=browser)
+    assert status == 503
+    error = json.loads(response)['error']
+    assert error['code'] == 'upload_unavailable'
+    assert '동일 가상환경' in error['message'] and '재시작' in error['message']
+    assert b'synthetic-private' not in response and browser.csrf.encode() not in response
+    unchanged = assignments.get_draft('come2201', draft['draft_id'])
+    assert unchanged['revision'] == 1 and unchanged['uploads'] == []
+    # Upload initialization failure does not break read-only authoring or expose
+    # dependency details to a caller who has not authenticated as instructor.
+    assert download(server, path, browser=browser)[0] == 200
+    assert send(server, path + '/uploads/starter', body, mime, browser=browser, authorization=None)[0] == 401
+    events = capsys.readouterr().err
+    assert 'instructor_upload_unavailable' in events
+    assert ('ModuleNotFoundError' if dependency_failure == 'missing' else 'TypeError') in events
+    assert 'synthetic-private' not in events and browser.csrf not in events
 
 
 def test_authenticated_default_and_draft_template_downloads(http_setup):

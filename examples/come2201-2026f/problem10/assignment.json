@@ -1,0 +1,48 @@
+{
+  "title": "Week14 Problem10 — 패턴 통합: 실습 진행 보드",
+  "description": "실습 진행 보드: Observer, Memento, Iterator, Facade를 결합해 성적 변경 알림·상태 복구·필터 순회를 구현합니다. 기능 100점, 패턴 구조 별도 확인.",
+  "language": "cpp",
+  "mode": "direct",
+  "platform": "windows",
+  "opens_at": null,
+  "due_at": "2026-12-02T13:50:00+09:00",
+  "result_policy": "immediate",
+  "tests": [
+    {
+      "title": "예제: 모니터링·필터·상태 복구",
+      "input": "12\nWATCH tutor\nADD a 20\nADD b 80\nSNAP v1\nSCORE a 90\nLIST 80\nCOUNTS\nRESTORE v1\nLIST 80\nCOUNTS\nUNWATCH tutor\nCOUNTS\n",
+      "output": "OK\nOK\nOK\nOK\nOK\na:90 b:80\ntutor=3\nOK\nb:80\ntutor=4\nOK\nNONE\n",
+      "public": true,
+      "weight": 20
+    },
+    {
+      "title": "빈 보드 복구도 한 번 알림",
+      "input": "8\nLIST 0\nCOUNTS\nSNAP empty\nWATCH a\nRESTORE empty\nCOUNTS\nRESTORE missing\nCOUNTS\n",
+      "output": "NONE\nNONE\nOK\nOK\nOK\na=1\nERROR missing\na=1\n",
+      "weight": 20,
+      "public": false
+    },
+    {
+      "title": "범위·중복·실패 명령 알림 제외",
+      "input": "12\nWATCH t\nADD a -1\nADD a 101\nADD a 0\nADD a 100\nSCORE x 50\nSCORE a 101\nSCORE a 100\nSCORE a 100\nREMOVE x\nLIST 0\nCOUNTS\n",
+      "output": "OK\nERROR score\nERROR score\nOK\nERROR duplicate\nERROR missing\nERROR score\nOK\nOK\nERROR missing\na:100\nt=3\n",
+      "weight": 20,
+      "public": false
+    },
+    {
+      "title": "구독 해지와 재구독 카운터",
+      "input": "11\nWATCH z\nWATCH a\nWATCH z\nADD one 60\nUNWATCH z\nSCORE one 70\nWATCH z\nREMOVE one\nCOUNTS\nUNWATCH absent\nCOUNTS\n",
+      "output": "OK\nOK\nERROR duplicate\nOK\nOK\nOK\nOK\nOK\na=3 z=1\nERROR missing\na=3 z=1\n",
+      "weight": 20,
+      "public": false
+    },
+    {
+      "title": "삽입 순서와 반복 복구 독립성",
+      "input": "15\nADD a 10\nADD b 20\nSNAP v\nREMOVE a\nADD a 30\nLIST 0\nRESTORE v\nLIST 0\nREMOVE b\nRESTORE v\nSCORE a 40\nLIST 20\nSNAP v\nRESTORE absent\nLIST 0\n",
+      "output": "OK\nOK\nOK\nOK\nOK\nb:20 a:30\nOK\na:10 b:20\nOK\nOK\nOK\na:40 b:20\nERROR duplicate\nERROR missing\na:40 b:20\n",
+      "weight": 20,
+      "public": false
+    }
+  ],
+  "negative_score": 0
+}

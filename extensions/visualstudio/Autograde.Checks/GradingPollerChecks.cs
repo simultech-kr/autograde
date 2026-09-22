@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
@@ -48,6 +49,20 @@ internal static class GradingPollerChecks
             end = await GradingPoller.WatchAsync(_ => { attempts++; throw new ServiceError(status, "denied"); }, _ => updates++, _ => { },
                 now.AddMinutes(2), CancellationToken.None, Delay, () => now);
             Check(end == GradingWatchEnd.Unavailable && attempts == 1 && updates == 0, "do not retry access failure " + status);
+        }
+        foreach (var failure in new Exception[] {
+            new ServiceError(401, "invalid_refresh_token"), new HttpRequestException(),
+            new TaskCanceledException(), new InvalidDataException("invalid refresh response") })
+        {
+            bool authenticated = true;
+            int attempts = 0, updates = 0, notices = 0;
+            end = await GradingPoller.WatchAsync(_ => {
+                    attempts++; authenticated = false;
+                    return Task.FromException<JObject>(failure);
+                }, _ => updates++, _ => notices++, now.AddMinutes(2), CancellationToken.None, Delay, () => now,
+                hasSession: () => authenticated);
+            Check(end == GradingWatchEnd.SessionExpired && attempts == 1 && updates == 0 && notices == 0,
+                "lost session immediately requests login instead of retrying " + failure.GetType().Name);
         }
         using (var cancel = new CancellationTokenSource())
         {

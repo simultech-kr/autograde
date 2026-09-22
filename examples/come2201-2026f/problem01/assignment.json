@@ -1,0 +1,48 @@
+{
+  "title": "Week04 · Problem01 — Observer & Decorator",
+  "description": "스마트 실습실 센서의 구독·해지·알림과 조합 가능한 메시지 장식을 구현합니다. 기능 점수 100점과 패턴 구조 검토를 구분합니다.",
+  "language": "cpp",
+  "mode": "direct",
+  "platform": "windows",
+  "opens_at": null,
+  "due_at": "2026-09-23T13:50:00+09:00",
+  "result_policy": "immediate",
+  "tests": [
+    {
+      "title": "기본 구독과 알림",
+      "input": "4\nSUB desk -\nSUB board B\nPUBLISH 23\nUNSUB desk\n",
+      "output": "OK desk\nOK board\ndesk: value=23\nboard: [value=23]\nOK desk\n",
+      "weight": 20,
+      "public": false
+    },
+    {
+      "title": "장식의 조합 순서",
+      "input": "3\nSUB left BA\nSUB right AB\nPUBLISH -7\n",
+      "output": "OK left\nOK right\nleft: ![value=-7]!\nright: [!value=-7!]\n",
+      "weight": 20,
+      "public": true
+    },
+    {
+      "title": "해지와 재구독 순서",
+      "input": "8\nSUB a -\nSUB b A\nUNSUB a\nSUB a B\nPUBLISH 0\nUNSUB b\nUNSUB a\nPUBLISH 9\n",
+      "output": "OK a\nOK b\nOK a\nOK a\nb: !value=0!\na: [value=0]\nOK b\nOK a\nNO_OBSERVERS\n",
+      "weight": 20,
+      "public": false
+    },
+    {
+      "title": "중복·없는 구독·잘못된 장식",
+      "input": "7\nSUB a B\nSUB a A\nUNSUB missing\nSUB b X\nSUB c AAAAA\nPUBLISH 4\nSUB b -\n",
+      "output": "OK a\nERROR duplicate\nERROR missing\nERROR style\nERROR style\na: [value=4]\nOK b\n",
+      "weight": 20,
+      "public": false
+    },
+    {
+      "title": "반복 알림과 반복 장식",
+      "input": "5\nPUBLISH -1000\nSUB x BBAA\nPUBLISH -1000\nPUBLISH 1000\nPUBLISH 0\n",
+      "output": "NO_OBSERVERS\nOK x\nx: !![[value=-1000]]!!\nx: !![[value=1000]]!!\nx: !![[value=0]]!!\n",
+      "weight": 20,
+      "public": false
+    }
+  ],
+  "negative_score": 0
+}

@@ -234,7 +234,7 @@ internal static class ExceptionChecks
             var guidance = DownloadDiagnostic.OpenRecoveryGuidance(@"C:\Users\student\한글 과제");
             Check(guidance.Contains(@"C:\Users\student\한글 과제") && guidance.Contains("파일 → 열기 → 폴더") && guidance.Contains("과제 폴더 열기"), "missing recovery steps or path");
             Check(guidance.Contains("재다운로드할 필요는 없습니다") && guidance.Contains("모두 저장") && guidance.Contains("문의번호"), "missing preservation/support instructions");
-            var remote = diagnostic.Payload("0.5.5").ToString() + diagnostic.Details;
+            var remote = diagnostic.Payload("0.5.6").ToString() + diagnostic.Details;
             Check(!remote.Contains("C:\\Users") && !remote.Contains("private native exception"), "local recovery information leaked");
             return Task.CompletedTask;
         });

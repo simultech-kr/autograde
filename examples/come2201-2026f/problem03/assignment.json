@@ -1,0 +1,69 @@
+{
+  "title": "Week06 · Problem03 — Adapter & Template Method",
+  "description": "서로 다른 레거시 센서의 단위를 통일하고 공통 보고서 절차에서 필터 정책만 바꾸는 온도 분석 프로그램입니다.",
+  "language": "cpp",
+  "mode": "direct",
+  "platform": "windows",
+  "opens_at": null,
+  "due_at": "2026-10-07T13:50:00+09:00",
+  "result_policy": "immediate",
+  "tests": [
+    {
+      "title": "섭씨 전체 보고서",
+      "input": "C ALL 5\n-100 0 100 250 350\n",
+      "output": "COUNT 5\nMIN -10.0\nMAX 35.0\nMEAN 12.0\n",
+      "weight": 15,
+      "public": false
+    },
+    {
+      "title": "화씨 어댑터",
+      "input": "F ALL 3\n32 68 104\n",
+      "output": "COUNT 3\nMIN 0.0\nMAX 40.0\nMEAN 20.0\n",
+      "weight": 15,
+      "public": true
+    },
+    {
+      "title": "섭씨 필터와 평균",
+      "input": "C NONNEGATIVE 5\n-50 0 10 -20 30\n",
+      "output": "COUNT 3\nMIN 0.0\nMAX 3.0\nMEAN 1.3\n",
+      "weight": 15,
+      "public": false
+    },
+    {
+      "title": "화씨 변환 후 필터",
+      "input": "F NONNEGATIVE 4\n-40 14 32 50\n",
+      "output": "COUNT 2\nMIN 0.0\nMAX 10.0\nMEAN 5.0\n",
+      "weight": 15,
+      "public": false
+    },
+    {
+      "title": "입력이 없는 보고서",
+      "input": "C ALL 0\n",
+      "output": "COUNT 0\nNO_DATA\n",
+      "weight": 10,
+      "public": false
+    },
+    {
+      "title": "필터 후 빈 보고서",
+      "input": "C NONNEGATIVE 3\n-10 -1 -100\n",
+      "output": "COUNT 0\nNO_DATA\n",
+      "weight": 10,
+      "public": false
+    },
+    {
+      "title": "센서 식별 오류",
+      "input": "K ALL 1\n273\n",
+      "output": "ERROR sensor\n",
+      "weight": 10,
+      "public": false
+    },
+    {
+      "title": "정책 식별 오류",
+      "input": "C HOT 0\n",
+      "output": "ERROR policy\n",
+      "weight": 10,
+      "public": false
+    }
+  ],
+  "negative_score": 0
+}

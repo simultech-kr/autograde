@@ -26,6 +26,16 @@ namespace Autograde.VisualStudio
             ThemeResources.Label(text); content.Children.Add(text); return text;
         }
         public void Clear() { content.Children.Clear(); Visibility = Visibility.Collapsed; }
+        public void ShowNoSubmission(string title)
+        {
+            content.Children.Clear(); Visibility = Visibility.Visible;
+            AutomationProperties.SetName(this, title + " · 아직 제출하지 않았습니다");
+            Text(title, 13, true);
+            Text("아직 제출하지 않았습니다", 20, true);
+            Text("이 과제에 접수된 제출이 없습니다. 점수는 제출하고 채점 결과가 공개된 뒤 표시됩니다.");
+            Text("다음 할 일", 14, true);
+            Text("과제 파일을 준비하고 모두 저장한 뒤 ‘파일 확인 후 제출’을 누르세요.");
+        }
         public void Show(JObject result, string context)
         {
             var model = ResultPresentation.From(result);

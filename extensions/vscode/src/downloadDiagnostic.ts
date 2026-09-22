@@ -30,6 +30,7 @@ export function classifyDownloadError(error: unknown, stage: DownloadStage, canc
 }
 export function downloadGuidance(code?: string): string {
   switch (code) {
+    case "AG-DL-WORKSPACE-NOT-OPEN": return "먼저 VS Code의 파일 → 폴더 열기에서 수업 폴더를 여세요. 폴더를 연 뒤 학생 웹의 새 수령 코드로 연결하면 다운로드할 수 있습니다.";
     case "AG-DL-LOCAL-PERMISSION": return "이 위치에 저장할 권한이 없습니다. 쓰기 가능한 다른 폴더를 선택하세요. 다시 수락할 필요는 없습니다.";
     case "AG-DL-LOCAL-SPACE": return "디스크 여유 공간을 확보한 뒤 다시 받으세요. 기존 코드는 보존하세요.";
     case "AG-DL-LOCAL-EXISTS": return "같은 이름의 폴더가 있습니다. 기존 과제를 열거나 다른 위치를 선택하세요. 기존 코드는 덮어쓰지 않습니다.";

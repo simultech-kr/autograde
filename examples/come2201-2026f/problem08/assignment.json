@@ -1,0 +1,48 @@
+{
+  "title": "Week12 Problem08 — Memento · Visitor",
+  "description": "실습 계획 편집기: 문서 상태를 Memento로 저장·복구하고 이종 블록의 통계와 출력을 Visitor로 확장합니다. 기능 자동채점 100점, 패턴 구조 별도 확인.",
+  "language": "cpp",
+  "mode": "direct",
+  "platform": "windows",
+  "opens_at": null,
+  "due_at": "2026-11-18T13:50:00+09:00",
+  "result_policy": "immediate",
+  "tests": [
+    {
+      "title": "예제: 저장·복구와 종류별 집계",
+      "input": "10\nTEXT Plan\nTASK 30\nSAVE first\nTEXT Done\nTASK 20\nSTATS\nRESTORE first\nPRINT\nSTATS\nRESTORE absent\n",
+      "output": "OK\nOK\nOK\nOK\nOK\nTEXTS 2 CHARS 8 TASKS 2 POINTS 50\nOK\nTEXT:Plan|TASK:30\nTEXTS 1 CHARS 4 TASKS 1 POINTS 30\nERROR missing\n",
+      "public": true,
+      "weight": 20
+    },
+    {
+      "title": "빈 문서 스냅샷",
+      "input": "7\nPRINT\nSTATS\nSAVE empty\nTEXT A\nRESTORE empty\nPRINT\nSTATS\n",
+      "output": "EMPTY\nTEXTS 0 CHARS 0 TASKS 0 POINTS 0\nOK\nOK\nOK\nEMPTY\nTEXTS 0 CHARS 0 TASKS 0 POINTS 0\n",
+      "weight": 20,
+      "public": false
+    },
+    {
+      "title": "점수 경계와 실패 상태 유지",
+      "input": "7\nTASK -1\nTASK 101\nTASK 0\nTASK 100\nTEXT abc123\nPRINT\nSTATS\n",
+      "output": "ERROR points\nERROR points\nOK\nOK\nOK\nTASK:0|TASK:100|TEXT:abc123\nTEXTS 1 CHARS 6 TASKS 2 POINTS 100\n",
+      "weight": 20,
+      "public": false
+    },
+    {
+      "title": "저장 이름 중복과 원본 스냅샷 보존",
+      "input": "8\nTEXT X\nSAVE a\nTEXT Y\nSAVE a\nRESTORE a\nPRINT\nRESTORE missing\nSTATS\n",
+      "output": "OK\nOK\nOK\nERROR duplicate\nOK\nTEXT:X\nERROR missing\nTEXTS 1 CHARS 1 TASKS 0 POINTS 0\n",
+      "weight": 20,
+      "public": false
+    },
+    {
+      "title": "반복 복구와 갈라진 이력",
+      "input": "13\nTEXT A\nSAVE one\nTASK 5\nSAVE two\nRESTORE one\nTEXT B\nPRINT\nRESTORE two\nPRINT\nTASK 9\nRESTORE two\nPRINT\nSTATS\n",
+      "output": "OK\nOK\nOK\nOK\nOK\nOK\nTEXT:A|TEXT:B\nOK\nTEXT:A|TASK:5\nOK\nOK\nTEXT:A|TASK:5\nTEXTS 1 CHARS 1 TASKS 1 POINTS 5\n",
+      "weight": 20,
+      "public": false
+    }
+  ],
+  "negative_score": 0
+}

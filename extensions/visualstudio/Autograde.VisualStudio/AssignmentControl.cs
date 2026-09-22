@@ -151,7 +151,11 @@ namespace Autograde.VisualStudio
             var management = new StackPanel(); assignmentManagement.Content = management; taskPanel.Children.Add(assignmentManagement); panel = management;
             AddButton(panel, "과제 새로고침", ct => ReloadAsync(null, ct));
             panel.Children.Add(assignments);
-            assignments.SelectionChanged += (_, __) => { history.Items.Clear(); inspectedResult.Clear(); UpdateCompactState(); };
+            assignments.SelectionChanged += (_, __) => {
+                history.Items.Clear(); inspectedResult.Clear();
+                if (downloadDiagnostic != null) output.Clear();
+                ClearDownloadState(); UpdateCompactState();
+            };
             downloadButton = AddButton(footerActions, "과제 다운로드 · 열기", DownloadAsync);
             var folderPanel = new StackPanel(); folderManagement.Content = folderPanel; taskPanel.Children.Add(folderManagement); panel = folderPanel;
             AddButton(panel, "새 폴더에 다시 받기", DownloadAsync);
@@ -180,8 +184,12 @@ namespace Autograde.VisualStudio
                 if (string.IsNullOrWhiteSpace(root)) throw new InvalidOperationException("제출 폴더를 선택하세요.");
                 if (MessageBox.Show("VS에서 모두 저장(Ctrl+Shift+S)했나요? 저장된 디스크 파일만 제출합니다.", "Autograde", MessageBoxButton.OKCancel) != MessageBoxResult.OK) return;
                 var snapshot = await Task.Run(() => { Bundle.VerifyWorkspace(root, client.BaseUrl, id); return Bundle.CreateSubmission(root, ct); }, ct);
-                output.Text = "제출 예정 (" + snapshot.SourceBytes + " bytes)\n" + string.Join("\n", snapshot.Files);
-                if (MessageBox.Show("선택 과제: " + (string)Selected["title"] + "\n폴더: " + root + "\n" + snapshot.Files.Length + "개 파일을 서버에 제출할까요?\n창의 파일 목록을 확인하세요.", "제출 확인", MessageBoxButton.YesNo) != MessageBoxResult.Yes) return;
+                if (!SubmissionReviewDialog.Confirm(this, (string)Selected["title"], root, snapshot))
+                {
+                    output.Text = "제출을 취소했습니다. 서버로 파일을 보내지 않았습니다.";
+                    return;
+                }
+                ct.ThrowIfCancellationRequested();
                 var submitted = await client.SubmitAsync(id, snapshot.Archive, ct);
                 Selected["latest_submission"] = submitted;
                 var submission = ServiceClient.Required(submitted, "submission_id");
@@ -207,7 +215,15 @@ namespace Autograde.VisualStudio
             AddButton(panel, "최신 결과 확인", async ct =>
             {
                 RequireClient(); string id = Id; await ReloadAsync(id, ct);
-                var submission = ServiceClient.Required(Selected["latest_submission"], "submission_id");
+                var submission = AssignmentSelection.LatestSubmissionId(Selected);
+                if (submission == null)
+                {
+                    showingInspected = true; liveResult.Clear();
+                    inspectedResult.ShowNoSubmission((string)Selected["title"]);
+                    pages.SelectedIndex = 1; inspectedResult.BringIntoView();
+                    output.Text = "선택 과제에 접수된 제출이 없습니다. 파일을 준비하고 저장한 뒤 제출하세요.";
+                    return;
+                }
                 var result = await client.ResultAsync(submission, ct);
                 if (receiptWatch?.SubmissionId == submission)
                 {
@@ -398,6 +414,11 @@ namespace Autograde.VisualStudio
             if (client == null || ServiceClient.NormalizeAddress(address.Text) != client.BaseUrl)
                 throw new InvalidOperationException("먼저 서버 주소를 적용하세요. 주소가 바뀌면 다시 로그인해야 합니다.");
         }
+        void ClearDownloadState()
+        {
+            downloadDiagnostic = null; diagnosticText.Clear(); downloadStatus.Text = "";
+            diagnosticDetails.IsExpanded = false; diagnosticDetails.Visibility = Visibility.Collapsed;
+        }
         void ClearScreen(bool clearResults = true)
         {
             PauseGradingWatch(); receiptWatch = null;
@@ -405,8 +426,16 @@ namespace Autograde.VisualStudio
             liveResult.Clear(); inspectedResult.Clear();
             receiptStatus.Text = "이번 로그인에서 접수한 제출이 없습니다."; gradingOutput.Clear();
             assignments.Items.Clear(); history.Items.Clear(); folder.Clear(); claim.Clear(); if (clearResults) output.Clear();
-            downloadDiagnostic = null; diagnosticText.Clear(); diagnosticDetails.Visibility = Visibility.Collapsed;
+            ClearDownloadState();
             UpdateCompactState();
+        }
+        void ShowExpiredSession(ReceiptWatch watch)
+        {
+            ClearScreen(false);
+            status.Text = "로그인이 만료되었습니다. 새 수령 코드로 로그인하세요.";
+            output.Text = "로그인 정보가 만료되거나 갱신되지 않아 자동 조회를 중단했습니다.\n" +
+                "이미 접수된 제출과 저장한 파일은 유지됩니다.\n과제: " + watch.Title + "\n접수번호: " + watch.SubmissionId +
+                "\n학생 웹에서 새 수령 코드를 발급받아 로그인한 뒤 최신 결과를 확인하세요.";
         }
         void PauseGradingWatch()
         {
@@ -433,8 +462,10 @@ namespace Autograde.VisualStudio
                             return await current.ResultAsync(watch.SubmissionId, ct);
                         },
                         result => { if (IsCurrent()) ShowResult(result, gradingOutput); },
-                        message => { if (IsCurrent()) gradingOutput.Text = message; }, watch.Deadline, cancellation.Token);
+                        message => { if (IsCurrent()) gradingOutput.Text = message; }, watch.Deadline, cancellation.Token,
+                        hasSession: () => current.HasSession);
                     if (!IsCurrent()) return;
+                    if (ended == GradingWatchEnd.SessionExpired || !current.HasSession) { ShowExpiredSession(watch); return; }
                     watch.Stopped = true;
                     if (ended == GradingWatchEnd.Expired)
                         gradingOutput.AppendText("\n자동 확인 종료 · 접수는 유지됩니다. 해당 과제를 선택하고 최신 결과를 확인하세요.");
@@ -442,7 +473,11 @@ namespace Autograde.VisualStudio
                 catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
                 catch (Exception)
                 {
-                    if (IsCurrent()) { watch.Stopped = true; gradingOutput.Text = "접수는 유지됩니다. 자동 조회를 중단했습니다. 해당 과제의 최신 결과를 직접 확인하세요."; }
+                    if (IsCurrent())
+                    {
+                        if (!current.HasSession) ShowExpiredSession(watch);
+                        else { watch.Stopped = true; gradingOutput.Text = "접수는 유지됩니다. 자동 조회를 중단했습니다. 해당 과제의 최신 결과를 직접 확인하세요."; }
+                    }
                 }
                 finally
                 {

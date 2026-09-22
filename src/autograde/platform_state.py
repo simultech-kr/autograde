@@ -1524,6 +1524,7 @@ _MIGRATIONS = {
     10: _MIGRATION_10,
     11: "",  # Incremental admin repositories initialized atomically below.
     12: _DOWNLOAD_DIAGNOSTICS_SCHEMA,
+    13: "",  # Backfill draft soft-delete support in already initialized databases.
 }
 _LATEST_SCHEMA_VERSION = max(_MIGRATIONS)
 
@@ -1757,15 +1758,17 @@ class PlatformStateStore:
                     )
                 for version in range(current + 1, _LATEST_SCHEMA_VERSION + 1):
                     applied = utc_iso().replace("'", "''")
-                    if version == 11:
+                    if version in (11, 13):
                         from .course_admin import initialize_course_admin
                         from .assignment_admin import initialize_assignment_admin
                         from .instructor_schema import initialize_instructor_runtime
                         connection.execute("BEGIN IMMEDIATE")
                         try:
-                            initialize_course_admin(self, connection=connection)
+                            if version == 11:
+                                initialize_course_admin(self, connection=connection)
                             initialize_assignment_admin(connection)
-                            initialize_instructor_runtime(connection)
+                            if version == 11:
+                                initialize_instructor_runtime(connection)
                             connection.execute("INSERT INTO platform_schema_migrations VALUES (?, ?)", (version, applied))
                             connection.commit()
                         except BaseException:

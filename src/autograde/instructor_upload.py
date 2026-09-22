@@ -5,11 +5,22 @@ authorization, same-origin and signed-cookie checks, before controller CSRF.
 """
 from __future__ import annotations
 
-from python_multipart import MultipartParser
-from python_multipart.multipart import parse_options_header
+_UNAVAILABLE_MESSAGE = (
+    "서버 파일 업로드 모듈을 초기화할 수 없습니다. 운영자는 서버 실행에 사용하는 동일 가상환경에서 "
+    "python-multipart 설치·버전과 프로젝트 의존성을 확인·갱신한 뒤 서비스를 재시작해 주세요."
+)
+
+
+class InstructorUploadUnavailable(RuntimeError):
+    """Upload-only deployment failure; never fall back to unbounded parsing."""
 
 
 def parse_instructor_upload(content_type: str, body: bytes, *, file_limit: int) -> dict:
+    try:
+        from python_multipart import MultipartParser
+        from python_multipart.multipart import parse_options_header
+    except ImportError as exc:
+        raise InstructorUploadUnavailable(_UNAVAILABLE_MESSAGE) from exc
     media, options = parse_options_header(content_type)
     boundary = options.get(b"boundary", b"")
     if media != b"multipart/form-data" or not boundary or len(boundary) > 200:
@@ -71,12 +82,17 @@ def parse_instructor_upload(content_type: str, body: bytes, *, file_limit: int) 
         nonlocal ended
         ended = True
 
-    parser = MultipartParser(boundary, {
-        "on_part_begin": part_begin, "on_header_field": header_field,
-        "on_header_value": header_data, "on_header_end": header_end,
-        "on_headers_finished": headers_finished, "on_part_data": part_data,
-        "on_part_end": part_end, "on_end": end,
-    }, max_size=file_limit + 64 * 1024, max_header_count=2, max_header_size=4096)
+    try:
+        parser = MultipartParser(boundary, {
+            "on_part_begin": part_begin, "on_header_field": header_field,
+            "on_header_value": header_data, "on_header_end": header_end,
+            "on_headers_finished": headers_finished, "on_part_data": part_data,
+            "on_part_end": part_end, "on_end": end,
+        }, max_size=file_limit + 64 * 1024, max_header_count=2, max_header_size=4096)
+    except TypeError as exc:
+        # Older installed releases do not implement header limits. Do not retry
+        # without these limits or misreport a server dependency as a bad ZIP.
+        raise InstructorUploadUnavailable(_UNAVAILABLE_MESSAGE) from exc
     try:
         parser.write(body)
         parser.finalize()

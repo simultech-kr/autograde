@@ -1,0 +1,55 @@
+{
+  "title": "Week05 · Problem02 — Factory, Composite & Facade",
+  "description": "PC 부품과 중첩 패키지를 생성하고 견적을 계산하는 서비스입니다. Factory Method, Composite와 단일 Facade를 구현합니다.",
+  "language": "cpp",
+  "mode": "direct",
+  "platform": "windows",
+  "opens_at": null,
+  "due_at": "2026-09-30T13:50:00+09:00",
+  "result_policy": "immediate",
+  "tests": [
+    {
+      "title": "PC 패키지 견적",
+      "input": "7\nGROUP pc\nPART cpu CPU\nPART ram RAM\nLINK pc cpu\nLINK pc ram\nTOTAL pc\nTOTAL cpu\n",
+      "output": "CREATED pc\nCREATED cpu\nCREATED ram\nLINKED pc cpu\nLINKED pc ram\nTOTAL 140\nTOTAL 100\n",
+      "weight": 20,
+      "public": true
+    },
+    {
+      "title": "중첩 구성",
+      "input": "9\nGROUP order\nGROUP kit\nPART ram RAM\nPART disk DISK\nLINK kit ram\nLINK kit disk\nLINK order kit\nTOTAL order\nTOTAL kit\n",
+      "output": "CREATED order\nCREATED kit\nCREATED ram\nCREATED disk\nLINKED kit ram\nLINKED kit disk\nLINKED order kit\nTOTAL 100\nTOTAL 100\n",
+      "weight": 20,
+      "public": false
+    },
+    {
+      "title": "빈 그룹과 독립 부품",
+      "input": "6\nGROUP empty\nTOTAL empty\nPART a DISK\nPART b RAM\nTOTAL a\nTOTAL b\n",
+      "output": "CREATED empty\nTOTAL 0\nCREATED a\nCREATED b\nTOTAL 60\nTOTAL 40\n",
+      "weight": 15,
+      "public": false
+    },
+    {
+      "title": "생성 오류와 없는 항목",
+      "input": "6\nPART a CPU\nPART a RAM\nPART b GPU\nTOTAL b\nLINK ghost a\nTOTAL a\n",
+      "output": "CREATED a\nERROR duplicate\nERROR type\nERROR missing\nERROR missing\nTOTAL 100\n",
+      "weight": 15,
+      "public": false
+    },
+    {
+      "title": "부모 제약과 다중 연결 방지",
+      "input": "8\nGROUP x\nGROUP y\nPART a RAM\nLINK a x\nLINK x a\nLINK x a\nLINK y a\nTOTAL y\n",
+      "output": "CREATED x\nCREATED y\nCREATED a\nERROR parent\nLINKED x a\nERROR linked\nERROR linked\nTOTAL 0\n",
+      "weight": 15,
+      "public": false
+    },
+    {
+      "title": "순환 방지와 실패 원자성",
+      "input": "8\nGROUP a\nGROUP b\nLINK a b\nLINK b a\nLINK b b\nPART cpu CPU\nLINK b cpu\nTOTAL a\n",
+      "output": "CREATED a\nCREATED b\nLINKED a b\nERROR cycle\nERROR cycle\nCREATED cpu\nLINKED b cpu\nTOTAL 100\n",
+      "weight": 15,
+      "public": false
+    }
+  ],
+  "negative_score": 0
+}

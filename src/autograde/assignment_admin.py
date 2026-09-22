@@ -64,7 +64,7 @@ def initialize_assignment_admin(target):
         """CREATE TABLE IF NOT EXISTS instructor_assignment_drafts (
             draft_id TEXT PRIMARY KEY, course_key TEXT NOT NULL, revision INTEGER NOT NULL,
             document_json TEXT NOT NULL, published_assignment_id TEXT,
-            created_at TEXT NOT NULL, updated_at TEXT NOT NULL)""",
+            created_at TEXT NOT NULL, updated_at TEXT NOT NULL, deleted_at TEXT)""",
         """CREATE TABLE IF NOT EXISTS instructor_assignment_uploads (
             draft_id TEXT NOT NULL REFERENCES instructor_assignment_drafts(draft_id),
             role TEXT NOT NULL, archive BLOB NOT NULL, metadata_json TEXT NOT NULL,
@@ -88,6 +88,9 @@ def initialize_assignment_admin(target):
             action TEXT NOT NULL, created_at TEXT NOT NULL)""",
     ):
         target.execute(sql)
+    columns = {row[1] for row in target.execute("PRAGMA table_info(instructor_assignment_drafts)")}
+    if "deleted_at" not in columns:
+        target.execute("ALTER TABLE instructor_assignment_drafts ADD COLUMN deleted_at TEXT")
 
 
 def _zip_files(content, language):
@@ -340,7 +343,10 @@ class AssignmentAdminService:
 
     @staticmethod
     def _row(connection, course, draft_id):
-        row = connection.execute("SELECT * FROM instructor_assignment_drafts WHERE draft_id=? AND course_key=?", (draft_id, course)).fetchone()
+        row = connection.execute(
+            "SELECT * FROM instructor_assignment_drafts WHERE draft_id=? AND course_key=? AND deleted_at IS NULL",
+            (draft_id, course),
+        ).fetchone()
         if row is None:
             raise PlatformNotFound("과제 초안을 찾을 수 없습니다.")
         return row
@@ -375,9 +381,12 @@ class AssignmentAdminService:
                     if previous["document_digest"] != document_digest:
                         raise PlatformConflict("같은 생성 요청의 내용이 변경되었습니다. 새 등록 화면을 여세요.")
                     return self.get_draft(course, previous["draft_id"])
-            if connection.execute("SELECT COUNT(*) FROM instructor_assignment_drafts WHERE course_key=?", (course,)).fetchone()[0] >= 100 or connection.execute("SELECT COUNT(*) FROM instructor_assignment_drafts").fetchone()[0] >= 500:
+            if connection.execute("SELECT COUNT(*) FROM instructor_assignment_drafts WHERE course_key=? AND deleted_at IS NULL", (course,)).fetchone()[0] >= 100 or connection.execute("SELECT COUNT(*) FROM instructor_assignment_drafts WHERE deleted_at IS NULL").fetchone()[0] >= 500:
                 raise PlatformConflict("저장 가능한 초안 한도에 도달했습니다.")
-            connection.execute("INSERT INTO instructor_assignment_drafts VALUES (?,?,1,?,NULL,?,?)", (draft_id, course, json.dumps(document), now, now))
+            connection.execute(
+                "INSERT INTO instructor_assignment_drafts(draft_id,course_key,revision,document_json,published_assignment_id,created_at,updated_at,deleted_at) VALUES (?,?,1,?,NULL,?,?,NULL)",
+                (draft_id, course, json.dumps(document), now, now),
+            )
             if creation_key is not None:
                 connection.execute("INSERT INTO instructor_assignment_create_requests VALUES (?,?,?,?)", (course, creation_key, draft_id, document_digest))
             self._event(connection, course, draft_id, "created")
@@ -520,7 +529,10 @@ class AssignmentAdminService:
 
     def list_drafts(self, course):
         with self.state._connection() as connection:
-            ids = [row[0] for row in connection.execute("SELECT draft_id FROM instructor_assignment_drafts WHERE course_key=? ORDER BY updated_at DESC", (course,))]
+            ids = [row[0] for row in connection.execute(
+                "SELECT draft_id FROM instructor_assignment_drafts WHERE course_key=? AND deleted_at IS NULL ORDER BY updated_at DESC",
+                (course,),
+            )]
         return [self.get_draft(course, draft_id) for draft_id in ids]
 
     def update_draft(self, course, draft_id, revision, **fields):
@@ -534,6 +546,28 @@ class AssignmentAdminService:
             connection.execute("UPDATE instructor_assignment_drafts SET document_json=?,revision=revision+1,updated_at=? WHERE draft_id=?", (json.dumps(document), utc_iso(), draft_id))
             self._event(connection, course, draft_id, "updated")
         return self.get_draft(course, draft_id)
+
+    def delete_draft(self, course, draft_id, revision):
+        """Remove an unpublished draft from active management while retaining its audit trail."""
+        self._course(course)
+        with self.state._write() as connection:
+            self._course_transaction(connection, course)
+            row = self._row(connection, course, draft_id)
+            if row["revision"] != int(revision):
+                raise PlatformConflict("다른 창에서 변경되었습니다. 최신 초안을 다시 여세요.")
+            if row["published_assignment_id"]:
+                raise PlatformConflict("공개 과제는 초안으로 삭제할 수 없습니다. 과제 보관을 사용하세요.")
+            if connection.execute(
+                "SELECT 1 FROM instructor_assignment_jobs WHERE draft_id=? AND status IN ('queued','running')",
+                (draft_id,),
+            ).fetchone():
+                raise PlatformConflict("검증 대기·실행 중에는 초안을 삭제할 수 없습니다.")
+            now = utc_iso()
+            connection.execute(
+                "UPDATE instructor_assignment_drafts SET deleted_at=?,updated_at=?,revision=revision+1 WHERE draft_id=?",
+                (now, now, draft_id),
+            )
+            self._event(connection, course, draft_id, "deleted")
 
     def upload_zip(self, course, draft_id, revision, role, content):
         self._course(course)
@@ -641,13 +675,16 @@ class AssignmentAdminService:
             source = connection.execute("SELECT draft_id,document_json FROM instructor_assignment_drafts WHERE course_key=? AND published_assignment_id=?", (course, assignment_id)).fetchone()
             if not source:
                 raise PlatformNotFound("웹에서 등록한 공개 과제만 복제할 수 있습니다.")
-            if connection.execute("SELECT COUNT(*) FROM instructor_assignment_drafts WHERE course_key=?", (course,)).fetchone()[0] >= 100 or connection.execute("SELECT COUNT(*) FROM instructor_assignment_drafts").fetchone()[0] >= 500:
+            if connection.execute("SELECT COUNT(*) FROM instructor_assignment_drafts WHERE course_key=? AND deleted_at IS NULL", (course,)).fetchone()[0] >= 100 or connection.execute("SELECT COUNT(*) FROM instructor_assignment_drafts WHERE deleted_at IS NULL").fetchone()[0] >= 500:
                 raise PlatformConflict("저장 가능한 초안 한도에 도달했습니다.")
             document = json.loads(source["document_json"])
             document["title"] = document["title"][:190] + " (복사)"
             document["due_at"] = source_release["due_at"]
             document = _document(document)
-            connection.execute("INSERT INTO instructor_assignment_drafts VALUES (?,?,1,?,NULL,?,?)", (draft_id, course, json.dumps(document), now, now))
+            connection.execute(
+                "INSERT INTO instructor_assignment_drafts(draft_id,course_key,revision,document_json,published_assignment_id,created_at,updated_at,deleted_at) VALUES (?,?,1,?,NULL,?,?,NULL)",
+                (draft_id, course, json.dumps(document), now, now),
+            )
             connection.execute("INSERT INTO instructor_assignment_origins VALUES (?,?,?)", (draft_id, assignment_id, source_release["assignment_key"]))
             connection.execute("INSERT INTO instructor_assignment_uploads(draft_id,role,archive,metadata_json) SELECT ?,role,archive,metadata_json FROM instructor_assignment_uploads WHERE draft_id=?", (draft_id, source["draft_id"]))
             self._event(connection, course, draft_id, "created")
@@ -665,6 +702,29 @@ class AssignmentAdminService:
                 raise PlatformConflict("이미 수락하거나 제출한 학생이 있어 숨길 수 없습니다.")
             connection.execute("UPDATE bundle_assignment_releases SET ready=0,updated_at=? WHERE assignment_id=?", (utc_iso(), assignment_id))
             self._event(connection, course, None, "hidden")
+        return self.state.get_bundle_assignment(assignment_id)
+
+    def archive_release(self, course, assignment_id):
+        """Deactivate a published assignment without destroying receipts or grading evidence."""
+        self._course(course)
+        with self.state._write() as connection:
+            self._course_transaction(connection, course)
+            row = connection.execute(
+                "SELECT active FROM bundle_assignment_releases WHERE course_key=? AND assignment_id=?",
+                (course, assignment_id),
+            ).fetchone()
+            if row is None:
+                raise PlatformNotFound("과제를 찾을 수 없습니다.")
+            if row["active"]:
+                connection.execute(
+                    "UPDATE bundle_assignment_releases SET active=0,ready=0,updated_at=? WHERE assignment_id=?",
+                    (utc_iso(), assignment_id),
+                )
+                draft = connection.execute(
+                    "SELECT draft_id FROM instructor_assignment_drafts WHERE course_key=? AND published_assignment_id=? AND deleted_at IS NULL",
+                    (course, assignment_id),
+                ).fetchone()
+                self._event(connection, course, draft["draft_id"] if draft else None, "archived")
         return self.state.get_bundle_assignment(assignment_id)
 
     def extend_deadline(self, course, assignment_id, due_at, reason):

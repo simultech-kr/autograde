@@ -62,13 +62,24 @@ import {
 import { ServiceAddressController } from "./serviceAddress";
 import { AssignmentTreeItem, AssignmentsTreeProvider } from "./tree";
 import type { Assignment, GradeResult, ResultDiagnostic, SubmissionSummary } from "./types";
-import { clearResultPanel, showResultPanel } from "./resultPanel";
+import { clearResultPanel, pauseDisplayedResult, refreshDisplayedResult, showResultPanel } from "./resultPanel";
+import { prepareClaimWorkspace } from "./claimWorkspace";
+import { saveAssignmentDocuments } from "./submissionPreflight";
+import { SubmissionResultMonitor, type ResultScope } from "./submissionResultMonitor";
 import { DownloadDiagnostic, DownloadFailure, stageLabels } from "./downloadDiagnostic";
 import { clearDownloadDiagnostic, rememberDownloadDiagnostic, showDownloadDiagnostic } from "./downloadDiagnosticPanel";
-let diagnosticExtensionVersion = "0.5.4";
+let diagnosticExtensionVersion = "0.5.5";
 
 const SUCCESSFUL_SUBMISSION_STATES = new Set(["accepted", "queued", "running", "graded", "published"]);
 const FAILED_SUBMISSION_STATES = new Set(["rejected", "infra_failed", "assessment_failed"]);
+
+interface ResultUi {
+  readonly monitor: SubmissionResultMonitor;
+  readonly tree: AssignmentsTreeProvider;
+  readonly diagnostics: vscode.DiagnosticCollection;
+  assignmentId?: string;
+  onAuthenticationRequired(state: EphemeralStudentState): void;
+}
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   await Promise.all([
@@ -90,6 +101,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const treeView = vscode.window.createTreeView("autograde.assignments", { treeDataProvider: treeProvider });
   const output = vscode.window.createOutputChannel("Autograde");
   const diagnostics = vscode.languages.createDiagnosticCollection("autograde");
+  const resultMonitor = new SubmissionResultMonitor(client);
   const connectionMonitor = new ServerConnectionMonitor(
     transport,
     vscode.window.createStatusBarItem(
@@ -100,12 +112,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   );
   let studentState = new EphemeralStudentState();
   let authenticationUiState = false;
+  let submitting = false;
   const extensionVersion = String(context.extension.packageJSON.version ?? "0.0.0");
   diagnosticExtensionVersion = extensionVersion;
 
   const updateAuthenticationUI = async (knownState?: boolean): Promise<boolean> => {
     const authenticated = knownState ?? await tokens.hasSession();
-    if (!authenticated) { clearResultPanel(); clearDownloadDiagnostic(); }
+    if (!authenticated) { resultMonitor.cancel(); clearResultPanel(); clearDownloadDiagnostic(); }
     authenticationUiState = authenticated;
     await Promise.all([
       vscode.commands.executeCommand(
@@ -125,6 +138,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       ? "현재 수령 코드로 수락한 과제만 표시합니다. 과제를 펼쳐 다운로드·제출 기록을 확인하세요."
       : "학생 웹에서 받은 수령 코드를 입력해 과제를 시작하세요.";
     return authenticated;
+  };
+
+  const resultUi: ResultUi = {
+    monitor: resultMonitor, tree: treeProvider, diagnostics,
+    onAuthenticationRequired: (expectedState) => {
+      if (studentState !== expectedState || !expectedState.isActive()) return;
+      void tokens.clear();
+      resultMonitor.cancel();
+      clearResultPanel(); clearDownloadDiagnostic();
+      studentState = clearStudentSessionResidue(studentState, treeProvider, output, diagnostics);
+      void updateAuthenticationUI(false);
+      void vscode.window.showWarningMessage("로그인이 만료되어 자동 결과 확인을 중단했습니다. 접수·채점은 유지됩니다. 학생 웹에서 새 수령 코드를 받아 연결하세요.");
+    },
   };
 
   const refreshAssignments = async (showSuccess = true): Promise<readonly Assignment[]> => {
@@ -148,6 +174,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   };
 
   const auth = new AuthenticationController(client, extensionVersion, (authenticated) => {
+    resultMonitor.cancel();
     clearDownloadDiagnostic();
     clearResultPanel();
     studentState = clearStudentSessionResidue(studentState, treeProvider, output, diagnostics);
@@ -157,6 +184,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
   });
   const assignmentClaims = new AssignmentClaimController(client, extensionVersion, async (assignmentId) => {
+    resultMonitor.cancel();
     clearDownloadDiagnostic();
     clearResultPanel();
     studentState = clearStudentSessionResidue(studentState, treeProvider, output, diagnostics);
@@ -198,6 +226,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   });
 
   const clearSessionUiForAddressChange = async (): Promise<void> => {
+    resultMonitor.cancel();
     clearResultPanel();
     studentState = clearStudentSessionResidue(studentState, treeProvider, output, diagnostics);
     await updateAuthenticationUI(false);
@@ -212,6 +241,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     { dispose: clearDownloadDiagnostic },
     vscode.commands.registerCommand("autograde.downloadDiagnostics", () => showDownloadDiagnostic()),
     { dispose: clearResultPanel },
+    { dispose: () => resultMonitor.cancel() },
+    vscode.commands.registerCommand("autograde.refreshDisplayedResult", () => runCommand(refreshDisplayedResult)),
+    vscode.commands.registerCommand("autograde.pauseDisplayedResult", pauseDisplayedResult),
     connectionMonitor,
     treeView,
     output,
@@ -229,10 +261,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand(
       "autograde.redeemAssignmentClaim",
       () => runCommand(async () => {
+        ensureSupportedWorkspacePlatform("수령 코드 입력 및 다운로드");
+        if (!await prepareClaimWorkspace()) return;
         if (!vscode.workspace.isTrusted) {
           throw new Error("수령 코드로 파일을 받으려면 현재 workspace를 신뢰해야 합니다.");
         }
-        ensureSupportedWorkspacePlatform("수령 코드 입력 및 다운로드");
         await assignmentClaims.redeem();
       }),
     ),
@@ -243,16 +276,34 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     ),
     vscode.commands.registerCommand(
       "autograde.submitCurrentCommit",
-      (item?: AssignmentTreeItem) => runCommand(() => submitCurrentCommit(studentState, client, refreshAssignments, item)),
+      (item?: AssignmentTreeItem) => runCommand(async () => {
+        if (submitting) {
+          void vscode.window.showInformationMessage("앞선 제출의 접수를 확인하고 있습니다. 접수번호가 표시된 뒤 다시 제출하세요.");
+          return;
+        }
+        submitting = true;
+        try { await submitCurrentCommit(studentState, client, refreshAssignments, resultUi, item); }
+        finally { submitting = false; }
+      }),
     ),
     vscode.commands.registerCommand(
       "autograde.submissionHistory",
-      (item?: AssignmentTreeItem) => runCommand(() => viewSubmissionHistory(studentState, client, treeProvider, output, diagnostics, item)),
+      (item?: AssignmentTreeItem) => runCommand(() => viewSubmissionHistory(studentState, client, treeProvider, output, diagnostics, resultUi, item)),
     ),
     vscode.commands.registerCommand(
       "autograde.viewLatestResult",
-      (item?: AssignmentTreeItem) => runCommand(() => viewLatestResult(studentState, client, treeProvider, output, diagnostics, item)),
+      (item?: AssignmentTreeItem) => runCommand(() => viewLatestResult(studentState, client, treeProvider, output, diagnostics, resultUi, item)),
     ),
+    treeView.onDidChangeSelection(event => {
+      const selected = event.selection[0];
+      if (selected instanceof AssignmentTreeItem) {
+        if (resultUi.assignmentId && resultUi.assignmentId !== selected.assignment.id) {
+          resultMonitor.cancel();
+          clearResultPanel();
+        }
+        resultUi.assignmentId = selected.assignment.id;
+      }
+    }),
     vscode.workspace.onDidGrantWorkspaceTrust(() => treeProvider.setAssignments(treeProvider.getAssignments())),
     vscode.workspace.onDidChangeConfiguration((event) => {
       if (
@@ -294,6 +345,7 @@ async function submitCurrentCommit(
   studentState: EphemeralStudentState,
   client: AutogradeClient,
   refreshAssignments: (showSuccess?: boolean) => Promise<readonly Assignment[]>,
+  resultUi: ResultUi,
   selectedItem?: AssignmentTreeItem,
 ): Promise<void> {
   if (!vscode.workspace.isTrusted) {
@@ -319,7 +371,7 @@ async function submitCurrentCommit(
     }
     const target = await selectBundleSubmissionTarget(client, assignments, current.id, true);
     if (target) {
-      await submitCurrentBundle(studentState, client, refreshAssignments, target.rootPath, current);
+      await submitCurrentBundle(studentState, client, target.rootPath, current, resultUi);
     }
     return;
   }
@@ -329,9 +381,9 @@ async function submitCurrentCommit(
       await submitCurrentBundle(
         studentState,
         client,
-        refreshAssignments,
         target.rootPath,
         target.assignment,
+        resultUi,
       );
       return;
     }
@@ -477,9 +529,9 @@ async function submitCurrentCommit(
 async function submitCurrentBundle(
   studentState: EphemeralStudentState,
   client: AutogradeClient,
-  refreshAssignments: (showSuccess?: boolean) => Promise<readonly Assignment[]>,
   assignmentRoot: string,
   assignment: Assignment,
+  resultUi: ResultUi,
 ): Promise<void> {
   if (!isAssignmentDownloadable(assignment)) {
     throw new Error(`과제 bundle이 아직 다운로드 가능한 상태가 아닙니다 (${assignment.status ?? "not_ready"}).`);
@@ -494,6 +546,19 @@ async function submitCurrentBundle(
       "과제 폴더의 표시가 현재 서버 과제와 일치하지 않습니다. 과제 목록에서 다시 다운로드하세요.",
     );
   }
+
+  const origin = client.transport.getBaseUrl();
+  const stillCurrent = (): boolean => studentState.isActive() && client.transport.getBaseUrl() === origin;
+  const submissionWorkspace = (vscode.workspace.workspaceFolders ?? []).filter(folder => {
+    const relative = path.relative(folder.uri.fsPath, assignmentRoot);
+    return relative !== ".." && !relative.startsWith(".." + path.sep) && !path.isAbsolute(relative);
+  }).sort((left, right) => right.uri.fsPath.length - left.uri.fsPath.length)[0];
+  if (!submissionWorkspace) throw new Error("제출할 과제가 포함된 수업 폴더를 먼저 여세요.");
+  if (!await saveAssignmentDocuments(assignmentRoot, () => vscode.workspace.textDocuments, async (files) => {
+    const save = "저장 후 제출";
+    return await vscode.window.showInformationMessage("이 과제에 저장하지 않은 코드가 있습니다.",
+      { modal: true, detail: `${files.join("\n")}\n\n이 파일들을 저장한 뒤 제출합니다. 다른 과제의 파일은 저장하지 않습니다.` }, save) === save;
+  }, stillCurrent, submissionWorkspace.uri)) return;
 
   const bundle = await vscode.window.withProgress(
     {
@@ -512,6 +577,7 @@ async function submitCurrentBundle(
         `원본 크기: ${formatBytes(bundle.sourceBytes)}`,
         `Bundle SHA-256: ${bundle.sha256.slice(0, 16)}…`,
         `과제 폴더: ${assignmentRoot}`,
+        "저장된 디스크 파일을 제출합니다. 이후 변경은 다음 제출에 반영됩니다.",
         ".git, .autograde 및 일반적인 build/cache 디렉터리는 포함하지 않습니다.",
         "공용 PC에서는 표시된 과제 폴더가 본인의 작업물인지 확인하세요. 로그아웃해도 이 파일은 삭제되지 않습니다.",
       ].join("\n"),
@@ -531,6 +597,9 @@ async function submitCurrentBundle(
     bundleSha256: bundle.sha256,
   };
   const attempt = await getOrCreateSubmissionAttempt(studentState, attemptRequest);
+  const resultScope = resultUi.monitor.begin();
+  resultUi.assignmentId = assignment.id;
+  clearResultPanel();
   let submission: SubmissionSummary;
   try {
     submission = await client.submitBundle(
@@ -550,41 +619,16 @@ async function submitCurrentBundle(
   await rememberSubmission(studentState, client.transport.getBaseUrl(), assignment.id, submission.id);
   await clearSubmissionAttempt(studentState, attemptRequest, attempt.idempotencyKey);
 
-  // A new receipt supersedes the previous result panel immediately.
-  if (submission.sourceDigest) showResultPanel(assignment, {
-    state: submission.state === "published" ? "graded" : submission.state,
-    sourceDigest: submission.sourceDigest, previousBest: submission.previousBest, rubric: [], diagnostics: [],
-  }, submission.id, "이번 제출");
-
-  if (
-    !SUCCESSFUL_SUBMISSION_STATES.has(submission.state.toLowerCase()) &&
-    !FAILED_SUBMISSION_STATES.has(submission.state.toLowerCase())
-  ) {
-    submission = await waitForSubmissionResolution(client, submission);
-  }
-  if (!studentState.isActive()) {
-    return;
-  }
-  const normalizedState = submission.state.toLowerCase();
-  if (FAILED_SUBMISSION_STATES.has(normalizedState)) {
-    throw new Error(`제출이 완료되지 않았습니다 (${submission.state}). 과제 상태를 확인하세요.`);
-  }
-  if (SUCCESSFUL_SUBMISSION_STATES.has(normalizedState)) {
-    void vscode.window.showInformationMessage(
-      `${assignment.title} 제출이 접수되었습니다.`,
-    );
-  } else {
-    void vscode.window.showInformationMessage(
-      `${assignment.title} 제출을 서버가 검증 중입니다. 잠시 후 상태를 새로고침하세요.`,
-    );
-  }
-  await refreshAssignments(false);
+  resultUi.tree.setAssignments(resultUi.tree.getAssignments().map(item => item.id === assignment.id
+    ? { ...item, latestSubmission: submission } : item));
+  watchSubmissionResult(resultUi, resultScope, studentState, client, assignment, submission, "이번 제출");
+  void vscode.window.showInformationMessage(`${assignment.title} 제출 접수 완료 · 접수번호 ${submission.id}. 채점 결과는 자동으로 확인합니다.`);
 }
 
 async function viewSubmissionHistory(
   studentState: EphemeralStudentState, client: AutogradeClient,
   tree: AssignmentsTreeProvider, output: vscode.OutputChannel,
-  diagnostics: vscode.DiagnosticCollection, item?: AssignmentTreeItem,
+  diagnostics: vscode.DiagnosticCollection, resultUi: ResultUi, item?: AssignmentTreeItem,
 ): Promise<void> {
   const origin = client.getBaseUrl();
   const checkSession = () => {
@@ -611,12 +655,17 @@ async function viewSubmissionHistory(
   if (!action) return;
   checkSession();
   if (action === "이 제출의 채점 결과") {
+    const scope = resultUi.monitor.begin();
+    resultUi.assignmentId = assignment.id;
+    clearResultPanel();
     try {
       const result = await client.getResult(selection.version.id);
       checkSession();
+      if (!scope.isCurrent()) return;
       if (result.sourceDigest !== selection.version.sourceDigest) throw new Error("채점 결과의 제출 파일 정보가 일치하지 않습니다.");
       diagnostics.clear(); renderResult(output, assignment, result, selection.version.id, "과거 제출 기록 · " + new Date(selection.version.receivedAt).toLocaleString());
     } catch (error) {
+      if (!scope.isCurrent()) return;
       checkSession();
       if (error instanceof ApiError && error.status === 404 && error.code === "result_not_available") {
         void vscode.window.showInformationMessage("아직 공개된 채점 결과가 없습니다."); return;
@@ -959,9 +1008,7 @@ async function selectCourseWorkspaceFolder(
 ): Promise<vscode.WorkspaceFolder | undefined> {
   const folders = vscode.workspace.workspaceFolders ?? [];
   if (folders.length === 0) {
-    throw new Error(
-      "과제를 다운로드하기 전에 빈 수업 폴더를 VS Code workspace로 열고 다시 로그인하세요.",
-    );
+    throw new DownloadFailure("AG-DL-WORKSPACE-NOT-OPEN");
   }
   if (folders.length === 1) {
     return folders[0];
@@ -1057,6 +1104,7 @@ async function viewLatestResult(
   treeProvider: AssignmentsTreeProvider,
   output: vscode.OutputChannel,
   diagnostics: vscode.DiagnosticCollection,
+  resultUi: ResultUi,
   selectedItem?: AssignmentTreeItem,
 ): Promise<void> {
   const serviceBaseUrl = client.transport.getBaseUrl();
@@ -1073,48 +1121,57 @@ async function viewLatestResult(
   }
   output.clear();
   diagnostics.clear();
+  const scope = resultUi.monitor.begin();
+  resultUi.assignmentId = assignment.id;
+  clearResultPanel();
   const stored = getRememberedSubmissions(studentState, serviceBaseUrl);
-  const fresh = (await client.getAssignments()).find(candidate => candidate.id === assignment.id);
-  if (!studentState.isActive()) return;
+  const refreshed = await client.getAssignments();
+  const fresh = refreshed.find(candidate => candidate.id === assignment.id);
+  if (!studentState.isActive() || !scope.isCurrent()) return;
+  treeProvider.setAssignments(refreshed);
   const submissionId = fresh?.latestSubmission?.id ?? stored[assignment.id];
   if (!submissionId) {
-    throw new Error("이 과제의 제출 내역이 없습니다.");
-  }
-
-  const submission = await client.getSubmission(submissionId);
-  if (!studentState.isActive()) {
-    return;
-  }
-  if (!new Set(["graded", "published"]).has(submission.state.toLowerCase())) {
-    showResultPanel(assignment, { state: submission.state, sourceDigest: submission.sourceDigest, headSha: submission.headSha, previousBest: submission.previousBest, rubric: [], diagnostics: [] }, submissionId, "선택 과제의 최신 제출");
-    output.appendLine(`${assignment.title}`);
-    output.appendLine(`상태: ${submission.state}`);
-    if (submission.headSha) {
-      output.appendLine(`Commit: ${submission.headSha}`);
-    }
-    if (submission.sourceDigest) {
-      output.appendLine(`Bundle SHA-256: ${submission.sourceDigest}`);
-    }
+    void vscode.window.showInformationMessage("아직 제출한 코드가 없습니다. 과제를 저장하고 제출한 뒤 결과를 확인하세요.");
     return;
   }
 
-  let result: GradeResult;
-  try {
-    result = await client.getResult(submissionId);
-  } catch (error) {
-    if (error instanceof ApiError && [404, 409, 425].includes(error.status)) {
-      if (!studentState.isActive()) return;
-      showResultPanel(assignment, { state: "graded", rubric: [], diagnostics: [] }, submissionId, "선택 과제의 최신 제출");
-      void vscode.window.showInformationMessage("채점은 끝났지만 결과가 아직 공개되지 않았습니다.");
-      return;
-    }
-    throw error;
-  }
-  if (!studentState.isActive()) {
-    return;
-  }
-  renderResult(output, assignment, result, submissionId, "선택 과제의 최신 제출");
-  publishDiagnostics(diagnostics, result.diagnostics, assignment.assignmentPath);
+  const submission = fresh?.latestSubmission ?? await client.getSubmission(submissionId);
+  if (!studentState.isActive() || !scope.isCurrent()) return;
+  watchSubmissionResult(resultUi, scope, studentState, client, assignment, submission, "선택 과제의 최신 제출");
+}
+
+function watchSubmissionResult(
+  ui: ResultUi, scope: ResultScope, studentState: EphemeralStudentState, client: AutogradeClient,
+  assignment: Assignment, submission: SubmissionSummary, context: string,
+): void {
+  const origin = client.transport.getBaseUrl();
+  let first = true;
+  ui.assignmentId = assignment.id;
+  ui.monitor.start(scope, {
+    submission,
+    isSessionCurrent: () => studentState.isActive() && client.transport.getBaseUrl() === origin,
+    onAuthenticationRequired: () => ui.onAuthenticationRequired(studentState),
+    onUpdate: ({ result, notice, watching }) => {
+      showResultPanel(assignment, result, submission.id, context, {
+        refresh: () => scope.isCurrent() ? ui.monitor.refresh() : Promise.resolve(),
+        pause: watching ? () => { if (scope.isCurrent()) ui.monitor.pause(); } : undefined,
+        onClose: () => { if (scope.isCurrent()) ui.monitor.cancel(); },
+        notice, reveal: first,
+      });
+      first = false;
+      if (result.state === "published") publishDiagnostics(ui.diagnostics, result.diagnostics, assignment.assignmentPath);
+      else ui.diagnostics.clear();
+      const current = ui.tree.getAssignments();
+      const displayed = current.find(item => item.id === assignment.id);
+      if (displayed && (!displayed.latestSubmission || displayed.latestSubmission.id === submission.id)) {
+        ui.tree.setAssignments(current.map(item => item.id === assignment.id ? { ...item, latestSubmission: {
+          id: submission.id, state: result.state, sourceDigest: result.sourceDigest, headSha: result.headSha,
+          score: result.state === "published" ? result.score : undefined,
+          maxScore: result.state === "published" ? result.maxScore : undefined, previousBest: result.previousBest,
+        } } : item));
+      }
+    },
+  });
 }
 
 function renderResult(output: vscode.OutputChannel, assignment: Assignment, result: GradeResult, receipt: string, context: string): void {
