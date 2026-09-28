@@ -224,6 +224,14 @@ class CoursePortal:
             response = self.instructor.request(method, path, form, cookies, origin, authorization)
             if response is not None:
                 return response
+        live = re.fullmatch(r'/courses/([A-Za-z0-9][A-Za-z0-9._~-]{0,127})/instructor/submissions/live', path)
+        if live and live[1] in self.services:
+            # Legacy portal retains its existing Basic-only read authorization.
+            service = self.services[live[1]]
+            service._authorize_instructor(authorization or '')
+            if method != 'GET':
+                raise PlatformAPIError(405, 'method_not_allowed', '조회만 가능한 경로입니다.')
+            return service.instructor_dashboard_updates(authorization or '', portal=True)
         comparison = re.fullmatch(r'/courses/([a-z0-9_-]{1,96})/instructor/submissions/(bsub_[A-Za-z0-9_-]+)/compare/(bsub_[A-Za-z0-9_-]+)(?:/files/([0-9]{1,5}))?', path)
         if comparison and method == 'GET' and comparison[1] in self.services:
             return self.services[comparison[1]].instructor_submission_page(authorization or '', comparison[2],

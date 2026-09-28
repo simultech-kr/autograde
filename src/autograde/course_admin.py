@@ -104,10 +104,12 @@ class CourseAdminService:
             return _course(db, course_key)
 
     def management_overview(self):
-        """Credential-free offering summaries; latest active enrollment x release only.
+        """Credential-free summaries of current active, published requirements.
 
         Read one SQLite snapshot without building a student x assignment matrix.
         A repeated submission replaces its previous status, not the denominator.
+        Hidden releases remain reviewable in submission history, but do not count
+        toward current requirements or their completion totals.
         """
         with self.state._connection() as db:
             db.execute('BEGIN')
@@ -118,14 +120,14 @@ class CourseAdminService:
                 'SUM(CASE WHEN e.active=1 AND s.active=1 THEN 1 ELSE 0 END) active_students '
                 'FROM platform_enrollments e JOIN platform_students s ON s.id=e.student_id GROUP BY e.course_key')}
             assignments = {row['course_key']: row['count'] for row in db.execute(
-                'SELECT course_key,COUNT(*) count FROM bundle_assignment_releases WHERE active=1 GROUP BY course_key')}
+                'SELECT course_key,COUNT(*) count FROM bundle_assignment_releases WHERE active=1 AND ready=1 GROUP BY course_key')}
             latest = db.execute('''
                 WITH ranked AS (
                   SELECT a.course_key,r.state,r.submission_id,
                     ROW_NUMBER() OVER (PARTITION BY r.student_id,r.assignment_id
                       ORDER BY r.received_at DESC,r.rowid DESC) position
                   FROM bundle_submission_requests r
-                  JOIN bundle_assignment_releases a ON a.assignment_id=r.assignment_id AND a.active=1
+                  JOIN bundle_assignment_releases a ON a.assignment_id=r.assignment_id AND a.active=1 AND a.ready=1
                   JOIN platform_enrollments e ON e.student_id=r.student_id AND e.course_key=a.course_key AND e.active=1
                   JOIN platform_students s ON s.id=r.student_id AND s.active=1
                 )

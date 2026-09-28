@@ -55,7 +55,8 @@ def test_review_auth_course_boundary_history_and_escaping(portal, tmp_path, admi
     assert request(web, BASE + '/bsub_missing', authorization=AUTH)[0] == 404
     status, _, raw = request(web, BASE, authorization=AUTH)
     assert status == 200 and (path + '"').encode() in raw
-    assert '확인 필요한 제출'.encode() in raw
+    assert '<option value="attention">확인 필요</option>'.encode() in raw
+    assert 'data-results-content'.encode() in raw
     assert store.get(bundle.digest).path.read_bytes() == bundle.path.read_bytes()
 
 

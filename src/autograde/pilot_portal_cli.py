@@ -145,6 +145,7 @@ def run(config, *, isolated=False):
                 authorize=services[values["course_key"]]._authorize_instructor,
                 secret=secret, web_url=values["web_public_base_url"], rubrics=rubrics, identities=identities,
                 submissions=lambda key, auth: services[key].instructor_dashboard_page(auth, portal=True),
+                submission_updates=lambda key, auth: services[key].instructor_dashboard_updates(auth, portal=True),
                 submission_review=lambda key, auth, sid, index, **options: services[key].instructor_submission_page(auth, sid, index, **options))
         api = CourseAPI(services, secret, courses=courses)
         web = CoursePortal(services, secret, values["web_public_base_url"], values["public_base_url"],

@@ -1,5 +1,7 @@
 # Documentation
 
+- [제출 학생 중심 실시간 결과](operations/live-student-results.md): 제출 우선·최근순, 5초 AJAX 갱신, 필터·스크롤 보존, 검증용 과제 집계 제외와 배포 절차.
+
 - [제출 이후 과제 설명 보완](operations/assignment-document-revisions.md): 같은 과제 ID·수락·제출·점수 보존, 설명 버전·교수자 편집·학생 확장 조회, 서버/확장 업데이트와 미실시 시험.
 
 - [교수자 개인 인증·분반 권한](operations/instructor-personal-auth.md): 개인 계정 발급·분반 할당·세션 회수, 웹/제출 조회 인가와 루브릭 등록자 기록. 기본 공유 모드와 학생 인증은 유지.

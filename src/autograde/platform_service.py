@@ -56,7 +56,7 @@ from .platform_pinner import (
 from .platform_qr import assignment_claim_qr_svg
 from .web_theme import THEME_CSS
 from .instructor_responsive import RESPONSIVE_CSS, result_table
-from .submission_review import attention_reason, render_review, render_comparison
+from .submission_review import render_review, render_comparison
 from .platform_state import (
     DeviceAuthorization,
     DeviceAuthorizationExpired,
@@ -1457,9 +1457,22 @@ class StudentPlatformService:
             "rows": projected_rows,
         }
 
-    def instructor_dashboard_page(self, authorization: str, *, portal: bool = False) -> PlatformResponse:
+    def _instructor_results_fragment(self, dashboard, *, portal):
+        from .instructor_results import fragment
+        return fragment(dashboard, portal=portal,
+                        diagnostics=lambda attempts: self._download_diagnostic_details(attempts, self._aware_now()))
+
+    def instructor_dashboard_updates(self, authorization: str, *, portal: bool = True) -> PlatformResponse:
         dashboard = self.instructor_dashboard(authorization)
-        rows = dashboard["rows"]
+        return PlatformResponse(200, {
+            'course_key': self.course_key, 'generated_at': dashboard['generated_at'],
+            'html': self._instructor_results_fragment(dashboard, portal=portal),
+        }, {'Content-Type': 'application/json; charset=utf-8'})
+
+    def instructor_dashboard_page(self, authorization: str, *, portal: bool = False) -> PlatformResponse:
+        from .instructor_results import STYLE, checked_time
+        from .instructor_results_browser import SCRIPT_TAG
+        dashboard = self.instructor_dashboard(authorization)
         course = dashboard["course"]
         student_management_rows = []
         for student in dashboard["students"]:
@@ -1496,34 +1509,9 @@ class StudentPlatformService:
                 "<p>QR에는 학생 정보나 수령 코드가 포함되지 않습니다.</p>"
                 "</section>"
             )
-        table_rows = []
-        review_items = []
         course_base = '/courses/' + quote(self.course_key, safe='') + '/instructor'
-        for row in rows:
-            score = "—"
-            if row["score"] is not None:
-                score = f"{row['score']:g} / {row['max_score']:g}"
-            reason = attention_reason(row['state'], row['score'], row['max_score'])
-            review_link = '제출 없음'
-            if row['latest_submission_id']:
-                review_url = course_base + '/submissions/' + quote(row['latest_submission_id'], safe='')
-                review_link = (f'<a href="{review_url}">코드·제출 이력 확인</a>' if portal
-                               else '학생 웹의 교수자 화면에서 코드 확인')
-                if '확인 필요' in reason:
-                    review_items.append(f'<li>{html.escape(str(row["student_key"]))} · '
-                                        f'{html.escape(str(row["title"]))} · {reason} · {review_link}</li>')
-            table_rows.append(
-                (html.escape(str(row['student_key'])),
-                 html.escape(str(row['assignment_key'])) + ' · ' + html.escape(str(row['title'])),
-                 html.escape(score), html.escape(str(row['state'] or '미제출')),
-                 reason + '<br>' + review_link,
-                 html.escape(str(row['latest_received_at'] or '—')),
-                 str(int(row['submission_count'])), str(int(row['acceptance_count'])),
-                 str(int(row['download_count'])) + '<br>' + html.escape(row['download_status'])
-                 + self._download_diagnostic_details(row['download_attempts'], self._aware_now()),
-                 html.escape(str(row['release_id'])))
-            )
         dashboard_url = course_base + '/submissions' if portal else '/instructor'
+        updates_url = dashboard_url + '/live' if portal else '/v1/instructor/dashboard/live'
         management_url = course_base if portal else '/instructor'
         body = (
             "<!doctype html><html lang=\"ko\"><head><meta charset=\"utf-8\">"
@@ -1537,29 +1525,26 @@ class StudentPlatformService:
             "th,td{text-align:left;padding:10px 14px;border-bottom:1px solid #dce4ec;white-space:nowrap}"
             "th{background:#eef3f7;font-weight:500}"
             "@media(max-width:600px){main{padding:16px;margin:12px}body>nav{padding:12px}}"
-            + THEME_CSS + RESPONSIVE_CSS + "</style></head><body class=\"responsive-instructor\"><main data-audience=\"instructor\">"
+            + THEME_CSS + RESPONSIVE_CSS + STYLE + "</style></head><body class=\"responsive-instructor\"><main data-audience=\"instructor\">"
             "<div class=\"audience\">교수자 관리 · 교과목 전체 현황</div>"
             f"<h1>{html.escape(self.course_key)} 채점 현황</h1>"
-            f"<p>갱신 시각: {html.escape(str(dashboard['generated_at']))}</p>"
+            f'<section data-live-results="{updates_url}" data-course-key="{html.escape(self.course_key, quote=True)}">'
+            '<div class="results-toolbar"><label>결과 보기 <select data-results-filter disabled>'
+            '<option value="all">전체 · 제출 우선</option><option value="submitted">제출한 학생</option>'
+            '<option value="pending">채점 대기·진행</option><option value="attention">확인 필요</option>'
+            '<option value="unsubmitted">미제출</option></select></label>'
+            f'<a data-results-refresh href="{dashboard_url}">결과 새로 고침</a>'
+            '<button type="button" data-results-toggle hidden>자동 갱신 일시 중지</button></div>'
+            '<p data-results-message role="status" aria-live="polite">자동 갱신 준비 중 · 동작하지 않으면 결과 새로 고침을 눌러 주세요.</p>'
+            f'<p><time data-results-time>{html.escape(checked_time(dashboard["generated_at"]))}</time></p>'
+            '<div data-results-content>' + self._instructor_results_fragment(dashboard, portal=portal) + '</div></section>'
+            + '<h2>교과목 요약</h2>'
+            f"<p>등록 학생 {int(course['enrolled_students'])}명 · "
+            f"활성 학생 {int(course['active_students'])}명 · 수강 정보는 화면을 연 시점 기준입니다.</p>"
             f'<nav class="page-actions" aria-label="결과 화면 이동"><a href="{dashboard_url}">새로 고침</a>'
             f'<a href="#student-results">학생별 결과</a><a href="#student-management">학생 관리</a>'
             f'<a href="#assignment-qr">과제 수령 QR</a><a href="{management_url}">수업 관리</a></nav>'
-            f'<h2>확인 필요한 제출 ({len(review_items)}건)</h2>'
-            '<p>최신 제출의 감점·처리 실패만 모았습니다. 미제출·처리 중은 전체 표에서 확인하세요. '
-            '부정행위 판정이 아니며, 원본 코드는 읽기 전용입니다.</p><ul>'
-            + ''.join(review_items) + '</ul>'
-            "<h2>교과목 요약</h2>"
-            f"<p>등록 학생 {int(course['enrolled_students'])}명 · "
-            f"활성 학생 {int(course['active_students'])}명 · "
-            f"과제 {int(course['assignments'])}개 · "
-            f"수락 {int(course['acceptances'])}건 · "
-            f"제출 {int(course['submissions'])}건</p>"
-            '<h2 id="student-results">학생별 제출·채점 결과</h2>'
-            + result_table(('학생', '과제', '점수', '최신 상태', '확인·코드', '최근 제출',
-                            '제출', '수락', '응답 준비 / 다운로드 진단', '릴리스'), table_rows, '학생·과제별 최신 제출')
-            + '<p>서버 응답 준비 횟수는 학생 PC의 저장 완료가 아닙니다. 진단은 최근 200개 시도의 클라이언트 보고이며, 보고가 없으면 실패로 단정하지 않습니다. IDE 연결 상태·출석·성적의 증거가 아닙니다.</p>'
-            + ("<p>등록된 학생 또는 과제가 없습니다.</p>" if not table_rows else "")
-            + '<h2 id="student-management">학생 관리</h2>'
+            + '<h2 id="student-management">학생 관리 · 수강/접속 정보</h2><p>아래 정보는 화면 조회 시점 기준입니다.</p>'
             + result_table(('학생', '상태', '전용 비밀번호', '수락', '서버 응답 준비', '제출'),
                            student_management_rows, '학생별 수강·접속 현황')
             + (
@@ -1571,7 +1556,7 @@ class StudentPlatformService:
             + "".join(assignment_cards)
             + ("<p>공개된 bundle 과제가 없습니다.</p>" if not assignment_cards else "")
             + '<!-- assignment-qr:end -->'
-            + "</main></body></html>"
+            + "</main>" + SCRIPT_TAG + "</body></html>"
         )
         return PlatformResponse(
             200, body, {"Content-Type": "text/html; charset=utf-8"}

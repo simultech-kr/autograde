@@ -489,7 +489,7 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
             return None, {}, frozenset()
         if (
             self.platform_server.external_access_mode == "insecure-http"
-            and path in {"/instructor", "/v1/instructor/dashboard"}
+            and path in {"/instructor", "/v1/instructor/dashboard", "/v1/instructor/dashboard/live"}
         ):
             # Never solicit or accept the instructor Basic credential over the
             # explicitly plaintext trusted-LAN pilot channel.
@@ -554,6 +554,9 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
                 "instructor_dashboard",
                 frozenset({"GET"}),
                 "instructor_dashboard",
+            ),
+            "/v1/instructor/dashboard/live": (
+                "instructor_dashboard_updates", frozenset({"GET"}), "instructor_dashboard_updates",
             ),
             "/activate": (
                 "activate_page",
@@ -865,6 +868,9 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
                 facade.instructor_dashboard(self._authorization_header()),
                 200,
             )
+        if route == "instructor_dashboard_updates":
+            self._ensure_no_body()
+            return facade.instructor_dashboard_updates(self._authorization_header(), portal=False), 200
         if route == "activate_page":
             self._ensure_no_body()
             return facade.activate_page(query), 200
@@ -1216,7 +1222,11 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
 
         self.send_response(status)
         for name, value in _SECURITY_HEADERS.items():
-            if name == "Content-Security-Policy" and callable(getattr(self.platform_server.facade, "portal_request", None)):
+            results_page = content_type.startswith('text/html') and b'<script data-instructor-results-enhancement>' in body
+            if name == "Content-Security-Policy" and results_page:
+                from .instructor_results_browser import SCRIPT_CSP
+                value += "; style-src 'unsafe-inline'" + SCRIPT_CSP
+            elif name == "Content-Security-Policy" and callable(getattr(self.platform_server.facade, "portal_request", None)):
                 value += "; style-src 'unsafe-inline'"
                 instructor = getattr(self.platform_server.facade, 'instructor', None)
                 if instructor is not None and instructor.matches(urlsplit(self.path).path) and content_type.startswith('text/html'):

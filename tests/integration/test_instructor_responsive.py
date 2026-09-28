@@ -61,8 +61,8 @@ def test_responsive_pages(portal, setup, tmp_path, monkeypatch):
         assert page.index('id="student-results"') < page.index('id="student-management"') < page.index('id="assignment-qr"')
         assert '<body class="responsive-instructor">' in page
         tables = Tables(page)
-        assert (tables.tables, tables.rowheaders, tables.labels) == (2, 4, 36)
-        assert page.count('<div class="cell-value">7 / 10</div>') == 1
+        assert (tables.tables, tables.rowheaders, tables.labels) == (2, 4, 24)
+        assert page.count('<div class="cell-value">7 / 10<br>') == 1
         (tmp_path / (name + '.html')).write_text(page)
 
     status, _, legacy = request(portal[0], '/courses/come3105/instructor', authorization=AUTH)

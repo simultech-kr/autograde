@@ -7056,7 +7056,11 @@ class PlatformStateStore:
         include_inactive_assignments: bool = False,
         limit: int = 10_000,
     ) -> List[BundleDashboardRow]:
-        """Return a bounded active-roster x assignment operational matrix."""
+        """Return current assignment requirements and actual hidden submissions.
+
+        Unpublished validation releases must not create unsubmitted rows. An
+        explicit assignment selection preserves the full historical roster view.
+        """
 
         course_key = _required_text(course_key, "course_key")
         if assignment_id is not None:
@@ -7070,8 +7074,17 @@ class PlatformStateStore:
         if assignment_id is not None:
             assignment_predicate += " AND a.assignment_id = ?"
             parameters.append(assignment_id)
+        else:
+            assignment_predicate += " AND (a.ready = 1 OR s.submission_count > 0)"
         if not include_inactive_assignments:
             assignment_predicate += " AND a.active = 1"
+        order_by = "a.assignment_key, a.release_id, p.student_key, p.id"
+        if assignment_id is None:
+            # Apply submission priority before the bounded query can discard rows.
+            order_by = (
+                "(COALESCE(s.submission_count, 0) > 0) DESC, "
+                "latest.received_at DESC, p.student_key, a.assignment_key, a.release_id, p.id"
+            )
         parameters.append(limit)
         with self._connection() as connection:
             rows = connection.execute(
@@ -7152,8 +7165,7 @@ class PlatformStateStore:
                   AND a.course_key = ?
                 """
                 + assignment_predicate
-                + " ORDER BY a.assignment_key, a.release_id, "
-                "p.student_key, p.id LIMIT ?",
+                + " ORDER BY " + order_by + " LIMIT ?",
                 parameters,
             ).fetchall()
         return [self._bundle_dashboard_row(row) for row in rows]

@@ -2,7 +2,7 @@
 from html import escape
 
 
-def result_table(headers, rows, caption):
+def result_table(headers, rows, caption, *, row_attributes=None):
     """Cell contents are trusted HTML, already escaped by the calling view.
 
     Keep one semantic table in the DOM: cards are a CSS layout, not duplicated
@@ -10,7 +10,7 @@ def result_table(headers, rows, caption):
     """
     head = ''.join(f'<th scope="col" role="columnheader">{escape(label)}</th>' for label in headers)
     body = []
-    for row in rows:
+    for row_index, row in enumerate(rows):
         if len(row) != len(headers):
             raise ValueError('result table column count mismatch')
         cells = []
@@ -19,7 +19,13 @@ def result_table(headers, rows, caption):
             attributes = 'scope="row" role="rowheader"' if index == 0 else 'role="cell"'
             cells.append(f'<{tag} {attributes}><span class="cell-label" aria-hidden="true">'
                          f'{escape(label)}</span><div class="cell-value">{content}</div></{tag}>')
-        body.append('<tr role="row">' + ''.join(cells) + '</tr>')
+        attributes = ''
+        if row_attributes is not None:
+            for name, value in row_attributes[row_index].items():
+                if name not in {'id', 'data-result-key', 'data-submitted', 'data-pending', 'data-attention', 'data-version'}:
+                    raise ValueError('unsupported result row attribute')
+                attributes += f' {name}="{escape(str(value), quote=True)}"'
+        body.append('<tr role="row"' + attributes + '>' + ''.join(cells) + '</tr>')
     return ('<div class="results-region"><table class="result-table" role="table">'
             f'<caption>{escape(caption)}</caption><thead role="rowgroup"><tr role="row">{head}</tr></thead>'
             '<tbody role="rowgroup">' + ''.join(body) + '</tbody></table></div>')

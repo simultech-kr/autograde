@@ -132,7 +132,7 @@ class InstructorWeb:
     """Small MVC adapter. Authentication always precedes service reads/writes."""
 
     def __init__(self, course_admin, enrollment_admin, assignment_admin, *, authorize,
-                 secret, web_url, submissions=None, submission_review=None, rubrics=None, identities=None):
+                 secret, web_url, submissions=None, submission_review=None, submission_updates=None, rubrics=None, identities=None):
         self.courses = course_admin
         self.students = enrollment_admin
         self.assignments = assignment_admin
@@ -141,6 +141,7 @@ class InstructorWeb:
         self.web_url = web_url.rstrip("/")
         self.submissions = submissions
         self.submission_review = submission_review
+        self.submission_updates = submission_updates
         self.rubrics = rubrics
         self.identities = identities
         self.principal = None
@@ -203,7 +204,9 @@ class InstructorWeb:
         return self._scoped(authorization)._authenticated_request(method, path, form, cookies, origin, authorization)
 
     def _authenticated_request(self, method, path, form, cookies, origin, authorization):
-        polling = bool(re.fullmatch(r'/courses/[a-z0-9_-]{1,96}/instructor/checks/[a-zA-Z0-9_-]+/status', path))
+        polling = bool(re.fullmatch(r'/courses/[a-z0-9_-]{1,96}/instructor/(?:checks/[a-zA-Z0-9_-]+/status|submissions/live)', path))
+        if polling and method != 'GET':
+            raise PlatformAPIError(405, 'method_not_allowed', '조회만 가능한 경로입니다.')
         session, cookie = self._session(cookies, required=method == "POST" or polling)
         if polling:
             cookie = None  # Error pages must not refresh a background reader's cookie either.
@@ -224,6 +227,14 @@ class InstructorWeb:
             else:
                 response = self._root_request(method, path, form, session)
             if isinstance(response, (PlatformResponse, PlatformFileResponse)):
+                if isinstance(response, PlatformResponse) and cookie and match and match[2] == 'submissions':
+                    # A direct results-page visit must establish the same signed
+                    # browser session required by background reads, without
+                    # renewing it on each AJAX request.
+                    secure = '; Secure' if self.web_url.startswith('https://') else ''
+                    headers = dict(response.headers)
+                    headers['Set-Cookie'] = f'{_COOKIE}={cookie}; Path=/; Max-Age=3600; HttpOnly; SameSite=Strict{secure}'
+                    return PlatformResponse(response.status, response.body, headers)
                 return response
             title, body = response
             return self._page(title, body, course=course, cookie=cookie, current_path=path)
@@ -472,6 +483,8 @@ class InstructorWeb:
             if self.submissions:
                 return self.submissions(key, authorization)
             return '제출·채점 현황', '<p>현재 서버에서 제출 현황 연결이 제공되지 않습니다.</p>'
+        if route == 'submissions/live' and method == 'GET' and self.submission_updates:
+            return self.submission_updates(key, authorization)
         if route.startswith('students'):
             return self._student_request(method, course, route, form, session)
         if route.startswith(('assignments', 'assignment-templates', 'grading-templates', 'drafts', 'checks')):

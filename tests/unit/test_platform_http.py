@@ -234,7 +234,7 @@ def test_insecure_http_server_rejects_unsafe_bindings_before_listening(
 
 
 @pytest.mark.parametrize(
-    "path", ("/instructor", "/v1/instructor/dashboard")
+    "path", ("/instructor", "/v1/instructor/dashboard", "/v1/instructor/dashboard/live")
 )
 def test_insecure_http_hides_instructor_routes(path: str) -> None:
     class InstructorFacade(FakeFacade):
@@ -245,6 +245,9 @@ def test_insecure_http_hides_instructor_routes(path: str) -> None:
         def instructor_dashboard(self, authorization: str | None) -> Mapping[str, Any]:
             self.calls.append(("instructor_dashboard", authorization))
             return {"submissions": []}
+
+        def instructor_dashboard_updates(self, authorization, *, portal=False):
+            raise AssertionError('instructor live route must be hidden on insecure HTTP')
 
     facade = InstructorFacade()
     with running_server(facade) as server:
