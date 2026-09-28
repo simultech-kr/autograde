@@ -47,6 +47,7 @@ TARGETS = (
     ("platform_enrollments", "course_key = ?"),
 )
 GUARD = "trg_platform_assignment_acceptance_immutable_delete"
+DOCUMENT_GUARD = "submission_document_no_delete"
 
 
 def _quote(name):
@@ -71,8 +72,8 @@ def _digest(connection, excluded=None):
 
 def _preflight(connection, course):
     version = connection.execute("SELECT MAX(version) FROM platform_schema_migrations").fetchone()[0]
-    if version not in (10, 11, 12, 13):
-        raise ValueError("reset supports schema 10/11/12/13 only; do not modify the database manually")
+    if version not in (10, 11, 12, 13, 14):
+        raise ValueError("reset supports schema 10/11/12/13/14 only; do not modify the database manually")
     if version >= 11:
         if not connection.execute("SELECT 1 FROM admin_courses WHERE course_key=?", (course,)).fetchone():
             raise ValueError("course must already be registered")
@@ -99,18 +100,25 @@ def _preflight(connection, course):
         "AND status = 'pending' LIMIT 1", (course,)
     ).fetchone():
         raise ValueError("unfinished assignment validation exists; resolve it before reset")
-    guard = connection.execute("SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = ?", (GUARD,)).fetchone()
-    if not guard:
-        raise ValueError("expected acceptance immutability guard is missing")
+    guards = {}
+    required_guards = (GUARD, DOCUMENT_GUARD) if version >= 14 else (GUARD,)
+    for name in required_guards:
+        guard = connection.execute("SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = ?", (name,)).fetchone()
+        if not guard:
+            raise ValueError("expected reset immutability guard is missing")
+        guards[name] = guard[0]
     diagnostics = (
         ('download_diagnostic_events', 'attempt_id IN (SELECT attempt_id FROM download_diagnostic_attempts WHERE course_key=?)'),
         ('download_diagnostic_attempts', 'course_key = ?'),
     ) if version >= 12 else ()
-    definitions = diagnostics + TARGETS + ((('admin_roster_previews', 'course_key = ?'),) if version >= 11 else ())
+    # Submission-time explanation references belong to the student records being
+    # reset. Public explanation revisions remain preserved with the assignments.
+    documents = (("bundle_submission_documents", f"submission_id IN ({SUBMISSIONS})"),) if version >= 14 else ()
+    definitions = diagnostics + documents + TARGETS + ((('admin_roster_previews', 'course_key = ?'),) if version >= 11 else ())
     targets = {table: {row[0] for row in connection.execute(
         f"SELECT rowid FROM {_quote(table)} WHERE {where}", (course,)
     )} for table, where in definitions}
-    return targets, guard[0]
+    return targets, guards
 
 
 def _backup(paths, connection):
@@ -176,7 +184,7 @@ def reset_course(paths, course, *, apply=False, expected_state=None, confirm_cou
         # Exclude concurrent CLI writes through preview, backup and deletion.
         connection.execute("BEGIN IMMEDIATE")
         try:
-            targets, guard = _preflight(connection, course)
+            targets, guards = _preflight(connection, course)
             before = _digest(connection)
             report = {"course_key": course, "database": str(paths.database), "expected_state": before,
                       "counts": {table: len(ids) for table, ids in targets.items()},
@@ -193,12 +201,15 @@ def reset_course(paths, course, *, apply=False, expected_state=None, confirm_cou
                 return {"mode": "already_empty", **report}
             protected = _digest(connection, targets)
             backup = _backup(paths, connection)
-            # Temporarily lift only this guard inside the same transaction and
-            # restore its exact SQL before commit. Rollback restores it on error.
-            connection.execute(f"DROP TRIGGER {_quote(GUARD)}")
+            # Lift only the two explicitly supported student-record delete
+            # guards within this backed-up transaction. Public explanation
+            # guards stay enabled. Restore exact SQL; rollback also restores it.
+            for name in guards:
+                connection.execute(f"DROP TRIGGER {_quote(name)}")
             for table in targets:
                 connection.executemany(f"DELETE FROM {_quote(table)} WHERE rowid = ?", ((key,) for key in targets[table]))
-            connection.execute(guard)
+            for sql in guards.values():
+                connection.execute(sql)
             if connection.execute("PRAGMA foreign_key_check").fetchone() or _digest(connection) != protected:
                 raise ValueError("preservation check failed; database reset rolled back")
             connection.commit()

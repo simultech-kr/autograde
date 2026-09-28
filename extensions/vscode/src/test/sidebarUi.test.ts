@@ -4,6 +4,7 @@ import * as path from "node:path";
 import test from "node:test";
 
 import type { Assignment } from "../types";
+import { AssignmentDocumentState } from "../assignmentDocument";
 
 interface ModuleLoader {
   _load(request: string, parent: unknown, isMain: boolean): unknown;
@@ -325,3 +326,24 @@ async function readManifest(): Promise<ExtensionManifest> {
   const raw = await readFile(path.resolve(__dirname, "../../package.json"), "utf8");
   return JSON.parse(raw) as ExtensionManifest;
 }
+
+test("description is one compact child action with session-scoped update indication", async () => {
+  const state = new AssignmentDocumentState();
+  const metadata = {revision: 2, sha256: "sha256:" + "a".repeat(64), updatedAt: "2026-09-22T04:00:00Z", changeNote: "수정"};
+  const assignment: Assignment = {id: "a", title: "A", deliveryMode: "bundle", document: metadata,
+    latestSubmission: {id: "s", state: "published", score: 80, maxScore: 100}};
+  const provider = new AssignmentsTreeProvider(state);
+  provider.setAssignments([assignment]);
+  const root = provider.getChildren()[0]!;
+  let rows = provider.getChildren(root);
+  const row = rows.find(child => child.label === "과제 설명");
+  assert.match(String(row?.description), /v2.*새 설명 있음/);
+  assert.equal(row?.command?.command, "autograde.viewAssignmentDocument");
+  assert.equal(rows.filter(child => child.label === "과제 설명").length, 1);
+  assert.ok(rows.some(child => child.label === "채점 결과 보기"));
+  state.markRead({...metadata, assignmentId: "a", content: "", history: []}, state.begin("a"));
+  rows = provider.getChildren(root);
+  assert.doesNotMatch(String(rows.find(child => child.label === "과제 설명")?.description), /새 설명/);
+  const menus = (await readManifest()).contributes?.menus?.["view/title"] ?? [];
+  assert.ok(!menus.some(item => item.command === "autograde.viewAssignmentDocument"), "no extra toolbar button");
+});

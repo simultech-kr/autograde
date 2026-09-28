@@ -32,6 +32,7 @@ from urllib.parse import urlsplit
 
 from .domain import DatetimeValue, git_oid, utc_iso
 from .download_diagnostics import SCHEMA as _DOWNLOAD_DIAGNOSTICS_SCHEMA
+from .assignment_documents import SCHEMA as _ASSIGNMENT_DOCUMENT_SCHEMA
 from .gitops import normalize_assignment_subpath
 from .platform_runner_image import (
     RunnerImageAvailabilityError,
@@ -1525,6 +1526,7 @@ _MIGRATIONS = {
     11: "",  # Incremental admin repositories initialized atomically below.
     12: _DOWNLOAD_DIAGNOSTICS_SCHEMA,
     13: "",  # Backfill draft soft-delete support in already initialized databases.
+    14: _ASSIGNMENT_DOCUMENT_SCHEMA,
 }
 _LATEST_SCHEMA_VERSION = max(_MIGRATIONS)
 
@@ -6536,6 +6538,8 @@ class PlatformStateStore:
                         now,
                     ),
                 )
+                from .assignment_documents import record_submission
+                record_submission(connection, course_key, assignment_id, submission_id, at=now)
             except sqlite3.IntegrityError as exc:
                 raise PlatformConflict(
                     "bundle submission or receipt identifier is already in use"

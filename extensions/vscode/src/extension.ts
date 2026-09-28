@@ -13,6 +13,8 @@ import {
   TokenManager,
 } from "./api";
 import { AssignmentClaimController } from "./assignmentClaim";
+import { AssignmentDocumentState } from "./assignmentDocument";
+import { AssignmentDocumentView, ASSIGNMENT_DOCUMENT_SCHEME } from "./assignmentDocumentView";
 import { AuthenticationController } from "./auth";
 import {
   createSubmissionBundle,
@@ -68,7 +70,7 @@ import { saveAssignmentDocuments } from "./submissionPreflight";
 import { SubmissionResultMonitor, type ResultScope } from "./submissionResultMonitor";
 import { DownloadDiagnostic, DownloadFailure, stageLabels } from "./downloadDiagnostic";
 import { clearDownloadDiagnostic, rememberDownloadDiagnostic, showDownloadDiagnostic } from "./downloadDiagnosticPanel";
-let diagnosticExtensionVersion = "0.5.5";
+let diagnosticExtensionVersion = "0.5.6";
 
 const SUCCESSFUL_SUBMISSION_STATES = new Set(["accepted", "queued", "running", "graded", "published"]);
 const FAILED_SUBMISSION_STATES = new Set(["rejected", "infra_failed", "assessment_failed"]);
@@ -97,7 +99,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   );
   const tokens = new TokenManager(transport);
   const client = new AutogradeClient(transport, tokens);
-  const treeProvider = new AssignmentsTreeProvider();
+  const documentState = new AssignmentDocumentState();
+  const treeProvider = new AssignmentsTreeProvider(documentState);
+  const documentView = new AssignmentDocumentView(documentState,
+    id => client.getAssignmentDocument(id),
+    id => treeProvider.getAssignments().some(assignment => assignment.id === id && isBundleAssignment(assignment)),
+    () => treeProvider.setAssignments(treeProvider.getAssignments()));
   const treeView = vscode.window.createTreeView("autograde.assignments", { treeDataProvider: treeProvider });
   const output = vscode.window.createOutputChannel("Autograde");
   const diagnostics = vscode.languages.createDiagnosticCollection("autograde");
@@ -118,7 +125,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   const updateAuthenticationUI = async (knownState?: boolean): Promise<boolean> => {
     const authenticated = knownState ?? await tokens.hasSession();
-    if (!authenticated) { resultMonitor.cancel(); clearResultPanel(); clearDownloadDiagnostic(); }
+    if (!authenticated) { resultMonitor.cancel(); clearResultPanel(); clearDownloadDiagnostic(); documentView.clear(); }
     authenticationUiState = authenticated;
     await Promise.all([
       vscode.commands.executeCommand(
@@ -174,6 +181,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   };
 
   const auth = new AuthenticationController(client, extensionVersion, (authenticated) => {
+    documentView.clear();
     resultMonitor.cancel();
     clearDownloadDiagnostic();
     clearResultPanel();
@@ -184,6 +192,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
   });
   const assignmentClaims = new AssignmentClaimController(client, extensionVersion, async (assignmentId) => {
+    documentView.clear();
     resultMonitor.cancel();
     clearDownloadDiagnostic();
     clearResultPanel();
@@ -238,6 +247,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   );
 
   context.subscriptions.push(
+    documentView,
+    treeProvider.onDidChangeTreeData(() => documentView.reconcileAccepted()),
+    vscode.workspace.registerTextDocumentContentProvider(ASSIGNMENT_DOCUMENT_SCHEME, documentView),
+    vscode.commands.registerCommand("autograde.viewAssignmentDocument", (item?: AssignmentTreeItem) => runCommand(async () => {
+      const candidates = treeProvider.getAssignments().filter(isBundleAssignment);
+      const requested = item?.assignment ?? (candidates.length === 1 ? candidates[0] : await pickAssignment(candidates));
+      const assignment = treeProvider.getAssignments().find(candidate => candidate.id === requested?.id && isBundleAssignment(candidate));
+      if (assignment) await documentView.show(assignment);
+    })),
     { dispose: clearDownloadDiagnostic },
     vscode.commands.registerCommand("autograde.downloadDiagnostics", () => showDownloadDiagnostic()),
     { dispose: clearResultPanel },
@@ -296,6 +314,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     ),
     treeView.onDidChangeSelection(event => {
       const selected = event.selection[0];
+      documentView.select(selected instanceof AssignmentTreeItem ? selected.assignment.id : selected?.assignmentId);
       if (selected instanceof AssignmentTreeItem) {
         if (resultUi.assignmentId && resultUi.assignmentId !== selected.assignment.id) {
           resultMonitor.cancel();

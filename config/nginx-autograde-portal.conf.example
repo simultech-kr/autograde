@@ -42,6 +42,18 @@ server {
         access_log off;
         proxy_read_timeout 30s;
     }
+    # 20,000 Unicode characters can exceed 64k after form URL encoding.
+    # Keep the larger limit scoped to the authenticated explanation editor.
+    location ~ ^/courses/[a-z0-9_-]+/instructor/assignments/[A-Za-z0-9_-]+/document$ {
+        client_max_body_size 256k;
+        proxy_request_buffering off;
+        limit_req zone=portal_web burst=20 nodelay;
+        proxy_pass http://127.0.0.1:18081;
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Forwarded-Proto https;
+        access_log off;
+        proxy_read_timeout 30s;
+    }
     location / {
         limit_req zone=portal_web burst=100 nodelay;
         proxy_pass http://127.0.0.1:18081;

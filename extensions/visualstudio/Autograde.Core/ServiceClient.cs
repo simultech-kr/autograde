@@ -182,7 +182,7 @@ namespace Autograde.Core
                 var device = Parse(await Send("POST", "/v1/device-authorizations", new JObject
                 {
                     ["client"] = "visualstudio-extension",
-                    ["extension_version"] = "0.5.6",
+                    ["extension_version"] = "0.5.7",
                     ["device_name"] = "Visual Studio / Windows",
                     ["claim_code"] = claim
                 }, null, null, null, cancel).ConfigureAwait(false));
@@ -262,6 +262,16 @@ namespace Autograde.Core
         {
             var value = Parse(await Authorized("GET", "/v1/assignments", null, null, cancel).ConfigureAwait(false));
             return value["assignments"] as JArray ?? throw new InvalidDataException("과제 목록 오류");
+        }
+        public async Task<AssignmentDocument> DocumentAsync(string assignment, CancellationToken cancel)
+        {
+            try
+            {
+                var value = Parse(await Authorized("GET", "/v1/assignments/" + Uri.EscapeDataString(assignment) + "/document", null, null, cancel).ConfigureAwait(false));
+                return AssignmentDocument.Parse(value, assignment);
+            }
+            // Older servers have no document endpoint. The downloaded README remains usable.
+            catch (ServiceError ex) when (ex.Status == 404) { return null; }
         }
         public async Task<JObject> HistoryAsync(string assignment, CancellationToken cancel)
         {

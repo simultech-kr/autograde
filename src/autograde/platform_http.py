@@ -617,6 +617,8 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
                 )
         if len(parts) == 5 and parts[:3] == ["", "v1", "assignments"]:
             identifier = self._identifier(parts[3])
+            if identifier is not None and parts[4] == "document" and callable(getattr(facade, "get_assignment_document", None)):
+                return ("assignment_document", {"assignment_id": identifier}, frozenset({"GET"}))
             if identifier is not None and parts[4] == "download-diagnostics" and callable(getattr(facade, "report_download_diagnostic", None)):
                 return ("download_diagnostic", {"assignment_id": identifier}, frozenset({"POST"}))
             if identifier is not None and parts[4] == "history" and callable(getattr(facade, "get_bundle_history", None)):
@@ -729,7 +731,8 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
                         finally:
                             facade.admin_upload_slots.release()
                     else:
-                        form = self._read_form(max_bytes=64 * 1024, max_fields=400, multiline=True)
+                        document_edit = re.fullmatch(r"/courses/[^/]+/instructor/assignments/[^/]+/document", path)
+                        form = self._read_form(max_bytes=(256 if document_edit else 64) * 1024, max_fields=400, multiline=True)
                 else:
                     form = self._read_form()
             else:
@@ -798,6 +801,9 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
             )
         if route == "download_diagnostic":
             return facade.report_download_diagnostic(self._bearer_token(), parameters["assignment_id"], self._read_json_object(max_bytes=4096)), 200
+        if route == "assignment_document":
+            self._ensure_no_body()
+            return facade.get_assignment_document(self._bearer_token(), parameters["assignment_id"]), 200
         if route == "bundle_starter":
             self._ensure_no_body()
             return (

@@ -2,7 +2,7 @@
   "name": "autograde-vscode",
   "displayName": "Autograde",
   "description": "C/C++ 실습 과제 수령·다운로드·제출·채점 피드백을 VS Code에서. Linux, macOS, Windows WSL2 수업용 Autograde 확장.",
-  "version": "0.5.5",
+  "version": "0.5.6",
   "private": true,
   "publisher": "autograde",
   "repository": {
@@ -44,10 +44,18 @@
     "onCommand:autograde.refreshAssignments",
     "onCommand:autograde.cloneAssignment",
     "onCommand:autograde.submitCurrentCommit",
-    "onCommand:autograde.viewLatestResult"
+    "onCommand:autograde.viewLatestResult",
+    "onCommand:autograde.viewAssignmentDocument"
   ],
   "contributes": {
     "commands": [
+      {
+        "command": "autograde.viewAssignmentDocument",
+        "title": "Autograde: View Assignment Description",
+        "shortTitle": "과제 설명 보기",
+        "enablement": "autograde.authenticated",
+        "icon": "$(book)"
+      },
       {
         "command": "autograde.downloadDiagnostics",
         "title": "Autograde: Download Diagnostics",
@@ -214,6 +222,11 @@
         }
       ],
       "view/item/context": [
+        {
+          "command": "autograde.viewAssignmentDocument",
+          "when": "view == autograde.assignments && autograde.authenticated && (viewItem == autograde.assignment || viewItem == autograde.assignmentWithSubmission)",
+          "group": "1_assignment@3"
+        },
         {
           "command": "autograde.cloneAssignment",
           "when": "view == autograde.assignments && autograde.authenticated && (viewItem == autograde.assignment || viewItem == autograde.assignmentWithSubmission) && isWorkspaceTrusted",

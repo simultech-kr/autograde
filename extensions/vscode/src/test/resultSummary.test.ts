@@ -31,7 +31,7 @@ test("result panel is read-only and clears at authentication and address boundar
   assert.match(panel, /enableScripts: false/);
   assert.match(panel, /localResourceRoots: \[\]/);
   assert.match(extension, /\{ dispose: clearResultPanel \}/);
-  assert.match(extension, /if \(!authenticated\) \{ resultMonitor.cancel\(\); clearResultPanel\(\); clearDownloadDiagnostic\(\); \}/);
+  assert.match(extension, /if \(!authenticated\) \{ resultMonitor.cancel\(\); clearResultPanel\(\); clearDownloadDiagnostic\(\); documentView.clear\(\); \}/);
   for (const start of ["new AuthenticationController", "new AssignmentClaimController", "const clearSessionUiForAddressChange"]) {
     assert.match(extension.slice(extension.indexOf(start), extension.indexOf(start) + 280), /clearResultPanel\(\)/);
   }

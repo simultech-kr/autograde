@@ -59,6 +59,7 @@ internal static class Program
         checks += await GradingPollerChecks.Run();
         checks += ResultPresentationChecks.Run();
         checks += AssignmentSelectionChecks.Run();
+        checks += await AssignmentDocumentChecks.Run();
         Console.WriteLine(checks + " checks passed");
     }
 

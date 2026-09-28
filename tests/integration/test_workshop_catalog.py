@@ -167,15 +167,17 @@ def test_catalog_validation_failure_publishes_no_new_exercises(tmp_path):
     assert len(drafts) == 2 and all(not draft['published_assignment_id'] for draft in drafts)
 
 
-def test_existing_v12_database_gets_deleted_column(tmp_path):
-    state = PlatformStateStore(tmp_path / 'upgrade.sqlite3')
+def test_existing_v12_database_gets_deleted_column(tmp_path, monkeypatch):
+    from autograde import platform_state
+    with monkeypatch.context() as patch:
+        patch.setattr(platform_state, '_LATEST_SCHEMA_VERSION', 12)
+        state = PlatformStateStore(tmp_path / 'upgrade.sqlite3')
     admin = AssignmentAdminService(state, AppPaths.from_value(tmp_path / 'artifacts').ensure())
     draft = admin.create_draft('come2201', title='Preserved')
     with state._write() as db:
         db.execute('ALTER TABLE instructor_assignment_drafts DROP COLUMN deleted_at')
-        db.execute('DELETE FROM platform_schema_migrations WHERE version=13')
     upgraded = PlatformStateStore(state.database)
-    assert upgraded.schema_version() == 13
+    assert upgraded.schema_version() == PlatformStateStore.LATEST_SCHEMA_VERSION
     with upgraded._connection() as db:
         assert db.execute('SELECT deleted_at FROM instructor_assignment_drafts WHERE draft_id=?', (draft['draft_id'],)).fetchone()[0] is None
     assert AssignmentAdminService(upgraded, admin.paths).get_draft('come2201', draft['draft_id'])['title'] == 'Preserved'

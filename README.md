@@ -27,6 +27,10 @@ VS Code 0.4.0 / Visual Studio 0.2.0 소스에는 [제출 기록·이전 코드 �
 기존 과제의 제출 ID를 유지하는 마감 연장도 제공합니다.
 [업데이트·교수자 명령 안내](docs/operations/course-assignment-management.md)를 먼저 확인하세요.
 
+이미 제출된 과제도 **설명 수정·이력**에서 안내문을 보완할 수 있습니다.
+같은 과제 ID와 기존 점수를 유지하고, 학생에게는 별도 최신 설명을 제공합니다.
+[설명 버전·서버/확장 업데이트 안내](docs/operations/assignment-document-revisions.md).
+
 **학생 웹 20010 → 교과목 선택 → 학번·6자리 전용 비밀번호 → 수령 코드 발급 →
 VS Code API 20000 → 다운로드·제출·결과 확인**입니다. 교과목은 `come3105`, `come2201`입니다.
 [독립 웹 파일럿 실행 안내](docs/operations/independent-web-pilot.md)에 설치, 명단·과제 등록,

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone, timedelta
 from copy import copy
+from difflib import unified_diff
 from html import escape
 import hmac
 import re
@@ -296,7 +297,7 @@ class InstructorWeb:
     @staticmethod
     def _form(action, session, content, *, multipart=False, form_kind=None):
         enctype = 'enctype="multipart/form-data"' if multipart else ''
-        guarded = bool(re.search(r'/instructor/(?:drafts(?:/[a-zA-Z0-9_-]+(?:/(?:uploads/(?:starter|solution|negative)|starter-template|grading-template))?)?|assignments/[a-zA-Z0-9_-]+/extend|rubrics/preview)$', action))
+        guarded = bool(re.search(r'/instructor/(?:drafts(?:/[a-zA-Z0-9_-]+(?:/(?:uploads/(?:starter|solution|negative)|starter-template|grading-template))?)?|assignments/[a-zA-Z0-9_-]+/(?:extend|document)|rubrics/preview)$', action))
         guarded = guarded or bool(re.search(r'/rubrics/versions/[^/]+/[0-9]+/submissions/bsub_[A-Za-z0-9_-]+$', action))
         guard = 'data-dirty-guard' if guarded else ''
         notice = '<p data-save-status role="status" aria-live="polite">각 영역의 저장 버튼을 눌러야 보존됩니다.</p>' if guarded else ''
@@ -357,6 +358,8 @@ class InstructorWeb:
                     target = route.rsplit('/', 1)[0]
                 elif re.fullmatch(r'assignments/[a-zA-Z0-9_-]+/(extend|hide|archive)', route):
                     target = route.rsplit('/', 1)[0]
+                elif re.fullmatch(r'assignments/[a-zA-Z0-9_-]+/document', route):
+                    target = route
                 else:
                     return None
                 response = self._course_request('GET', course, target, {}, session, authorization)
@@ -676,6 +679,29 @@ class InstructorWeb:
             return '과제 관리', '<p>현재 서버에서 과제 등록 기능을 사용할 수 없습니다.</p>'
         if method == 'GET' and route == 'assignments':
             return self._assignment_list(course, form)
+        document_match = re.fullmatch(r'assignments/([a-zA-Z0-9_-]+)/document', route)
+        if document_match:
+            assignment_id = document_match[1]
+            document = self.assignments.get_assignment_document(key, assignment_id)
+            if method == 'POST':
+                if document is None:
+                    raise ValueError('현재는 웹에서 등록한 과제의 설명만 수정할 수 있습니다. 기존 배포 자료는 유지됩니다.')
+                if course['status'] == 'archived':
+                    raise PlatformConflict('보관된 수업에서는 설명을 변경할 수 없습니다.')
+                if _value(form, 'confirm') != 'yes':
+                    raise ValueError('채점 기준을 변경하지 않는 설명 보완이며 학생 공개 자료임을 확인해 주세요.')
+                revision = int(_value(form, 'revision'))
+                content = _value(form, 'content')
+                change_note = _value(form, 'change_note').strip()
+                if revision < 0:
+                    raise ValueError('설명 버전을 확인하고 최신 화면을 다시 여세요.')
+                if not content.strip() or len(content) > 20000:
+                    raise ValueError('문제 설명은 비어 있지 않은 20,000자 이하의 내용이어야 합니다.')
+                if not change_note or len(change_note) > 500:
+                    raise ValueError('변경 사유는 비어 있지 않은 500자 이하의 내용이어야 합니다.')
+                updated = self.assignments.update_assignment_document(key, assignment_id, revision, content, change_note)
+                return self._assignment_document_page(course, assignment_id, session, updated, previous=document)
+            return self._assignment_document_page(course, assignment_id, session, document)
         release_detail = re.fullmatch(r'assignments/([a-zA-Z0-9_-]+)', route)
         if method == 'GET' and release_detail and release_detail[1] != 'new':
             return self._release_detail(course, release_detail[1], session)
@@ -847,6 +873,7 @@ class InstructorWeb:
         body += f'<p>수락 {item["accepted_students"]}명 · 제출 {item["submitted_students"]}명 · 접수 {item["submission_count"]}건 (재제출 포함)</p>'
         body += '<p class="hint">마감은 서버 접수 시각 기준입니다. 업로드 중 마감을 넘으면 새 제출은 거절될 수 있습니다.</p>'
         body += f'<a class="button" href="{base}/submissions">수업의 학생 제출·결과 확인</a>'
+        body += f'<p><a href="{base}/assignments/{quote(assignment_id, safe="")}/document">설명 수정·이력</a> · 기존 수락·제출·점수를 유지한 안내문 보완</p>'
         if self.rubrics and course['status'] != 'archived':
             body += f'<p><a href="{base}/rubrics/new/{_e(item["assignment_id"])}">루브릭 작성 (학생 점수 미연결)</a></p>'
         if item['draft_id']:
@@ -856,7 +883,7 @@ class InstructorWeb:
             if course['status'] != 'archived':
                 body += self._publish_section(course, draft, draft.get('latest_check') or {}, session, '', path, False)
         else:
-            body += '<div class="notice">CLI 등록 공개본입니다. 웹 과제 편집·복제는 지원하지 않습니다. 등록 자료와 운영 변경은 기존 CLI 절차를 사용하세요.</div>'
+            body += '<div class="notice">CLI 등록 공개본입니다. 현재 웹 과제 편집·복제·별도 설명 수정은 지원하지 않습니다. 기존 배포 자료는 유지됩니다. 등록 자료와 운영 변경은 기존 CLI 절차를 사용하세요.</div>'
             if course['status'] != 'archived' and item['visibility'] != 'inactive':
                 release_path = base + '/assignments/' + quote(assignment_id, safe='')
                 body += '<details><summary>과제 보관</summary><p>학생 수령을 중단하지만 제출·점수·코드·감사 기록은 삭제하지 않습니다.</p>'
@@ -866,6 +893,50 @@ class InstructorWeb:
             body += '<p>보관된 수업이므로 과제 변경은 차단됩니다.</p>'
         body += f'<p><a href="{base}/assignments">과제 목록으로</a></p>'
         return item['title'], body
+
+    def _assignment_document_page(self, course, assignment_id, session, document, *, previous=None):
+        """Public guidance is editable without replacing immutable grading evidence."""
+        item = self.catalog.get_release(course['course_key'], assignment_id)
+        release_path = self._base(course) + '/assignments/' + quote(assignment_id, safe='')
+        path = release_path + '/document'
+        body = f'<p><a href="{release_path}">과제 운영 화면으로</a> · {_e(item["title"])}</p>'
+        body += '<div class="notice"><strong>설명만 수정합니다.</strong> 같은 과제의 수락·제출·점수·채점 기준은 유지됩니다. 기존 제출을 다시 채점하거나 별도 과제를 만들지 않습니다.</div>'
+        body += '<p>오탈자, 풀이 안내, 기존 계약을 설명하는 예제를 보완하세요. 입출력 계약·배점·정답·테스트·마감은 이 화면에서 바뀌지 않습니다. 채점 기준을 바꿔야 한다면 별도 검증·재채점 정책을 먼저 결정하세요.</p>'
+        body += '<div class="notice warning">학생에게 공개되는 안내문입니다. 정답 코드·비공개 테스트·개인정보·비밀번호를 넣지 마세요. 학생의 로컬 코드나 이미 내려받은 README를 자동으로 덮어쓰지 않습니다.</div>'
+        if document is None:
+            return '설명 수정·이력', body + '<section><h3>별도 설명 편집 미지원</h3><p>현재는 웹에서 등록한 과제만 지원합니다. 이 과제의 기존 배포 자료는 변경하지 않습니다. 빈 안내문을 새로 만들거나 기존 자료를 대체하지 않습니다.</p></section>'
+        if previous is not None:
+            body += f'<div class="notice" role="status"><strong>설명 버전 {_e(document["revision"])} 저장 완료</strong> · 기존 수락·제출·점수는 그대로 유지됩니다.</div>'
+            difference = '\n'.join(unified_diff(previous['content'].splitlines(), document['content'].splitlines(),
+                fromfile=f'저장 전 · 버전 {previous["revision"]}', tofile=f'저장 후 · 버전 {document["revision"]}', lineterm=''))
+            body += '<details><summary>방금 저장한 변경 전후 비교</summary><p class="hint">-는 삭제한 줄, +는 추가한 줄입니다. 이 비교는 이번 저장 직전과 직후의 설명입니다.</p><pre>' + _e(difference or '설명 본문은 동일합니다.') + '</pre></details>'
+        body += f'<section><h3>현재 학생 안내문 · 버전 {_e(document["revision"])}</h3><p class="meta">마지막 변경: {_e(_timestamp(document.get("updated_at")) or "최초 공개본")} KST · SHA-256: <code>{_e(document.get("sha256"))}</code></p>'
+        if document.get('change_note'):
+            body += '<p>변경 사유: ' + _e(document['change_note']) + '</p>'
+        body += '<details><summary>현재 저장된 안내문 원문 보기</summary><pre>' + _e(document['content']) + '</pre></details>'
+        if course['status'] == 'archived':
+            body += '<p>보관된 수업이므로 설명과 이력만 조회할 수 있습니다.</p>'
+        else:
+            fields = f'<input type="hidden" name="revision" value="{_e(document["revision"])}">'
+            fields += '<label for="content">문제 설명 전체 (Markdown 원문 · 20,000자 이하)</label>'
+            fields += '<textarea id="content" name="content" rows="24" maxlength="20000" required aria-describedby="document-help">' + _e(document['content']) + '</textarea>'
+            fields += '<p id="document-help" class="hint">부분 추가가 아니라 안내문 전체를 저장합니다. 마감·입출력 계약·제출 파일 범위를 임의로 바꾸지 마세요. Markdown은 이 편집 화면에서 원문으로 표시합니다.</p>'
+            fields += _field('change_note', '변경 사유 (500자 이하 · 학생에게도 공개)', required=True, extra='maxlength="500"')
+            fields += _checkbox('confirm', '채점 기준 변경이 아닌 설명 보완이며 정답·비공개 자료가 없음을 확인했습니다.')
+            fields += _button('설명 새 버전 저장')
+            body += self._form(path, session, fields)
+        body += '</section><section><h3>설명 변경 이력</h3><p class="hint">버전·시각·변경 사유·해시를 보존합니다. 여기서는 과거 본문 복원이나 삭제를 제공하지 않습니다.</p>'
+        history = document.get('history') or []
+        if document.get('history_total', len(history)) > len(history):
+            body += f'<p class="hint">전체 {_e(document["history_total"])}건 중 최근 {len(history)}건을 표시합니다. 이전 기록도 서버에 보존되어 있습니다.</p>'
+        if history:
+            rows = ''.join('<tr>' + ''.join('<td>' + _e(value) + '</td>' for value in
+                (entry['revision'], (_timestamp(entry.get('updated_at')) or '최초 공개본') + ' KST', entry.get('change_note') or '최초 안내문', entry['sha256'])) + '</tr>'
+                for entry in history)
+            body += '<div class="table-scroll"><table><thead><tr><th scope="col">버전</th><th scope="col">변경 시각</th><th scope="col">변경 사유</th><th scope="col">SHA-256</th></tr></thead><tbody>' + rows + '</tbody></table></div>'
+        else:
+            body += '<p>아직 별도 수정 이력이 없습니다. 현재 내용은 최초 공개본의 안내문입니다.</p>'
+        return '설명 수정·이력', body + '</section>'
 
     def _basic_draft_fields(self, draft):
         fields = _field('title', '과제 제목', draft.get('title') or 'Hello World', required=True, extra='maxlength="200"')
@@ -915,7 +986,11 @@ class InstructorWeb:
                 ('validation', '4. 검증'), ('publish', '5. 공개'))) + '</ul>'
         if not draft.get('published_assignment_id') and draft.get('due_at') and draft['due_at'] <= utc_iso():
             body += '<div class="notice warning">이미 지난 마감입니다. 초안은 유지되지만 학생에게 새로 공개할 수 없습니다. 일정을 수정한 뒤 다시 검증하세요.</div>'
-        body += '<div class="notice">등록 중인 과제는 학생에게 보이지 않습니다. 자료를 변경하면 다시 검증해야 합니다.</div>' if not draft.get('published_assignment_id') else '<div class="notice">공개본은 덮어쓰지 않습니다. 변경은 새 초안 복제 또는 마감 연장을 사용하세요.</div>'
+        if not draft.get('published_assignment_id'):
+            body += '<div class="notice">등록 중인 과제는 학생에게 보이지 않습니다. 자료를 변경하면 다시 검증해야 합니다.</div>'
+        else:
+            document_path = base + '/assignments/' + quote(draft['published_assignment_id'], safe='') + '/document'
+            body += f'<div class="notice">채점 자료와 최초 공개본은 덮어쓰지 않습니다. 오탈자·안내 보완은 <a href="{document_path}">설명 수정·이력</a>에서 기존 학생 이력을 유지한 채 처리하세요. 별도 과제 버전은 초안 복제, 일정 변경은 마감 연장을 사용합니다.</div>'
         if course['status'] == 'archived':
             body += '<div class="notice warning">보관된 수업입니다. 자료와 검증 이력을 조회할 수 있으며 편집·검증·공개는 차단됩니다.</div>'
         elif locked and not draft.get('published_assignment_id'):
@@ -927,7 +1002,8 @@ class InstructorWeb:
                 form_kind='problem',
             ) + '</section>'
         else:
-            body += '<section id="draft-problem"><h3>1. 문제·일정</h3><pre>' + _e(draft.get('description')) + '</pre><p>편집이 잠겨 있습니다.</p></section>'
+            label = '아래는 최초 공개 시 저장한 설명입니다. 최신 학생 안내문은 설명 수정·이력에서 확인하세요.' if draft.get('published_assignment_id') else '편집이 잠겨 있습니다.'
+            body += '<section id="draft-problem"><h3>1. 문제·일정</h3><p>' + label + '</p><pre>' + _e(draft.get('description')) + '</pre></section>'
 
         body += '<section id="draft-starter"><h3>2. 학생 배포 자료</h3><p>학생에게 내려줄 미완성 코드만 등록하세요.</p>'
         body += f'<p><a class="button secondary" href="{path}/starter-template.zip">현재 설정의 기본 starter ZIP 다운로드</a></p>'

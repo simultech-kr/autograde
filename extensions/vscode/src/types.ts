@@ -14,6 +14,20 @@ export interface Assignment {
   readonly assignmentPath?: string;
   readonly repository?: AssignedRepository;
   readonly latestSubmission?: SubmissionSummary;
+  readonly document?: AssignmentDocumentMetadata;
+}
+
+export interface AssignmentDocumentMetadata {
+  readonly revision: number;
+  readonly sha256: string;
+  readonly updatedAt: string;
+  readonly changeNote: string;
+}
+
+export interface AssignmentDocument extends AssignmentDocumentMetadata {
+  readonly assignmentId: string;
+  readonly content: string;
+  readonly history: readonly AssignmentDocumentMetadata[];
 }
 
 export interface AssignedRepository {

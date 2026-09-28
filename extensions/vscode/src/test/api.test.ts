@@ -48,6 +48,21 @@ test("history and source use authenticated same-origin endpoints and verify sour
   await assert.rejects(client.getSubmissionSource(version), /SHA-256/);
 });
 
+test("assignment descriptions use authenticated same-origin GET and gracefully handle old servers", async () => {
+  const content = "# description\n";
+  const document = {assignment_id: "asn_1", revision: 0, content, sha256: "sha256:" + sha256Hex(Buffer.from(content)),
+    updated_at: "2026-09-22T04:00:00Z", change_note: "최초 배포 설명", history: []};
+  const transport = new FakeTransport([{document}, new ApiError("Not found", 404), {document: null},
+    new ApiError("Unavailable", 503)]);
+  const client = new AutogradeClient(transport, new FakeTokens());
+  assert.equal((await client.getAssignmentDocument("asn_1"))?.content, content);
+  assert.equal(await client.getAssignmentDocument("asn_1"), undefined);
+  assert.equal(await client.getAssignmentDocument("asn_1"), undefined);
+  await assert.rejects(client.getAssignmentDocument("asn_1"), error => error instanceof ApiError && error.status === 503);
+  assert.ok(transport.calls.every(call => call.endpoint === "/v1/assignments/asn_1/document" &&
+    call.init.method === "GET" && call.bearerToken === "access-token" && call.options?.expectedBaseUrl === transport.baseUrl));
+});
+
 test("device preparation sends the normalized course-routing secret with an origin binding", async () => {
   const transport = new FakeTransport([{}]);
   const client = new AutogradeClient(transport, new FakeTokens());

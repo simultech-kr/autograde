@@ -822,6 +822,17 @@ class StudentPlatformService:
                 raise PlatformAPIError(429, 'diagnostic_rate_limit', 'diagnostic rate limit', headers={'Retry-After': '60'}) from exc
             raise PlatformAPIError(409, 'diagnostic_conflict', 'diagnostic conflict') from exc
 
+    def get_assignment_document(self, access_token: str, assignment_id: str):
+        """Instructions for the accepted assignment, separate from starter code."""
+        from .assignment_documents import current
+        self.require_assignment_acceptance(access_token)
+        assignment = self._owned_bundle_assignment(access_token, assignment_id)
+        with self.state._connection() as connection:
+            document = current(connection, self.course_key, assignment.assignment_id)
+        if document is not None:
+            document.pop("actor", None)
+        return {"document": document}
+
     def get_bundle_starter(
         self, access_token: str, assignment_id: str
     ) -> PlatformFileResponse:
@@ -2646,6 +2657,9 @@ class StudentPlatformService:
         submission_url = (
             f"{self.public_base_url}/v1/assignments/{encoded_id}/submissions"
         )
+        from .assignment_documents import current, metadata
+        with self.state._connection() as connection:
+            document = current(connection, assignment.course_key, assignment.assignment_id, with_history=False)
         return {
             "assignment_id": assignment.assignment_id,
             "assignment_key": assignment.assignment_key,
@@ -2661,6 +2675,7 @@ class StudentPlatformService:
             "due_at": assignment.due_at,
             "max_score": assignment.max_score,
             "starter_url": starter_url,
+            "document": metadata(document) if document is not None else None,
             "submission_url": submission_url,
             "starter": {
                 "url": starter_url,

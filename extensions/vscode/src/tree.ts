@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 
 import { isAssignmentDownloadable, isBundleAssignment } from "./helpers";
 import type { Assignment } from "./types";
+import { AssignmentDocumentState } from "./assignmentDocument";
 
 export class AssignmentTreeItem extends vscode.TreeItem {
   public constructor(public readonly assignment: Assignment) {
@@ -17,6 +18,7 @@ export class AssignmentTreeItem extends vscode.TreeItem {
 }
 
 class DetailTreeItem extends vscode.TreeItem {
+  public assignmentId?: string;
   public constructor(label: string, description?: string, icon?: string) {
     super(label, vscode.TreeItemCollapsibleState.None);
     this.description = description;
@@ -30,6 +32,8 @@ export class AssignmentsTreeProvider implements vscode.TreeDataProvider<Assignme
   private readonly changed = new vscode.EventEmitter<AssignmentTreeItem | DetailTreeItem | undefined>();
   public readonly onDidChangeTreeData = this.changed.event;
   private assignments: readonly Assignment[] = [];
+
+  public constructor(private readonly documents = new AssignmentDocumentState()) {}
 
   public setAssignments(assignments: readonly Assignment[]): void {
     this.assignments = assignments;
@@ -59,6 +63,10 @@ export class AssignmentsTreeProvider implements vscode.TreeDataProvider<Assignme
     const assignment = element.assignment;
     const details: DetailTreeItem[] = [];
     if (isBundleAssignment(assignment)) {
+      const status = this.documents.summary(assignment);
+      const documentItem = new DetailTreeItem("과제 설명", `v${status.revision}${status.unread ? " · 새 설명 있음" : " · 읽기 전용"}`, status.unread ? "bell-dot" : "book");
+      documentItem.command = {command: "autograde.viewAssignmentDocument", title: "과제 설명 보기", arguments: [element]};
+      details.push(documentItem);
       const historyItem = new DetailTreeItem("제출 기록 / 이전 코드 복원", undefined, "history");
       historyItem.command = { command: "autograde.submissionHistory", title: "제출 기록", arguments: [element] };
       details.push(historyItem);
@@ -99,6 +107,7 @@ export class AssignmentsTreeProvider implements vscode.TreeDataProvider<Assignme
       };
       details.push(resultItem);
     }
+    for (const detail of details) detail.assignmentId = assignment.id;
     return details;
   }
 }

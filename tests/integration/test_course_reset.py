@@ -1,19 +1,21 @@
 """Maintenance reset tests use synthetic data only."""
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import sqlite3
 from uuid import uuid4
 
 import pytest
 
-from autograde.course_reset import _digest, reset_course
-from autograde.pilot_roster import initialize_student_roster
+from autograde.course_reset import DOCUMENT_GUARD, GUARD, _digest, reset_course
+from autograde.pilot_roster import initialize_student_roster, initialize_web_roster
 from autograde.platform_cli import _exclusive_course_service_lock
 from autograde.platform_auth import verify_student_password
 from autograde.platform_state import PlatformStateStore
 from autograde.settings import AppPaths
 from test_course_portal import (portal, claim, connect, request, BundleSubmissionProcessor,
                                PilotLocalGrader, WorkspaceBuilder)
+from test_instructor_web import setup
 
 
 @pytest.fixture
@@ -90,7 +92,8 @@ def test_unsafe_apply_refused_without_deletion(records, case, tmp_path):
     if case in {"schema", "bootstrap"}:
         with sqlite3.connect(paths.database) as connection:
             if case == "schema":
-                connection.execute("INSERT INTO platform_schema_migrations VALUES (14, 'synthetic')")
+                connection.execute("INSERT INTO platform_schema_migrations VALUES (?, 'synthetic')",
+                                   (PlatformStateStore.LATEST_SCHEMA_VERSION + 1,))
             else:
                 connection.execute("DELETE FROM platform_roster_bootstrap")
     if case == "symlink":
@@ -113,6 +116,134 @@ def test_unexpected_cross_course_change_rolls_back_and_restores_guard(records):
     with pytest.raises(ValueError, match="preservation"):
         apply(paths, plan)
     assert fingerprint(paths) == plan["expected_state"]
+
+
+@pytest.mark.parametrize('version', [10, 11, 12, 13])
+def test_legacy_schema_reset_remains_supported(tmp_path, monkeypatch, version):
+    import autograde.platform_state as module
+    monkeypatch.setattr(module, '_LATEST_SCHEMA_VERSION', version)
+    paths = AppPaths.from_value(tmp_path / 'data').ensure()
+    state = PlatformStateStore(paths.database)
+    student = state.upsert_local_student(student_key='SYN-LEGACY', auth_subject='local:SYN-LEGACY')
+    for course in ('come2201', 'come3105'):
+        state.upsert_enrollment(student_id=student.id, course_key=course)
+    with state._write() as db:
+        db.execute("INSERT INTO platform_roster_bootstrap VALUES (1,2,'synthetic')")
+    plan = reset_course(paths, 'come2201')
+    assert 'bundle_submission_documents' not in plan['counts']
+    assert apply(paths, plan)['mode'] == 'reset_complete'
+    assert state.schema_version() == version
+    assert state.list_course_student_summaries(course_key='come2201') == []
+    assert len(state.list_course_student_summaries(course_key='come3105')) == 1
+
+
+@pytest.mark.parametrize('name', [GUARD, DOCUMENT_GUARD])
+def test_missing_reset_delete_guard_refuses_even_preview(records, name):
+    paths, state, _ = records
+    with state._write() as db:
+        db.execute(f'DROP TRIGGER "{name}"')
+    before = fingerprint(paths)
+    with pytest.raises(ValueError, match='immutability guard is missing'):
+        reset_course(paths, 'come2201')
+    assert fingerprint(paths) == before
+
+
+def _course_session(state, course, index, now):
+    student = state.upsert_local_student(student_key='SYN-' + course, auth_subject='local:SYN-' + course, at=now)
+    state.upsert_enrollment(student_id=student.id, course_key=course, at=now)
+    device_hash, user_hash, token = str(index + 2) * 64, str(index + 6) * 64, str(index) * 64
+    state.create_device_authorization(authorization_id='dev_' + course,
+        device_code_hash=device_hash, user_code_hmac=user_hash, course_key=course,
+        device_label='Synthetic reset test', expires_at=now + timedelta(minutes=5), at=now)
+    state.approve_device_authorization(user_code_hmac=user_hash,
+        auth_subject=student.auth_subject, course_key=course, at=now)
+    state.consume_device_authorization(device_code_hash=device_hash, course_key=course,
+        session_id='ses_' + course, token_family_id='fam_' + course, access_token_hash=token,
+        access_token_expires_at=now + timedelta(hours=1), refresh_token_hash=chr(ord('a') + index) * 64,
+        refresh_token_expires_at=now + timedelta(days=1), at=now)
+    return token
+
+
+@pytest.fixture
+def published_documents(setup, tmp_path):
+    _, state, _, _, admin = setup
+    initialize_web_roster(state)
+    submissions = {}
+    releases = {}
+    # Publish through the actual instructor service, then receive submissions
+    # under distinct course sessions. These are synthetic, terminal records.
+    for index, course in enumerate(('come2201', 'come3105'), start=1):
+        draft = admin.create_draft(course, language='c', description='# Original ' + course)
+        admin.queue_check(course, draft['draft_id'], draft['revision'], True)
+        assert admin.run_one()
+        release = admin.publish(course, draft['draft_id'], draft['revision'])
+        releases[course] = release
+        now = datetime.now(timezone.utc)
+        token = _course_session(state, course, index, now)
+        submissions[course] = []
+        for revision in (0, 1):
+            if revision:
+                admin.update_assignment_document(course, release.assignment_id, 0,
+                    '# Improved ' + course, '명령 설명 보완')
+            sid = f'sub_{course}_{revision}'
+            state.create_accepted_bundle_submission(submission_id=sid, receipt_id='receipt_' + sid,
+                access_token_hash=token, course_key=course, assignment_id=release.assignment_id,
+                idempotency_key='key_' + sid, request_hash='f' * 64,
+                source_path=str(tmp_path / (sid + '.tar.gz')), source_digest='d' * 64,
+                source_size_bytes=1, at=now)
+            state.transition_bundle_submission(sid, 'queued', at=now)
+            state.transition_bundle_submission(sid, 'infra_failed', at=now,
+                failure_code='synthetic_terminal', failure_message='Synthetic terminal test record')
+            submissions[course].append(sid)
+    return admin.paths, state, admin, releases, submissions
+
+
+def test_web_submission_reset_preserves_documents_other_course_and_restores_guards(published_documents):
+    paths, state, admin, releases, submissions = published_documents
+    with state._connection() as db:
+        documents = [tuple(row) for row in db.execute('SELECT * FROM assignment_document_revisions ORDER BY assignment_id,revision')]
+        snapshots = [tuple(row) for row in db.execute('SELECT * FROM bundle_submission_documents ORDER BY submission_id')]
+        guards = [tuple(row) for row in db.execute("SELECT name,sql FROM sqlite_master WHERE type='trigger' ORDER BY name")]
+    assert len(documents) == len(snapshots) == 4
+    other_receipts = [state.get_bundle_receipt(sid) for sid in submissions['come3105']]
+    plan = reset_course(paths, 'come2201')
+    assert plan['counts']['bundle_submission_documents'] == 2
+    result = apply(paths, plan)
+    assert result['mode'] == 'reset_complete'
+    with sqlite3.connect(Path(result['backup_directory']) / 'state.sqlite3') as saved:
+        assert saved.execute('SELECT * FROM assignment_document_revisions ORDER BY assignment_id,revision').fetchall() == documents
+        assert saved.execute('SELECT * FROM bundle_submission_documents ORDER BY submission_id').fetchall() == snapshots
+    with state._connection() as db:
+        assert [tuple(row) for row in db.execute('SELECT * FROM assignment_document_revisions ORDER BY assignment_id,revision')] == documents
+        assert [tuple(row) for row in db.execute('SELECT * FROM bundle_submission_documents ORDER BY submission_id')] == [row for row in snapshots if row[0] in submissions['come3105']]
+        assert [tuple(row) for row in db.execute("SELECT name,sql FROM sqlite_master WHERE type='trigger' ORDER BY name")] == guards
+        assert db.execute('PRAGMA foreign_key_check').fetchall() == []
+    assert [state.get_bundle_receipt(sid) for sid in submissions['come3105']] == other_receipts
+    for course, release in releases.items():
+        assert state.get_bundle_assignment(release.assignment_id) == release
+        assert admin.get_assignment_document(course, release.assignment_id)['revision'] == 1
+    assert len(state.list_course_student_summaries(course_key='come2201')) == 0
+    assert len(state.list_course_student_summaries(course_key='come3105')) == 1
+    for table in ('bundle_submission_documents', 'assignment_document_revisions'):
+        with pytest.raises(sqlite3.IntegrityError, match='immutable'):
+            with state._write() as db:
+                db.execute(f'DELETE FROM {table}')
+    assert reset_course(paths, 'come2201')['counts']['bundle_submission_documents'] == 0
+
+
+def test_failed_document_reset_rolls_back_references_and_both_guards(published_documents):
+    paths, state, _, _, _ = published_documents
+    with state._write() as db:
+        db.execute("INSERT INTO platform_session_issuance_counters VALUES (1,'come3105','2026-09-15',1,'now')")
+        db.execute('CREATE TRIGGER synthetic_bad_document_delete AFTER DELETE ON bundle_submission_documents '
+                   'BEGIN DELETE FROM platform_session_issuance_counters; END')
+    plan = reset_course(paths, 'come2201')
+    with pytest.raises(ValueError, match='preservation'):
+        apply(paths, plan)
+    assert fingerprint(paths) == plan['expected_state']
+    with pytest.raises(sqlite3.IntegrityError, match='immutable'):
+        with state._write() as db:
+            db.execute('DELETE FROM bundle_submission_documents')
 
 
 def test_reset_actual_claims_submissions_preserves_other_course(portal, tmp_path):

@@ -39,7 +39,8 @@ namespace Autograde.VisualStudio
         readonly Expander settingsExpander = new Expander { Header = "서버 설정" };
         readonly Expander assignmentManagement = new Expander { Header = "과제 선택 · 새로고침" };
         readonly Expander folderManagement = new Expander { Header = "폴더 관리 · 다시 다운로드" };
-        Button downloadButton, submitButton, folderButton, cancelButton, logoutButton;
+        Button downloadButton, submitButton, folderButton, cancelButton, logoutButton, documentButton;
+        readonly DocumentSelectionState documentSelection = new DocumentSelectionState();
         DownloadDiagnostic downloadDiagnostic;
         bool showingInspected;
         readonly TextBox gradingOutput = new TextBox { IsReadOnly = true, AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, MinHeight = 90, MaxHeight = 220, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
@@ -114,6 +115,8 @@ namespace Autograde.VisualStudio
                 pages.Items.Add(new TabItem { Header = item.Item1, Content = new ScrollViewer { Content = item.Item2,
                     HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Padding = new Thickness(4) } });
             var footer = new StackPanel(); Grid.SetRow(footer, 2); layout.Children.Add(footer); footer.Children.Add(footerActions);
+            documentButton = AddButton(taskPanel, "과제 설명 열기", OpenDocumentAsync);
+            documentButton.ToolTip = "최신 과제 설명을 별도 읽기 전용 창으로 엽니다. 받은 README와 답안을 덮어쓰지 않습니다.";
             ThemeResources.Label(downloadStatus); taskPanel.Children.Add(downloadStatus);
             taskPanel.Children.Add(diagnosticDetails);
             var diagPanel = new StackPanel(); diagnosticDetails.Content = diagPanel; diagPanel.Children.Add(diagnosticText);
@@ -153,6 +156,7 @@ namespace Autograde.VisualStudio
             panel.Children.Add(assignments);
             assignments.SelectionChanged += (_, __) => {
                 history.Items.Clear(); inspectedResult.Clear();
+                documentSelection.Select((string)(assignments.SelectedItem as AssignmentItem)?.Value["assignment_id"]);
                 if (downloadDiagnostic != null) output.Clear();
                 ClearDownloadState(); UpdateCompactState();
             };
@@ -348,6 +352,83 @@ namespace Autograde.VisualStudio
             if (submitButton != null) submitButton.Visibility = authenticated && ready ? Visibility.Visible : Visibility.Collapsed;
             if (folderButton != null) folderButton.Visibility = authenticated && ready ? Visibility.Visible : Visibility.Collapsed;
             if (downloadDiagnostic == null) downloadStatus.Text = ready ? "파일 준비 완료 · 저장한 뒤 제출하세요." : authenticated ? "수락 완료 · 과제 파일을 다운로드하세요." : "로그인 필요";
+            UpdateDocumentNotice();
+        }
+        void UpdateDocumentNotice()
+        {
+            if (documentButton == null) return;
+            var selected = (assignments.SelectedItem as AssignmentItem)?.Value;
+            documentButton.Visibility = Visibility.Collapsed;
+            if (client?.HasSession != true || selected == null) return;
+            try
+            {
+                var metadata = DocumentMetadata.Parse(selected["document"]);
+                if (metadata == null) return;
+                documentButton.Content = new TextBlock { Text = documentSelection.Label(metadata) + " · 열기", TextWrapping = TextWrapping.Wrap };
+                documentButton.IsEnabled = !busy;
+            }
+            catch (InvalidDataException)
+            {
+                documentButton.Content = new TextBlock { Text = "설명 정보 확인 실패 · 과제 새로고침", TextWrapping = TextWrapping.Wrap };
+                documentButton.IsEnabled = false;
+            }
+            documentButton.Visibility = Visibility.Visible;
+        }
+        bool IsDocumentCurrent(ServiceClient current, long generation, string id) => !disposed &&
+            ReferenceEquals(client, current) && current.HasSession && documentSelection.IsCurrent(generation, id);
+        async Task OpenDocumentAsync(CancellationToken ct)
+        {
+            RequireClient(); var current = client; string id = Id, title = (string)Selected["title"];
+            long generation = documentSelection.Generation;
+            AssignmentDocument document;
+            try { document = await current.DocumentAsync(id, ct); }
+            catch (Exception)
+            {
+                if (disposed || !ReferenceEquals(client, current) || !documentSelection.IsCurrent(generation, id)) return;
+                throw;
+            }
+            if (!IsDocumentCurrent(current, generation, id)) return;
+            ct.ThrowIfCancellationRequested();
+            if (document == null)
+            {
+                Selected["document"] = JValue.CreateNull(); UpdateDocumentNotice();
+                output.Text = "이 과제 또는 서버는 별도 설명 보기를 지원하지 않습니다. 받은 README를 확인하세요. 파일은 변경하지 않았습니다.";
+                return;
+            }
+            Selected["document"] = document.Metadata.ToJson();
+            AssignmentDocumentDialog.Open(this, title, document);
+            if (!IsDocumentCurrent(current, generation, id)) return;
+            documentSelection.MarkRead(generation, document); UpdateDocumentNotice();
+        }
+        async Task RefreshDocumentMetadataAsync(CancellationToken ct)
+        {
+            var current = client; string id = documentSelection.AssignmentId;
+            long generation = documentSelection.Generation;
+            if (busy || current?.HasSession != true || id == null) return;
+            try
+            {
+                var items = await current.AssignmentsAsync(ct);
+                if (!IsDocumentCurrent(current, generation, id)) return;
+                var selected = items.OfType<JObject>().FirstOrDefault(item => (string)item["assignment_id"] == id && (string)item["delivery_mode"] == "bundle");
+                // Never substitute another assignment if the selected assignment became unavailable.
+                Selected["document"] = selected?["document"]?.DeepClone() ?? JValue.CreateNull();
+                UpdateDocumentNotice();
+            }
+            catch (Exception)
+            {
+                if (disposed || !ReferenceEquals(client, current)) return;
+                // Network failures keep the last notice; the explicit open action can be retried.
+                // Lost authentication belongs to this client, even if selection changed meanwhile.
+                if (!current.HasSession && !busy)
+                {
+                    if (receiptWatch != null) ShowExpiredSession(receiptWatch);
+                    else
+                    {
+                        ClearScreen(false); status.Text = "로그인이 만료되었습니다. 새 수령 코드로 로그인하세요.";
+                        output.Text = "설명 자동 확인 중 로그인 갱신에 실패했습니다. 저장한 파일과 제출은 유지됩니다. 새 수령 코드로 로그인하세요.";
+                    }
+                }
+            }
         }
         async Task DownloadAsync(CancellationToken ct)
         {
@@ -421,6 +502,7 @@ namespace Autograde.VisualStudio
         }
         void ClearScreen(bool clearResults = true)
         {
+            documentSelection.Reset();
             PauseGradingWatch(); receiptWatch = null;
             showingInspected = false;
             liveResult.Clear(); inspectedResult.Clear();
@@ -523,12 +605,14 @@ namespace Autograde.VisualStudio
         void HealthTick(object sender, EventArgs args) => jobs.RunAsync(async () =>
         {
             if (busy || probing || disposed || client == null) return;
-            probing = true; try { await ProbeAsync(lifetime.Token); } finally { probing = false; }
+            probing = true;
+            try { await ProbeAsync(lifetime.Token); await RefreshDocumentMetadataAsync(lifetime.Token); }
+            finally { probing = false; }
         }).FileAndForget("Autograde/Health");
         public void Dispose()
         {
             if (disposed) return;
-            disposed = true; health.Stop(); PauseGradingWatch(); lifetime.Cancel();
+            disposed = true; documentSelection.Reset(); health.Stop(); PauseGradingWatch(); lifetime.Cancel();
             ThreadHelper.JoinableTaskFactory.Run(async () => await pendingTasks.JoinTillEmptyAsync());
             client?.Dispose(); lifetime.Dispose();
         }

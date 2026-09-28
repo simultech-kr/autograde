@@ -7,6 +7,7 @@ import {
   normalizeSubmission,
 } from "./helpers";
 import { shouldDiscardTokensAfterRefreshError } from "./authPolicy";
+import { parseAssignmentDocument } from "./assignmentDocument";
 import { parseSubmissionHistory, verifySubmissionSource, type SubmissionVersion } from "./submissionHistory";
 import type {
   Assignment,
@@ -672,6 +673,17 @@ export class AutogradeClient {
   }
 
   public getBaseUrl(): string { return this.transport.getBaseUrl(); }
+
+  public async getAssignmentDocument(assignmentId: string) {
+    try {
+      return parseAssignmentDocument(await this.authorizedRequest<unknown>(
+        `/v1/assignments/${encodeURIComponent(assignmentId)}/document`, {method: "GET"},
+      ), assignmentId);
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 404) return undefined;
+      throw error;
+    }
+  }
 
   public async getSubmissionHistory(assignmentId: string) {
     return parseSubmissionHistory(await this.authorizedRequest<unknown>(

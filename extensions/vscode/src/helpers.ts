@@ -1,5 +1,6 @@
 import * as path from "node:path";
 import { isIP } from "node:net";
+import { parseDocumentMetadata } from "./assignmentDocument";
 
 import type {
   Assignment,
@@ -555,6 +556,7 @@ export function normalizeAssignments(payload: unknown): Assignment[] {
       assignmentPath: firstString(raw, ["assignment_path"]),
       repository,
       latestSubmission,
+      document: parseDocumentMetadata(raw.document),
     });
   }
   return assignments;

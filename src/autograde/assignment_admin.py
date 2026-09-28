@@ -547,6 +547,19 @@ class AssignmentAdminService:
             self._event(connection, course, draft_id, "updated")
         return self.get_draft(course, draft_id)
 
+    def get_assignment_document(self, course, assignment_id):
+        from .assignment_documents import current
+        with self.state._connection() as connection:
+            return current(connection, course, assignment_id)
+
+    def update_assignment_document(self, course, assignment_id, revision, content, change_note):
+        from .assignment_documents import revise
+        self._course(course)
+        with self.state._write() as connection:
+            self._course_transaction(connection, course)
+            # Release identity, files, availability, receipts and grades stay immutable.
+            return revise(connection, course, assignment_id, revision, content, change_note, at=utc_iso())
+
     def delete_draft(self, course, draft_id, revision):
         """Remove an unpublished draft from active management while retaining its audit trail."""
         self._course(course)
@@ -658,6 +671,8 @@ class AssignmentAdminService:
                 connection.execute("UPDATE bundle_assignment_releases SET ready=1,updated_at=? WHERE assignment_id=?", (utc_iso(), assignment_id))
                 connection.execute("UPDATE instructor_assignment_drafts SET published_assignment_id=?,updated_at=? WHERE draft_id=?", (assignment_id, utc_iso(), draft_id))
                 self._event(connection, course, draft_id, "published")
+                from .assignment_documents import ensure_original
+                ensure_original(connection, course, assignment_id)
         return self.state.get_bundle_assignment(assignment_id)
 
     def copy_release(self, course, assignment_id):
@@ -678,6 +693,10 @@ class AssignmentAdminService:
             if connection.execute("SELECT COUNT(*) FROM instructor_assignment_drafts WHERE course_key=? AND deleted_at IS NULL", (course,)).fetchone()[0] >= 100 or connection.execute("SELECT COUNT(*) FROM instructor_assignment_drafts WHERE deleted_at IS NULL").fetchone()[0] >= 500:
                 raise PlatformConflict("저장 가능한 초안 한도에 도달했습니다.")
             document = json.loads(source["document_json"])
+            from .assignment_documents import current
+            instructions = current(connection, course, assignment_id, with_history=False)
+            if instructions is not None:
+                document["description"] = instructions["content"]
             document["title"] = document["title"][:190] + " (복사)"
             document["due_at"] = source_release["due_at"]
             document = _document(document)

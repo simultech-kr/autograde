@@ -26,7 +26,7 @@ class CourseAPI:
         "get_me", "list_sessions", "revoke_current", "revoke_session", "list_assignments",
         "get_bundle_starter", "submit_bundle", "get_submission", "get_result",
         "get_bundle_history", "get_bundle_source", "list_accepted_assignments",
-        "report_download_diagnostic",
+        "report_download_diagnostic", "get_assignment_document",
     })
 
     def __init__(self, services: Mapping[str, StudentPlatformService], secret: bytes, *, courses=None):

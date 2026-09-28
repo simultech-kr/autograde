@@ -1,5 +1,7 @@
 # Documentation
 
+- [제출 이후 과제 설명 보완](operations/assignment-document-revisions.md): 같은 과제 ID·수락·제출·점수 보존, 설명 버전·교수자 편집·학생 확장 조회, 서버/확장 업데이트와 미실시 시험.
+
 - [교수자 개인 인증·분반 권한](operations/instructor-personal-auth.md): 개인 계정 발급·분반 할당·세션 회수, 웹/제출 조회 인가와 루브릭 등록자 기록. 기본 공유 모드와 학생 인증은 유지.
 - [실제 제출물 루브릭 평가](operations/rubric-connected-assessment.md): 검증된 제출 원본·개인 교수자 판정·비공개 평가 이력. 자동 검사 근거와 학생 공개는 후속 범위.
 - [교수자 웹 루브릭 관리](operations/rubric-web-mvp.md): 선택적 기준 입력·검토·불변 버전 등록/조회, 수업 범위 검증.
