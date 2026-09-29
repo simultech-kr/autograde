@@ -12,6 +12,7 @@ import json
 import math
 import os
 from pathlib import Path, PurePosixPath
+import re
 import signal
 import sqlite3
 import stat
@@ -31,6 +32,7 @@ MAX_EXPANDED_BYTES = 20 * 1024 * 1024
 MAX_DRAFT_BYTES = 50 * 1024 * 1024
 MAX_FILES = 1000
 MAX_QUEUED = 10
+MAX_RELEASE_BATCH = 20
 DOCUMENT_FIELDS = {"title", "description", "language", "mode", "platform", "opens_at", "due_at", "result_policy", "tests", "negative_score"}
 
 
@@ -807,17 +809,23 @@ class AssignmentAdminService:
         with self.state._write() as connection:
             self._course_transaction(connection, course)
             row = self._release(connection, course, assignment_id)
-            if row["active"] or row["ready"]:
-                connection.execute(
-                    "UPDATE bundle_assignment_releases SET active=0,ready=0,updated_at=? WHERE assignment_id=?",
-                    (utc_iso(), assignment_id),
-                )
-                draft = connection.execute(
-                    "SELECT draft_id FROM instructor_assignment_drafts WHERE course_key=? AND published_assignment_id=? AND deleted_at IS NULL",
-                    (course, assignment_id),
-                ).fetchone()
-                self._event(connection, course, draft["draft_id"] if draft else None, "archived", assignment_id)
+            self._archive_release(connection, course, row)
         return self.state.get_bundle_assignment(assignment_id)
+
+    def _archive_release(self, connection, course, row):
+        if not row["active"] and not row["ready"]:
+            return False
+        assignment_id = row["assignment_id"]
+        connection.execute(
+            "UPDATE bundle_assignment_releases SET active=0,ready=0,updated_at=? WHERE assignment_id=?",
+            (utc_iso(), assignment_id),
+        )
+        draft = connection.execute(
+            "SELECT draft_id FROM instructor_assignment_drafts WHERE course_key=? AND published_assignment_id=? AND deleted_at IS NULL",
+            (course, assignment_id),
+        ).fetchone()
+        self._event(connection, course, draft["draft_id"] if draft else None, "archived", assignment_id)
+        return True
 
     def delete_release(self, course, assignment_id):
         """Move an already archived release to the recoverable deleted list."""
@@ -825,26 +833,121 @@ class AssignmentAdminService:
         with self.state._write() as connection:
             self._course_transaction(connection, course)
             row = self._release(connection, course, assignment_id, allow_deleted=True)
-            if row["active"] or row["ready"]:
-                raise PlatformConflict("먼저 과제를 보관한 뒤 삭제하세요.")
-            if not connection.execute(
-                "SELECT 1 FROM instructor_assignment_deletions WHERE assignment_id=?", (assignment_id,),
-            ).fetchone():
-                if connection.execute(
-                    "SELECT 1 FROM bundle_release_checks WHERE assignment_id=? AND status='pending'",
-                    (assignment_id,),
-                ).fetchone():
-                    raise PlatformConflict("검증 대기·실행 중에는 과제를 삭제할 수 없습니다.")
-                connection.execute(
-                    "INSERT INTO instructor_assignment_deletions(assignment_id,course_key,deleted_at) VALUES (?,?,?)",
-                    (assignment_id, course, utc_iso()),
-                )
-                draft = connection.execute(
-                    "SELECT draft_id FROM instructor_assignment_drafts WHERE course_key=? AND published_assignment_id=?",
-                    (course, assignment_id),
-                ).fetchone()
-                self._event(connection, course, draft["draft_id"] if draft else None, "release_deleted", assignment_id)
+            self._delete_release(connection, course, row)
         return self.state.get_bundle_assignment(assignment_id)
+
+    def _delete_release(self, connection, course, row):
+        assignment_id = row["assignment_id"]
+        if row["active"] or row["ready"]:
+            raise PlatformConflict("먼저 과제를 보관한 뒤 삭제하세요.")
+        if connection.execute(
+            "SELECT 1 FROM instructor_assignment_deletions WHERE assignment_id=?", (assignment_id,),
+        ).fetchone():
+            return False
+        if connection.execute(
+            "SELECT 1 FROM bundle_release_checks WHERE assignment_id=? AND status='pending'",
+            (assignment_id,),
+        ).fetchone():
+            raise PlatformConflict("검증 대기·실행 중에는 과제를 삭제할 수 없습니다.")
+        connection.execute(
+            "INSERT INTO instructor_assignment_deletions(assignment_id,course_key,deleted_at) VALUES (?,?,?)",
+            (assignment_id, course, utc_iso()),
+        )
+        draft = connection.execute(
+            "SELECT draft_id FROM instructor_assignment_drafts WHERE course_key=? AND published_assignment_id=?",
+            (course, assignment_id),
+        ).fetchone()
+        self._event(connection, course, draft["draft_id"] if draft else None, "release_deleted", assignment_id)
+        return True
+
+    @staticmethod
+    def _release_batch_ids(action, assignment_ids):
+        if not isinstance(action, str) or action not in {"archive", "delete"}:
+            raise ValueError("일괄 작업은 보관 또는 삭제를 선택하세요.")
+        if not isinstance(assignment_ids, (list, tuple)) or not 1 <= len(assignment_ids) <= MAX_RELEASE_BATCH:
+            raise ValueError("한 번에 과제 1~20개를 선택하세요.")
+        if any(not isinstance(value, str) or len(value) > 255 or re.fullmatch(r"[A-Za-z0-9_-]+", value) is None
+               for value in assignment_ids):
+            raise ValueError("과제 식별자가 올바르지 않습니다.")
+        if len(set(assignment_ids)) != len(assignment_ids):
+            raise ValueError("같은 과제를 중복 선택할 수 없습니다.")
+        return sorted(assignment_ids)
+
+    def _release_batch_snapshot(self, connection, course, action, assignment_ids):
+        self._course_transaction(connection, course)
+        items, releases, versions = [], [], []
+        for assignment_id in assignment_ids:
+            row = self._release(connection, course, assignment_id)
+            draft = connection.execute(
+                "SELECT draft_id,revision,updated_at,document_json FROM instructor_assignment_drafts "
+                "WHERE course_key=? AND published_assignment_id=? AND deleted_at IS NULL ORDER BY draft_id LIMIT 1",
+                (course, assignment_id),
+            ).fetchone()
+            # Match catalog membership: unpublished validation releases are
+            # private worker artifacts, not independently manageable CLI work.
+            if draft is None and connection.execute(
+                "SELECT 1 FROM instructor_assignment_jobs WHERE assignment_id=?", (assignment_id,),
+            ).fetchone():
+                raise PlatformNotFound("현재 수업의 공개본을 찾을 수 없습니다.")
+            if connection.execute(
+                "SELECT 1 FROM bundle_release_checks WHERE assignment_id=? AND status='pending'", (assignment_id,),
+            ).fetchone() or connection.execute(
+                "SELECT 1 FROM instructor_assignment_jobs WHERE status IN ('queued','running') "
+                "AND (assignment_id=? OR draft_id IN (SELECT draft_id FROM instructor_assignment_drafts "
+                "WHERE course_key=? AND published_assignment_id=?))",
+                (assignment_id, course, assignment_id),
+            ).fetchone():
+                raise PlatformConflict("검증 대기·실행 중인 과제가 있습니다. 검증 완료 후 다시 선택하세요.")
+            if action == "delete" and (row["active"] or row["ready"]):
+                raise PlatformConflict("선택한 과제를 모두 보관한 뒤 삭제하세요.")
+            counts = connection.execute(
+                "SELECT (SELECT COUNT(DISTINCT enrollment_id) FROM platform_assignment_acceptances "
+                "WHERE assignment_id=? AND delivery_mode='bundle') accepted_students,"
+                "COUNT(DISTINCT student_id) submitted_students,COUNT(*) submission_count "
+                "FROM bundle_submission_requests WHERE assignment_id=?", (assignment_id, assignment_id),
+            ).fetchone()
+            item = {"assignment_id": assignment_id,
+                    "title": json.loads(draft["document_json"])["title"] if draft else row["title"],
+                    "active": bool(row["active"]), "ready": bool(row["ready"]), "deleted_at": None,
+                    **dict(counts)}
+            check = connection.execute(
+                "SELECT id,status,completed_at FROM bundle_release_checks WHERE assignment_id=? ORDER BY id DESC LIMIT 1",
+                (assignment_id,),
+            ).fetchone()
+            versions.append({**item, "updated_at": row["updated_at"], "due_at": row["due_at"],
+                             "opens_at": row["opens_at"],
+                             "draft": {key: draft[key] for key in ("draft_id", "revision", "updated_at")} if draft else None,
+                             "check": dict(check) if check else None})
+            items.append(item)
+            releases.append(row)
+        fingerprint = hashlib.sha256(json.dumps(
+            {"course": course, "action": action, "items": versions}, sort_keys=True,
+            separators=(",", ":"), ensure_ascii=False,
+        ).encode("utf-8")).hexdigest()
+        return {"action": action, "assignment_ids": assignment_ids, "fingerprint": fingerprint,
+                "items": items, "count": len(items)}, releases
+
+    def preview_release_batch(self, course, action, assignment_ids):
+        """Read a bounded, consistent confirmation snapshot without changing state."""
+        assignment_ids = self._release_batch_ids(action, assignment_ids)
+        self._course(course)
+        with self.state._connection() as connection:
+            connection.execute("BEGIN")
+            preview, _ = self._release_batch_snapshot(connection, course, action, assignment_ids)
+        return preview
+
+    def apply_release_batch(self, course, action, assignment_ids, expected_fingerprint):
+        """Recheck the confirmation and mutate all targets under one write lock."""
+        assignment_ids = self._release_batch_ids(action, assignment_ids)
+        self._course(course)
+        with self.state._write() as connection:
+            preview, releases = self._release_batch_snapshot(connection, course, action, assignment_ids)
+            if not isinstance(expected_fingerprint, str) or expected_fingerprint != preview["fingerprint"]:
+                raise PlatformConflict("선택한 과제의 상태가 변경되었습니다. 목록에서 다시 선택하고 확인하세요.")
+            mutate = self._archive_release if action == "archive" else self._delete_release
+            changed = sum(mutate(connection, course, row) for row in releases)
+        return {"action": action, "count": len(releases), "changed_count": changed,
+                "unchanged_count": len(releases) - changed}
 
     def restore_release(self, course, assignment_id):
         """Restore visibility in the archived list without reopening student access."""

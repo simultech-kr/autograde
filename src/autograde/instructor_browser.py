@@ -19,6 +19,48 @@ SCRIPT = r"""(() => {
     if (notice) notice.textContent = dirty(form) ? '미저장 변경이 있습니다. 이 영역의 저장 버튼을 눌러 주세요.' : '입력 변경 없음';
   };
 
+  document.querySelectorAll('form[data-assignment-bulk]').forEach(form => {
+    const choices = [...form.querySelectorAll('[data-assignment-select]')];
+    const toggle = form.querySelector('[data-assignment-select-all]');
+    const clear = form.querySelector('[data-assignment-clear]');
+    const status = form.querySelector('[data-assignment-selection-status]');
+    const actions = [...form.querySelectorAll('[data-assignment-bulk-action]')];
+    const refresh = () => {
+      const available = choices.filter(choice => !choice.disabled);
+      const selected = available.filter(choice => choice.checked);
+      const needsArchive = selected.some(choice => choice.dataset.archived !== 'true');
+      const valid = selected.length > 0 && selected.length <= 20;
+      if (toggle) {
+        toggle.checked = available.length > 0 && selected.length === available.length;
+        toggle.indeterminate = selected.length > 0 && selected.length < available.length;
+        toggle.disabled = available.length === 0;
+      }
+      if (clear) clear.disabled = selected.length === 0;
+      actions.forEach(action => { action.disabled = !valid || (action.value === 'delete' && needsArchive); });
+      if (status) status.textContent = selected.length === 0
+        ? '현재 페이지에서 과제를 선택하세요. 한 번에 최대 20개까지 선택할 수 있습니다.'
+        : `현재 페이지에서 ${selected.length}개 선택됨 · ` + (selected.length > 20
+          ? '한 번에 최대 20개까지 선택할 수 있습니다.'
+          : needsArchive ? '삭제하려면 선택한 과제를 먼저 보관하세요.' : '선택한 과제를 보관하거나 삭제할 수 있습니다.');
+    };
+    const reset = () => { choices.forEach(choice => { choice.checked = false; }); refresh(); };
+    form.querySelectorAll('[data-assignment-selection-control]').forEach(control => { control.hidden = false; });
+    if (toggle) toggle.addEventListener('change', () => {
+      const available = choices.filter(choice => !choice.disabled);
+      available.forEach((choice, index) => { choice.checked = toggle.checked && index < 20; });
+      refresh();
+    });
+    if (clear) {
+      clear.hidden = false;
+      clear.addEventListener('click', reset);
+    }
+    choices.forEach(choice => { choice.addEventListener('change', refresh); });
+    // History restoration can retain checked controls; never carry selections
+    // onto a newly shown catalog, including a back/forward cache restoration.
+    window.addEventListener('pageshow', reset);
+    reset();
+  });
+
   document.querySelectorAll('[data-case-editor]').forEach(editor => {
     const form = editor.closest('form');
     const rows = [...editor.querySelectorAll('[data-case]')];

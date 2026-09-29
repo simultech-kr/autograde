@@ -59,6 +59,10 @@ table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:12px;bor
 .catalog-tools button{margin:0}.status-badge{display:inline-block;background:var(--soft);color:var(--text);padding:3px 8px;border-radius:5px}
 .shell main{background:var(--page)}.meta{color:var(--muted);font-size:.9rem}
 .result-table tbody th{font-weight:500}.catalog-actions{margin:16px 0}.catalog-actions a{margin-right:16px}
+.assignment-selection{display:flex;align-items:center;gap:8px;margin:0 0 8px;font-weight:500}
+.assignment-selection input{flex:none}.assignment-bulk-tools{margin:16px 0;padding:12px;background:var(--soft);border:1px solid var(--border);border-radius:8px}
+.assignment-bulk-tools .actions{align-items:center}.assignment-bulk-tools label,.assignment-bulk-tools button{margin:0}
+button:disabled{opacity:.55;cursor:not-allowed}
 .draft-navigation{display:flex;flex-wrap:wrap;gap:8px;margin:16px 0;padding:0;list-style:none}
 .draft-navigation a{display:block;padding:8px 12px;border:1px solid var(--border);border-radius:6px;text-decoration:none}
 .draft-summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,200px),1fr));gap:12px;padding:16px;background:var(--soft);border-radius:8px}
@@ -693,7 +697,11 @@ class InstructorWeb:
         if not self.assignments:
             return '과제 관리', '<p>현재 서버에서 과제 등록 기능을 사용할 수 없습니다.</p>'
         if method == 'GET' and route == 'assignments':
-            return self._assignment_list(course, form)
+            return self._assignment_list(course, form, session)
+        if method == 'POST' and route == 'assignments/bulk/preview':
+            return self._assignment_bulk_preview(course, form, session)
+        if method == 'POST' and route == 'assignments/bulk/apply':
+            return self._assignment_bulk_apply(course, form, session)
         document_match = re.fullmatch(r'assignments/([a-zA-Z0-9_-]+)/document', route)
         if document_match:
             assignment_id = document_match[1]
@@ -850,7 +858,70 @@ class InstructorWeb:
             'X-Autograde-SHA256': template['sha256'],
         })
 
-    def _assignment_list(self, course, form):
+    def _assignment_bulk_preview(self, course, form, session):
+        """Review exact server-validated targets without changing their state."""
+        ids = []
+        for name in form:
+            if name in {'csrf', 'action'}:
+                continue
+            if (not isinstance(name, str) or not name.startswith('selected_') or
+                    _value(form, name) != 'yes'):
+                raise ValueError('과제 목록에서 대상을 다시 선택해 주세요.')
+            ids.append(name[len('selected_'):])
+        preview = self.assignments.preview_release_batch(course['course_key'], _value(form, 'action'), ids)
+        action = preview['action']
+        label = '보관' if action == 'archive' else '삭제'
+        ticket = sign_browser_value(self.secret, 'instructor-assignment-bulk', {
+            'course': course['course_key'], 'action': action,
+            'assignment_ids': preview['assignment_ids'], 'fingerprint': preview['fingerprint'],
+            'sid': session['sid'],
+        }, lifetime_seconds=600)
+        base = self._base(course)
+        body = f'<div class="notice warning"><strong>아직 변경하지 않았습니다.</strong> 선택한 {preview["count"]}개 과제의 일괄 {label} 내용을 확인하세요.</div>'
+        if action == 'archive':
+            body += '<p>학생의 새 수령·다운로드·제출을 중단합니다. 이미 보관된 과제는 그대로 유지합니다.</p>'
+        else:
+            body += '<p>보관된 과제를 일반 관리 목록에서 제외하고 삭제 목록으로 옮깁니다. 삭제 목록에서 보관 상태로 복원할 수 있습니다.</p>'
+        body += '<p>기존 제출 코드·점수·이력과 이미 접수된 채점 작업은 유지합니다. 파일을 영구 삭제하거나 압축하지 않습니다.</p>'
+        rows = []
+        for item in preview['items']:
+            archived = not item['active'] and not item['ready']
+            rows.append((f'{_e(item["title"])}<div class="meta">{_e(item["assignment_id"])}</div>',
+                         '보관됨' if archived else '보관 전',
+                         f'수락 {item["accepted_students"]}명 · 제출 {item["submitted_students"]}명 · 접수 {item["submission_count"]}건'))
+        body += result_table(('선택한 과제', '현재 상태', '학생 현황'), rows, f'일괄 {label} 대상 {preview["count"]}건')
+        body += '<p class="hint">확인은 10분 동안 유효합니다. 과제 상태나 수락·제출 현황이 바뀌면 전체 처리를 중단하므로 목록에서 다시 확인하세요. 표시된 현황은 확인 시점 기준입니다.</p>'
+        fields = f'<input type="hidden" name="ticket" value="{_e(ticket)}">'
+        fields += _checkbox('confirm', f'위 {preview["count"]}개 과제를 일괄 {label}하며 기존 제출 이력을 보존함을 확인했습니다.')
+        fields += '<div class="actions">' + _button(f'일괄 {label} 실행', danger=True)
+        fields += f'<a class="button secondary" href="{base}/assignments">취소 · 과제 목록으로</a></div>'
+        return f'일괄 {label} 확인', body + self._form(base + '/assignments/bulk/apply', session, fields)
+
+    def _assignment_bulk_apply(self, course, form, session):
+        """Only the reviewed, signed selection may enter the atomic operation."""
+        if set(form) - {'csrf', 'ticket', 'confirm'} or _value(form, 'confirm') != 'yes':
+            raise ValueError('선택한 과제와 변경 내용을 확인한 뒤 실행해 주세요.')
+        ticket = _value(form, 'ticket')
+        if not ticket or len(ticket) > 16384 or not ticket.isascii():
+            raise ValueError('과제 목록에서 대상을 다시 선택하고 확인해 주세요.')
+        try:
+            reviewed = verify_browser_value(self.secret, 'instructor-assignment-bulk', ticket)
+        except InvalidSignedValue as exc:
+            raise ValueError('확인 정보가 만료되었거나 올바르지 않습니다. 과제 목록에서 다시 선택해 주세요.') from exc
+        if reviewed.get('course') != course['course_key'] or reviewed.get('sid') != session['sid']:
+            raise ValueError('다른 수업 또는 로그인에서 만든 확인 정보입니다. 현재 목록에서 다시 선택해 주세요.')
+        result = self.assignments.apply_release_batch(course['course_key'], reviewed.get('action'),
+            reviewed.get('assignment_ids'), reviewed.get('fingerprint'))
+        label, visibility = ('보관', 'inactive') if result['action'] == 'archive' else ('삭제', 'deleted')
+        base = self._base(course)
+        body = (f'<div class="notice" role="status"><strong>일괄 {label} 완료</strong> · 선택 {result["count"]}개 중 '
+                f'{result["changed_count"]}개 변경, {result["unchanged_count"]}개는 기존 상태 유지.</div>'
+                '<p>제출 코드·점수·이력은 보존했습니다. 이미 접수된 채점 작업은 계속됩니다.</p>'
+                f'<div class="actions"><a class="button" href="{base}/assignments?visibility={visibility}">{label} 목록 확인</a>'
+                f'<a class="button secondary" href="{base}/assignments">과제 관리로</a></div>')
+        return f'일괄 {label} 완료', body
+
+    def _assignment_list(self, course, form, session):
         base = self._base(course)
         search, visibility = _value(form, 'q'), _value(form, 'visibility', 'all')
         catalog = self.catalog.list(course['course_key'], search=search, visibility=visibility,
@@ -868,6 +939,7 @@ class InstructorWeb:
         body += _field('q', '과제 검색', search, extra='maxlength="200"') + '</div><div>'
         body += _select('visibility', '공개 상태', [('all', '전체 (삭제 제외)'), *_VISIBILITY.items()], visibility) + '</div><button>조회</button></form>'
         rows = []
+        selectable = 0
         for item in catalog['items']:
             target = base + ('/assignments/' + item['assignment_id'] if item['assignment_id'] else '/drafts/' + item['draft_id'])
             check = _STATUS.get(item['check_status'], '검증 통과' if item['check_status'] == 'passed' else '검증 기록 없음')
@@ -876,10 +948,31 @@ class InstructorWeb:
             origin = '웹 등록 · ' + {'c': 'C17', 'cpp': 'C++17'}.get(item['language'], '언어 확인 필요') if item['origin'] == 'web' else 'CLI 등록'
             counts = (f'수락 {item["accepted_students"]}명 · 제출 {item["submitted_students"]}명<br><span class="meta">접수 {item["submission_count"]}건 (재제출 포함)</span>'
                       if item['assignment_id'] else '아직 비공개')
-            rows.append((f'<a href="{_e(target)}">{_e(item["title"])}</a><div class="meta">{_e(origin)}</div>',
+            selection = ''
+            if course['status'] != 'archived' and item['assignment_id'] and item['visibility'] != 'deleted':
+                selectable += 1
+                archived = 'true' if not item['active'] and not item['ready'] else 'false'
+                selection = (f'<label class="assignment-selection"><input type="checkbox" name="selected_{_e(item["assignment_id"])}" '
+                             f'value="yes" data-assignment-select data-archived="{archived}" '
+                             f'aria-label="{_e(item["title"])} 선택"> 선택</label>')
+            rows.append((selection + f'<a href="{_e(target)}">{_e(item["title"])}</a><div class="meta">{_e(origin)}</div>',
                          f'<span class="status-badge">{_e(_VISIBILITY[item["visibility"]])}</span><div class="meta">{_e(check)}</div>',
                          _e(_timestamp(item['due_at']) or '마감 없음'), counts))
-        body += result_table(('과제', '공개·검증', '마감 (KST)', '학생 현황'), rows, f'과제·초안 {catalog["count"]}건')
+        table = result_table(('과제', '공개·검증', '마감 (KST)', '학생 현황'), rows, f'과제·초안 {catalog["count"]}건')
+        if selectable:
+            body += f'<form method="post" action="{base}/assignments/bulk/preview" data-assignment-bulk>'
+            body += f'<input type="hidden" name="csrf" value="{_e(session["csrf"])}">'
+            body += ('<div class="assignment-bulk-tools"><div class="actions">'
+                     '<label data-assignment-selection-control hidden><input type="checkbox" data-assignment-select-all> 현재 페이지 전체 선택</label>'
+                     '<button type="button" class="secondary" data-assignment-clear hidden>선택 해제</button></div>'
+                     '<p data-assignment-selection-status role="status" aria-live="polite">처리할 과제를 선택해 주세요.</p>'
+                     '<p class="meta">현재 페이지에서 최대 20개를 선택할 수 있습니다. 검색·페이지 이동 시 선택은 초기화됩니다. 초안은 개별 관리하며, 삭제 전에는 보관이 필요합니다.</p></div>')
+            body += table + ('<div class="actions">'
+                            '<button type="submit" name="action" value="archive" data-assignment-bulk-action>선택 과제 일괄 보관</button>'
+                            '<button type="submit" class="danger" name="action" value="delete" data-assignment-bulk-action>선택 과제 일괄 삭제</button></div>'
+                            '<p class="hint">다음 확인 화면에서 대상을 검토한 뒤 최종 실행합니다.</p></form>')
+        else:
+            body += table
         if not rows:
             body += '<p>등록된 과제가 없거나 검색 조건에 맞는 과제가 없습니다.</p>'
         body += f'<div class="catalog-actions">{catalog["page"]} / {catalog["pages"]} 페이지'

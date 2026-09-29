@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from autograde.assignment_admin import AssignmentAdminService, initialize_assignment_admin
-from autograde.platform_state import PlatformConflict, PlatformNotFound, PlatformStateStore
+from autograde.platform_state import PlatformAccessDenied, PlatformConflict, PlatformNotFound, PlatformStateStore
 from autograde.settings import AppPaths
 
 
@@ -204,8 +204,7 @@ def test_upgrade_adds_deletion_repository_without_losing_existing_draft_or_audit
     service.restore_release(COURSE, ASSIGNMENT)
 
 
-def test_submitted_source_receipt_grade_and_document_survive_delete_restore(published, tmp_path):
-    admin, draft, release = published
+def admit_synthetic_submission(admin, tmp_path):
     state = admin.state
     now = datetime.now(timezone.utc)
     student = state.upsert_local_student(student_key="synthetic-delete-student", auth_subject="school:synthetic-delete-student")
@@ -223,11 +222,18 @@ def test_submitted_source_receipt_grade_and_document_survive_delete_restore(publ
         access_token_hash="3" * 64, course_key=COURSE, assignment_id=ASSIGNMENT,
         idempotency_key="synthetic-request", request_hash="5" * 64, source_path=str(source),
         source_digest="6" * 64, source_size_bytes=source.stat().st_size)
+    owned = dict(access_token_hash="3" * 64, course_key=COURSE, submission_id="synthetic-submission")
+    return source, owned
+
+
+def test_submitted_source_receipt_grade_and_document_survive_delete_restore(published, tmp_path):
+    admin, draft, release = published
+    state = admin.state
+    source, owned = admit_synthetic_submission(admin, tmp_path)
     state.transition_bundle_submission("synthetic-submission", "queued")
     state.transition_bundle_submission("synthetic-submission", "running")
     state.record_bundle_graded_result("synthetic-submission", result_id="synthetic-result", score=7, max_score=10)
     state.publish_bundle_result("synthetic-submission")
-    owned = dict(access_token_hash="3" * 64, course_key=COURSE, submission_id="synthetic-submission")
     before_receipt = state.get_owned_bundle_receipt(**owned)
     before_grade = state.get_owned_bundle_result(**owned)
     before_document = admin.get_assignment_document(COURSE, ASSIGNMENT)
@@ -242,3 +248,45 @@ def test_submitted_source_receipt_grade_and_document_survive_delete_restore(publ
         assert admin.get_draft(COURSE, draft["draft_id"])["published_assignment_id"] == release.assignment_id
     with state._connection() as connection:
         assert connection.execute("SELECT COUNT(*) FROM bundle_submission_documents").fetchone()[0] == 1
+
+
+@pytest.mark.parametrize("in_flight_state", ["queued", "running"])
+def test_admitted_work_finishes_after_delete_but_new_submission_and_download_are_denied(
+    published, tmp_path, in_flight_state,
+):
+    admin, draft, _ = published
+    state = admin.state
+    source, owned = admit_synthetic_submission(admin, tmp_path)
+    state.record_bundle_download(download_id="synthetic-download-before-delete",
+        access_token_hash=owned["access_token_hash"], course_key=COURSE, assignment_id=ASSIGNMENT)
+    receipt = state.get_owned_bundle_receipt(**owned)
+    state.transition_bundle_submission(owned["submission_id"], "queued")
+    if in_flight_state == "running":
+        state.transition_bundle_submission(owned["submission_id"], "running")
+
+    admin.archive_release(COURSE, ASSIGNMENT)
+    admin.delete_release(COURSE, ASSIGNMENT)
+    assert admin.get_draft(COURSE, draft["draft_id"])["visibility"] == "deleted"
+    with pytest.raises(PlatformAccessDenied):
+        state.create_accepted_bundle_submission(submission_id="synthetic-new-submission", receipt_id="synthetic-new-receipt",
+            access_token_hash=owned["access_token_hash"], course_key=COURSE, assignment_id=ASSIGNMENT,
+            idempotency_key="synthetic-new-request", request_hash="7" * 64, source_path=str(source),
+            source_digest="6" * 64, source_size_bytes=source.stat().st_size)
+    with pytest.raises(PlatformAccessDenied):
+        state.record_bundle_download(download_id="synthetic-new-download",
+            access_token_hash=owned["access_token_hash"], course_key=COURSE, assignment_id=ASSIGNMENT)
+
+    # Exercise the same durable state transitions used by the grading worker.
+    # Existing receipts remain usable after admission has been closed.
+    if in_flight_state == "queued":
+        state.transition_bundle_submission(owned["submission_id"], "running")
+    state.record_bundle_graded_result(owned["submission_id"], result_id="synthetic-post-delete-result", score=7, max_score=10)
+    state.publish_bundle_result(owned["submission_id"])
+    assert state.get_owned_bundle_submission(**owned).state == "published"
+    assert state.get_owned_bundle_receipt(**owned) == receipt
+    assert state.get_owned_bundle_result(**owned).score == 7
+    assert source.read_text(encoding="utf-8") == "int main(){return 0;}\n"
+    assert admin.get_draft(COURSE, draft["draft_id"])["visibility"] == "deleted"
+    with state._connection() as connection:
+        assert connection.execute("SELECT COUNT(*) FROM bundle_submission_requests").fetchone()[0] == 1
+        assert connection.execute("SELECT COUNT(*) FROM bundle_download_events").fetchone()[0] == 1
