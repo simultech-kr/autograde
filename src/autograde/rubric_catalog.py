@@ -52,6 +52,12 @@ class RubricCatalog:
         if course['status'] == 'archived':
             raise PlatformAccessDenied('보관된 수업에서는 루브릭을 등록할 수 없습니다.')
 
+    def _assignment_for_authoring(self, course, assignment):
+        item = self.assignments.get_release(course['course_key'], assignment)
+        if item['visibility'] == 'deleted':
+            raise PlatformConflict('삭제된 과제입니다. 보관 상태로 복원한 뒤 루브릭을 작성하세요.')
+        return item
+
     def parse(self, course, raw):
         self._writable(course)
         if not isinstance(raw, str) or len(raw.encode('utf-8')) > MAX_DOCUMENT_BYTES:
@@ -65,7 +71,7 @@ class RubricCatalog:
             raise ValueError('루브릭의 course_key가 현재 교과목·분반과 다릅니다.')
         # Server assignment identity, not a user-supplied title or local demo ID.
         try:
-            self.assignments.get_release(course['course_key'], rubric['assignment_id'])
+            self._assignment_for_authoring(course, rubric['assignment_id'])
         except PlatformNotFound as exc:
             raise ValueError('현재 수업에 등록된 과제 공개본의 assignment_id를 입력하세요.') from exc
         return rubric
@@ -99,7 +105,7 @@ class RubricCatalog:
 
     def template(self, course, assignment):
         self._writable(course)
-        item = self.assignments.get_release(course['course_key'], assignment)
+        item = self._assignment_for_authoring(course, assignment)
         return json.dumps({
             'schema_version': 'autograde.rubric.v1', 'course_key': course['course_key'],
             'assignment_id': assignment, 'rubric_id': 'review_' + assignment[:80],

@@ -500,6 +500,21 @@ def _sanitize_rubric(
             item["title"] = title
         if feedback is not None:
             item["feedback"] = feedback
+        # Instructor-authored, public guidance only. Never forward raw compiler
+        # output, student stdout, hidden cases, or arbitrary runner metadata.
+        status = raw_item.get("status")
+        if isinstance(status, str) and status in {"passed", "partial", "failed", "blocked"}:
+            item["status"] = status
+        hint = _sanitize_text(raw_item.get("hint"), _MAX_FEEDBACK_CHARS)
+        if hint is not None:
+            item["hint"] = hint
+        path = _safe_relative_path(raw_item.get("path"))
+        if path is not None:
+            item["path"] = path
+            for field in ("line", "column"):
+                position = _bounded_position(raw_item.get(field))
+                if position is not None:
+                    item[field] = position
         if item:
             public[key] = item
     return public
@@ -508,12 +523,12 @@ def _sanitize_rubric(
 def _safe_relative_path(value: Any) -> Optional[str]:
     if not isinstance(value, str) or not value or len(value) > _MAX_PATH_CHARS:
         return None
-    if "\\" in value or "\x00" in value:
+    if "\\" in value or ":" in value or any(unicodedata.category(char).startswith("C") for char in value):
         return None
     path = PurePosixPath(value)
     if path.is_absolute() or path == PurePosixPath(".") or ".." in path.parts:
         return None
-    if any(part in ("", ".") for part in path.parts):
+    if any(part in ("", ".") for part in value.split("/")):
         return None
     return path.as_posix()
 

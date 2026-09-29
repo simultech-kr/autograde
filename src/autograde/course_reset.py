@@ -72,8 +72,8 @@ def _digest(connection, excluded=None):
 
 def _preflight(connection, course):
     version = connection.execute("SELECT MAX(version) FROM platform_schema_migrations").fetchone()[0]
-    if version not in (10, 11, 12, 13, 14):
-        raise ValueError("reset supports schema 10/11/12/13/14 only; do not modify the database manually")
+    if version not in (10, 11, 12, 13, 14, 15):
+        raise ValueError("reset supports schema 10/11/12/13/14/15 only; do not modify the database manually")
     if version >= 11:
         if not connection.execute("SELECT 1 FROM admin_courses WHERE course_key=?", (course,)).fetchone():
             raise ValueError("course must already be registered")
@@ -202,8 +202,10 @@ def reset_course(paths, course, *, apply=False, expected_state=None, confirm_cou
             protected = _digest(connection, targets)
             backup = _backup(paths, connection)
             # Lift only the two explicitly supported student-record delete
-            # guards within this backed-up transaction. Public explanation
-            # guards stay enabled. Restore exact SQL; rollback also restores it.
+            # guards within this backed-up transaction. Public explanation and
+            # assignment deletion guards stay enabled, and assignment lifecycle
+            # rows remain protected by the non-target digest. Restore exact SQL;
+            # rollback also restores it.
             for name in guards:
                 connection.execute(f"DROP TRIGGER {_quote(name)}")
             for table in targets:

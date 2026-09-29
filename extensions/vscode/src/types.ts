@@ -75,10 +75,15 @@ export interface RubricItem {
   readonly score?: number;
   readonly maxScore?: number;
   readonly feedback?: string;
+  readonly status?: "passed" | "partial" | "failed" | "blocked";
+  readonly hint?: string;
+  readonly path?: string;
+  readonly line?: number;
+  readonly column?: number;
 }
 
 export interface ResultDiagnostic {
-  readonly path: string;
+  readonly path?: string;
   readonly line?: number;
   readonly column?: number;
   readonly endLine?: number;

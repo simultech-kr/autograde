@@ -18,6 +18,7 @@ import {
   repositoryMatches,
   resolveAssignmentDiagnosticPath,
   resolveRepositoryRelativePath,
+  safeResultPath,
   safeRepositoryDirectoryName,
   safeAssignmentDirectoryName,
   selectRepositoryCloneUrl,
@@ -310,4 +311,63 @@ test("result rubric accepts server-side mapping projections", () => {
   assert.equal(result?.sourceDigest, "b".repeat(64));
   assert.equal(result?.rubric[0]?.name, "correctness");
   assert.equal(result?.rubric[1]?.score, 2);
+});
+
+test("array and mapping rubrics retain only public correction fields and valid locations", () => {
+  const criterion = { title: "출력 확인", score: 1, max_score: 2, status: "partial",
+    feedback: "첫 줄\n둘째 줄", hint: "마지막 줄바꿈을 확인하세요.", path: "src/main.cpp", line: 8, column: 3,
+    expected: "private expected", actual: "private actual", stdout: "private stdout" };
+  for (const rubric of [[criterion], { output: criterion }]) {
+    const item = normalizeGradeResult({ state: "published", rubric })!.rubric[0]!;
+    assert.deepEqual(item, { name: "출력 확인", score: 1, maxScore: 2, status: "partial",
+      feedback: "첫 줄\n둘째 줄", hint: "마지막 줄바꿈을 확인하세요.", path: "src/main.cpp", line: 8, column: 3 });
+    assert.equal("expected" in item, false);
+    assert.equal("actual" in item, false);
+    assert.equal("stdout" in item, false);
+  }
+});
+
+test("general diagnostics survive without a path and unsafe locations are omitted", () => {
+  const unsafe = ["../main.cpp", "/tmp/private.cpp", "src/../../main.cpp", "C:/private.cpp", "src\\main.cpp",
+    "https://example.test/file", "src//main.cpp", "./main.cpp", "src/./main.cpp", "main.cpp\nsecret",
+    "src/\u202emain.cpp", "src/\ue000main.cpp", "src/\ud800main.cpp", "x".repeat(513)];
+  const result = normalizeGradeResult({ diagnostics: [
+    { message: "메모리 제한 초과\n반복문을 확인하세요." },
+    ...unsafe.map(path => ({ path, line: 3, column: 2, message: "보존할 일반 피드백" })),
+    { path: "src/main.cpp", line: 4, column: 2, end_line: 5, end_column: 3, message: "위치 있는 피드백" },
+    { path: "src/main.cpp", message: "" }, null,
+  ] })!;
+  assert.equal(result.diagnostics.length, unsafe.length + 2);
+  assert.equal(result.diagnostics[0]?.message, "메모리 제한 초과\n반복문을 확인하세요.");
+  for (const item of result.diagnostics.slice(0, -1)) {
+    assert.equal(item.path, undefined); assert.equal(item.line, undefined); assert.equal(item.column, undefined);
+  }
+  assert.equal(result.diagnostics.at(-1)?.path, "src/main.cpp");
+  for (const value of unsafe) assert.equal(resolveAssignmentDiagnosticPath("/workspace/repo", "lab01", value), undefined);
+});
+
+test("malformed status and positions never become rubric verdicts or source coordinates", () => {
+  for (const status of ["pass", "PASSED", "<script>", true, {}, 1, null]) {
+    const result = normalizeGradeResult({ rubric: [{ title: "test", status }] })!;
+    assert.equal(result.rubric[0]?.status, undefined);
+  }
+  for (const position of [0, -1, 1.5, 10_000_001, Infinity, NaN, Number.MAX_SAFE_INTEGER + 1, "2", null]) {
+    const fields = { path: "main.cpp", line: position, column: 2, end_line: position, end_column: position };
+    const result = normalizeGradeResult({ rubric: [{ ...fields, title: "test" }], diagnostics: [{ ...fields, message: "test" }] })!;
+    for (const item of [...result.rubric, ...result.diagnostics]) {
+      assert.equal(item.line, undefined); assert.equal(item.column, undefined);
+    }
+    assert.equal(result.diagnostics[0]?.endLine, undefined);
+    const validLine = normalizeGradeResult({ rubric: [{ path: "main.cpp", line: 3, column: position }] })!.rubric[0]!;
+    assert.equal(validLine.line, 3); assert.equal(validLine.column, undefined);
+  }
+});
+
+test("result paths count Unicode characters and accept position bounds shared with the server", () => {
+  for (const path of ["x".repeat(512), "😀".repeat(512)]) {
+    assert.equal(safeResultPath(path), path);
+    const item = normalizeGradeResult({ rubric: [{ path, line: 10_000_000, column: 10_000_000 }] })!.rubric[0]!;
+    assert.equal(item.path, path); assert.equal(item.line, 10_000_000); assert.equal(item.column, 10_000_000);
+  }
+  assert.equal(safeResultPath("😀".repeat(513)), undefined);
 });

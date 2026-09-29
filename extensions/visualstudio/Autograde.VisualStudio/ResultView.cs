@@ -19,11 +19,11 @@ namespace Autograde.VisualStudio
             Content = border;
             Visibility = Visibility.Collapsed;
         }
-        TextBlock Text(string value, double size = 13, bool strong = false)
+        TextBlock Text(string value, double size = 13, bool strong = false, Panel parent = null)
         {
             var text = new TextBlock { Text = value, TextWrapping = TextWrapping.Wrap, FontSize = size,
                 FontWeight = strong ? FontWeights.SemiBold : FontWeights.Normal, Margin = new Thickness(0, 3, 0, 5) };
-            ThemeResources.Label(text); content.Children.Add(text); return text;
+            ThemeResources.Label(text); (parent ?? content).Children.Add(text); return text;
         }
         public void Clear() { content.Children.Clear(); Visibility = Visibility.Collapsed; }
         public void ShowNoSubmission(string title)
@@ -58,9 +58,29 @@ namespace Autograde.VisualStudio
             foreach (var item in model.Criteria)
             {
                 var label = new TextBlock { Text = item.Status + " · " + item.Title + "  " + item.Score, TextWrapping = TextWrapping.Wrap };
-                var feedback = new TextBlock { Text = item.Feedback, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(8) };
-                ThemeResources.Label(label); ThemeResources.Label(feedback);
-                content.Children.Add(new Expander { Header = label, Content = feedback, Margin = new Thickness(0, 4, 0, 4) });
+                var feedback = new StackPanel { Margin = new Thickness(8) };
+                ThemeResources.Label(label);
+                Text(item.NeedsWork ? "확인된 현상" : "확인된 결과", 12, true, feedback);
+                Text(item.Feedback, parent: feedback);
+                if (item.Hint != null)
+                {
+                    Text("수정 가이드", 12, true, feedback);
+                    Text(item.Hint, parent: feedback);
+                }
+                if (item.SourceLocation != null)
+                {
+                    Text("제출 소스 위치", 12, true, feedback);
+                    Text(item.SourceLocation, parent: feedback);
+                }
+                if (item.RequiresReview) Text("점수와 항목 판정 정보 확인이 필요합니다. 교수자에게 확인하세요.", parent: feedback);
+                var expander = new Expander { Header = label, Content = feedback, IsExpanded = item.IsExpanded, Margin = new Thickness(0, 4, 0, 4) };
+                AutomationProperties.SetName(expander, label.Text);
+                content.Children.Add(expander);
+            }
+            if (model.DiagnosticPreview.Count > 0)
+            {
+                Text("공개 진단", 14, true);
+                foreach (var diagnostic in model.DiagnosticPreview) Text(diagnostic, 12);
             }
             var details = new TextBox { Text = model.Details, IsReadOnly = true, TextWrapping = TextWrapping.Wrap,
                 AcceptsReturn = true, MaxHeight = 180, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Padding = new Thickness(6) };

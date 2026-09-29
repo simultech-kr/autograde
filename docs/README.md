@@ -1,5 +1,9 @@
 # Documentation
 
+- [강의자 과제 보관·삭제·복원](operations/assignment-archive-delete.md): 보관 후 삭제, 별도 삭제 목록, 학생 이력 보존과 보관 상태 복원.
+
+- [학생용 상세 채점 결과·수정 가이드](operations/student-grading-feedback.md): 실패 단계·미검사 구분, 교수자 테스트별 안내, VS Code/Visual Studio 표시와 기존 공개본 적용 범위.
+
 - [제출 학생 중심 실시간 결과](operations/live-student-results.md): 제출 우선·최근순, 5초 AJAX 갱신, 필터·스크롤 보존, 검증용 과제 집계 제외와 배포 절차.
 
 - [제출 이후 과제 설명 보완](operations/assignment-document-revisions.md): 같은 과제 ID·수락·제출·점수 보존, 설명 버전·교수자 편집·학생 확장 조회, 서버/확장 업데이트와 미실시 시험.

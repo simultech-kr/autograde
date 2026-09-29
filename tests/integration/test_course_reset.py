@@ -118,7 +118,7 @@ def test_unexpected_cross_course_change_rolls_back_and_restores_guard(records):
     assert fingerprint(paths) == plan["expected_state"]
 
 
-@pytest.mark.parametrize('version', [10, 11, 12, 13])
+@pytest.mark.parametrize('version', [10, 11, 12, 13, 14])
 def test_legacy_schema_reset_remains_supported(tmp_path, monkeypatch, version):
     import autograde.platform_state as module
     monkeypatch.setattr(module, '_LATEST_SCHEMA_VERSION', version)
@@ -130,7 +130,7 @@ def test_legacy_schema_reset_remains_supported(tmp_path, monkeypatch, version):
     with state._write() as db:
         db.execute("INSERT INTO platform_roster_bootstrap VALUES (1,2,'synthetic')")
     plan = reset_course(paths, 'come2201')
-    assert 'bundle_submission_documents' not in plan['counts']
+    assert ('bundle_submission_documents' in plan['counts']) == (version >= 14)
     assert apply(paths, plan)['mode'] == 'reset_complete'
     assert state.schema_version() == version
     assert state.list_course_student_summaries(course_key='come2201') == []
@@ -244,6 +244,53 @@ def test_failed_document_reset_rolls_back_references_and_both_guards(published_d
     with pytest.raises(sqlite3.IntegrityError, match='immutable'):
         with state._write() as db:
             db.execute('DELETE FROM bundle_submission_documents')
+
+
+def test_reset_preserves_deleted_assignments_audit_and_lifecycle_guards(published_documents):
+    paths, state, admin, releases, _ = published_documents
+    for course, release in releases.items():
+        admin.archive_release(course, release.assignment_id)
+        admin.delete_release(course, release.assignment_id)
+    preserved_releases = {course: state.get_bundle_assignment(release.assignment_id)
+                          for course, release in releases.items()}
+    assignment_tables = ('instructor_assignment_deletions', 'instructor_assignment_events',
+                         'instructor_assignment_drafts', 'assignment_document_revisions')
+    with state._connection() as db:
+        preserved_rows = {table: [tuple(row) for row in db.execute(f'SELECT * FROM {table} ORDER BY rowid')]
+                          for table in assignment_tables}
+        guards = [tuple(row) for row in db.execute("SELECT name,sql FROM sqlite_master WHERE type='trigger' ORDER BY name")]
+        assert db.execute("SELECT COUNT(*) FROM instructor_assignment_events WHERE action='release_deleted'").fetchone()[0] == 2
+    assert {'instructor_assignment_deletion_scope', 'instructor_assignment_deleted_release_guard',
+            'instructor_assignment_deleted_check_guard', 'instructor_assignment_deleted_document_guard'} <= {name for name, _ in guards}
+    assignment_id = releases['come2201'].assignment_id
+    # The same low-level lifecycle fence must remain effective before and after
+    # student records are removed; reset must never lift assignment guards.
+    with pytest.raises(sqlite3.IntegrityError, match='assignment_deleted'):
+        with sqlite3.connect(paths.database) as db:
+            db.execute('UPDATE bundle_assignment_releases SET active=1 WHERE assignment_id=?', (assignment_id,))
+    plan = reset_course(paths, 'come2201')
+    assert not (set(assignment_tables) & set(plan['counts']))
+    result = apply(paths, plan)
+    assert result['mode'] == 'reset_complete'
+    assert state.list_course_student_summaries(course_key='come2201') == []
+    assert len(state.list_course_student_summaries(course_key='come3105')) == 1
+    with state._connection() as db:
+        for table, expected in preserved_rows.items():
+            assert [tuple(row) for row in db.execute(f'SELECT * FROM {table} ORDER BY rowid')] == expected
+        assert [tuple(row) for row in db.execute("SELECT name,sql FROM sqlite_master WHERE type='trigger' ORDER BY name")] == guards
+    with sqlite3.connect(Path(result['backup_directory']) / 'state.sqlite3') as saved:
+        for table, expected in preserved_rows.items():
+            assert saved.execute(f'SELECT * FROM {table} ORDER BY rowid').fetchall() == expected
+    assert {course: state.get_bundle_assignment(release.assignment_id)
+            for course, release in releases.items()} == preserved_releases
+    with pytest.raises(sqlite3.IntegrityError, match='assignment_deleted'):
+        with sqlite3.connect(paths.database) as db:
+            db.execute('UPDATE bundle_assignment_releases SET active=1 WHERE assignment_id=?', (assignment_id,))
+    with pytest.raises(sqlite3.IntegrityError, match='assignment_deleted'):
+        with sqlite3.connect(paths.database) as db:
+            db.execute("INSERT INTO assignment_document_revisions "
+                       "(assignment_id,revision,content,sha256,change_note,actor,updated_at) "
+                       "VALUES (?,2,'changed','synthetic','test','test','now')", (assignment_id,))
 
 
 def test_reset_actual_claims_submissions_preserves_other_course(portal, tmp_path):

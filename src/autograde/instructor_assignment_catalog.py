@@ -16,36 +16,42 @@ class InstructorAssignmentCatalog:
              ELSE json_extract(d.document_json,'$.due_at') END AS due_at,
         CASE WHEN r.assignment_id IS NOT NULL THEN r.opens_at
              ELSE json_extract(d.document_json,'$.opens_at') END AS opens_at,
-        r.active,r.ready,d.updated_at,r.result_policy
+        r.active,r.ready,COALESCE(x.deleted_at,d.updated_at) AS updated_at,r.result_policy,x.deleted_at
       FROM instructor_assignment_drafts d
       LEFT JOIN bundle_assignment_releases r ON r.assignment_id=d.published_assignment_id AND r.course_key=d.course_key
+      LEFT JOIN instructor_assignment_deletions x ON x.assignment_id=r.assignment_id AND x.course_key=d.course_key
       LEFT JOIN instructor_assignment_jobs j ON j.job_id=(SELECT job_id FROM instructor_assignment_jobs
         WHERE draft_id=d.draft_id ORDER BY created_at DESC,rowid DESC LIMIT 1)
       WHERE d.course_key=:course AND d.deleted_at IS NULL
       UNION ALL
       SELECT r.assignment_id,NULL,r.assignment_id,r.title,NULL,'cli',NULL,NULL,
         (SELECT status FROM bundle_release_checks WHERE assignment_id=r.assignment_id ORDER BY id DESC LIMIT 1),
-        r.due_at,r.opens_at,r.active,r.ready,r.updated_at,r.result_policy
-      FROM bundle_assignment_releases r WHERE r.course_key=:course
+        r.due_at,r.opens_at,r.active,r.ready,COALESCE(x.deleted_at,r.updated_at),r.result_policy,x.deleted_at
+      FROM bundle_assignment_releases r
+      LEFT JOIN instructor_assignment_deletions x ON x.assignment_id=r.assignment_id AND x.course_key=r.course_key
+      WHERE r.course_key=:course
         AND NOT EXISTS (SELECT 1 FROM instructor_assignment_drafts WHERE published_assignment_id=r.assignment_id AND deleted_at IS NULL)
         AND NOT EXISTS (SELECT 1 FROM instructor_assignment_jobs WHERE assignment_id=r.assignment_id)
     ), classified AS (
-      SELECT *,CASE WHEN assignment_id IS NULL THEN 'draft'
+      SELECT *,CASE WHEN deleted_at IS NOT NULL THEN 'deleted' WHEN assignment_id IS NULL THEN 'draft'
         WHEN NOT active THEN 'inactive' WHEN NOT ready THEN 'hidden'
         WHEN opens_at>:now THEN 'scheduled' WHEN due_at<=:now THEN 'closed' ELSE 'open' END AS visibility
       FROM items
     )
     """
 
-    def list(self, course, *, search='', visibility='all', page=1, assignment_id=None):
+    def list(self, course, *, search='', visibility='all', page=1, assignment_id=None, include_deleted=False):
         if not isinstance(search, str) or len(search) > 200:
             raise ValueError('검색어는 200자 이하로 입력하세요.')
-        if visibility not in {'all', 'draft', 'open', 'closed', 'scheduled', 'hidden', 'inactive'}:
+        if visibility not in {'all', 'draft', 'open', 'closed', 'scheduled', 'hidden', 'inactive', 'deleted'}:
             raise ValueError('과제 상태를 다시 선택하세요.')
         if isinstance(page, bool) or not isinstance(page, int) or not 1 <= page <= 10000:
             raise ValueError('목록 페이지를 확인하세요.')
-        parameters = dict(course=course, search=search, visibility=visibility, now=utc_iso(), assignment=assignment_id)
-        where = " WHERE instr(lower(title),lower(:search))>0 AND (:visibility='all' OR visibility=:visibility) AND (:assignment IS NULL OR assignment_id=:assignment)"
+        parameters = dict(course=course, search=search, visibility=visibility, now=utc_iso(), assignment=assignment_id,
+                          include_deleted=int(include_deleted))
+        where = """ WHERE instr(lower(title),lower(:search))>0
+          AND ((:visibility='all' AND (:include_deleted=1 OR visibility<>'deleted')) OR visibility=:visibility)
+          AND (:assignment IS NULL OR assignment_id=:assignment)"""
         with self.state._connection() as connection:
             # Count and page refer to the same snapshot while submissions continue.
             connection.execute('BEGIN')
@@ -62,7 +68,9 @@ class InstructorAssignmentCatalog:
                     generated_at=parameters['now'])
 
     def get_release(self, course, assignment_id):
-        result = self.list(course, assignment_id=assignment_id)
+        # Explicit instructor detail links retain read access to grading evidence
+        # and restoration controls; ordinary catalog browsing excludes trash.
+        result = self.list(course, assignment_id=assignment_id, include_deleted=True)
         if not result['items']:
             raise PlatformNotFound('현재 수업의 공개본을 찾을 수 없습니다.')
         return result['items'][0]

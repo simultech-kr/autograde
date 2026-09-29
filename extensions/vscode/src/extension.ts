@@ -65,6 +65,7 @@ import { ServiceAddressController } from "./serviceAddress";
 import { AssignmentTreeItem, AssignmentsTreeProvider } from "./tree";
 import type { Assignment, GradeResult, ResultDiagnostic, SubmissionSummary } from "./types";
 import { clearResultPanel, pauseDisplayedResult, refreshDisplayedResult, showResultPanel } from "./resultPanel";
+import { diagnosticText, feedbackLocation, summarizeResult } from "./resultSummary";
 import { prepareClaimWorkspace } from "./claimWorkspace";
 import { saveAssignmentDocuments } from "./submissionPreflight";
 import { SubmissionResultMonitor, type ResultScope } from "./submissionResultMonitor";
@@ -1200,7 +1201,7 @@ function renderResult(output: vscode.OutputChannel, assignment: Assignment, resu
   output.appendLine(assignment.title);
   output.appendLine("=".repeat(Math.max(assignment.title.length, 12)));
   output.appendLine(`상태: ${result.state}`);
-  if (result.score !== undefined) {
+  if (result.state === "published" && result.score !== undefined) {
     output.appendLine(`점수: ${result.score}${result.maxScore === undefined ? "" : ` / ${result.maxScore}`}`);
   }
   if (result.headSha) {
@@ -1209,23 +1210,26 @@ function renderResult(output: vscode.OutputChannel, assignment: Assignment, resu
   if (result.sourceDigest) {
     output.appendLine(`채점 Bundle SHA-256: ${result.sourceDigest}`);
   }
-  if (result.rubric.length > 0) {
+  const view = summarizeResult(result);
+  if (view.items.length > 0) {
     output.appendLine("");
     output.appendLine("Rubric");
-    for (const item of result.rubric) {
+    for (const item of view.items) {
       const score = item.score === undefined ? "" : `: ${item.score}${item.maxScore === undefined ? "" : ` / ${item.maxScore}`}`;
-      output.appendLine(`- ${item.name}${score}`);
+      output.appendLine(`- ${item.label} · ${item.title}${score}`);
+      const location = feedbackLocation(item);
+      if (location) output.appendLine(`  소스 위치: ${location}`);
       if (item.feedback) {
-        output.appendLine(`  ${item.feedback}`);
+        output.appendLine(`  확인된 현상: ${item.feedback}`);
       }
+      if (item.hint) output.appendLine(`  수정 가이드: ${item.hint}`);
     }
   }
-  if (result.diagnostics.length > 0) {
+  if (result.state === "published" && result.diagnostics.length > 0) {
     output.appendLine("");
     output.appendLine("Feedback");
     for (const item of result.diagnostics) {
-      const line = item.line === undefined ? "" : `:${item.line}`;
-      output.appendLine(`- ${item.path}${line} ${item.message}`);
+      output.appendLine(`- ${diagnosticText(item)}`);
     }
   }
 }
@@ -1242,6 +1246,7 @@ function publishDiagnostics(
   }
   const grouped = new Map<string, vscode.Diagnostic[]>();
   for (const item of feedback) {
+    if (!item.path) continue;
     const absolute = resolveAssignmentDiagnosticPath(
       workspaceFolder.uri.fsPath,
       assignmentPath,

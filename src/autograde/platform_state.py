@@ -1527,8 +1527,17 @@ _MIGRATIONS = {
     12: _DOWNLOAD_DIAGNOSTICS_SCHEMA,
     13: "",  # Backfill draft soft-delete support in already initialized databases.
     14: _ASSIGNMENT_DOCUMENT_SCHEMA,
+    15: "",  # Recoverable assignment deletion, audit identities and mutation guards.
 }
 _LATEST_SCHEMA_VERSION = max(_MIGRATIONS)
+
+
+def _require_bundle_release_not_deleted(connection, assignment_id):
+    # Historical-schema maintenance readers may not yet have this repository.
+    if connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='instructor_assignment_deletions'").fetchone() and connection.execute(
+        "SELECT 1 FROM instructor_assignment_deletions WHERE assignment_id=?", (assignment_id,),
+    ).fetchone():
+        raise PlatformConflict("삭제된 과제입니다. 복원한 뒤 다시 시도하세요.")
 
 
 def _required_text(value: str, field: str) -> str:
@@ -1728,6 +1737,10 @@ class PlatformStateStore:
                 connection.rollback()
                 if str(exc) == "admin_course_not_active":
                     raise PlatformConflict("course is not active") from exc
+                if str(exc) == "assignment_deleted":
+                    raise PlatformConflict("삭제된 과제입니다. 복원한 뒤 다시 시도하세요.") from exc
+                if str(exc) == "assignment_deletion_requires_archive":
+                    raise PlatformConflict("먼저 과제를 보관한 뒤 삭제하세요.") from exc
                 raise
             except BaseException:
                 connection.rollback()
@@ -1760,7 +1773,7 @@ class PlatformStateStore:
                     )
                 for version in range(current + 1, _LATEST_SCHEMA_VERSION + 1):
                     applied = utc_iso().replace("'", "''")
-                    if version in (11, 13):
+                    if version in (11, 13, 15):
                         from .course_admin import initialize_course_admin
                         from .assignment_admin import initialize_assignment_admin
                         from .instructor_schema import initialize_instructor_runtime
@@ -5987,6 +6000,7 @@ class PlatformStateStore:
                                      (assignment_id, course_key)).fetchone()
             if row is None:
                 raise PlatformNotFound("assignment was not found in this course")
+            _require_bundle_release_not_deleted(connection, assignment_id)
             if row["ready"]:
                 raise PlatformConflict("hide the release before validating it")
             cursor = connection.execute("INSERT INTO bundle_release_checks(assignment_id, status, created_at) VALUES (?, 'pending', ?)",
@@ -6008,6 +6022,7 @@ class PlatformStateStore:
                                      (assignment_id, course_key)).fetchone()
             if row is None:
                 raise PlatformNotFound("assignment was not found in this course")
+            _require_bundle_release_not_deleted(connection, assignment_id)
             check = connection.execute("SELECT status FROM bundle_release_checks WHERE assignment_id = ? ORDER BY id DESC LIMIT 1",
                                        (assignment_id,)).fetchone()
             if check is None or check["status"] != "passed":
@@ -6029,10 +6044,17 @@ class PlatformStateStore:
         if len(reason) > 1000 or len(actor) > 255:
             raise ValueError("deadline audit text is too long")
         with self._write() as connection:
+            # Match web administration's course fence under this same write lock.
+            # Older-schema maintenance fixtures may not have admin repositories.
+            if connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='admin_courses'").fetchone():
+                course = connection.execute("SELECT status FROM admin_courses WHERE course_key=?", (course_key,)).fetchone()
+                if course is not None and course["status"] == "archived":
+                    raise PlatformConflict("보관된 수업은 변경할 수 없습니다.")
             row = connection.execute("SELECT * FROM bundle_assignment_releases WHERE assignment_id = ? AND course_key = ?",
                                      (assignment_id, course_key)).fetchone()
             if row is None:
                 raise PlatformNotFound("assignment was not found in this course")
+            _require_bundle_release_not_deleted(connection, assignment_id)
             if row["due_at"] is None or due <= row["due_at"] or due <= now:
                 raise PlatformConflict("new deadline must extend an existing deadline into the future")
             if row["result_policy"] == "after_deadline" and connection.execute(
@@ -6080,6 +6102,7 @@ class PlatformStateStore:
                 raise PlatformNotFound(
                     "bundle assignment was not found in this course"
                 )
+            _require_bundle_release_not_deleted(connection, assignment_id)
             connection.execute(
                 "UPDATE bundle_assignment_releases "
                 "SET active = ?, ready = ?, updated_at = ? "

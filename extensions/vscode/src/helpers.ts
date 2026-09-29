@@ -495,10 +495,28 @@ export function resolveAssignmentDiagnosticPath(
   assignmentPath: string | undefined,
   diagnosticPath: string,
 ): string | undefined {
+  if (!safeResultPath(diagnosticPath)) return undefined;
   const relativePath = assignmentPath && assignmentPath !== "."
     ? path.posix.join(assignmentPath, diagnosticPath)
     : diagnosticPath;
   return resolveRepositoryRelativePath(repositoryRoot, relativePath);
+}
+
+/** Public result locations are submission-relative POSIX paths, never URLs or host paths. */
+export function safeResultPath(value: unknown): string | undefined {
+  if (typeof value !== "string" || !value || [...value].length > 512 || /[\\:\p{C}]/u.test(value)
+      || value.split("/").some(segment => !segment || segment === "." || segment === "..")) return undefined;
+  return value;
+}
+
+export function positiveResultPosition(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 && value <= 10_000_000 ? value : undefined;
+}
+
+function resultLocation(item: JsonRecord) {
+  const path = safeResultPath(firstString(item, ["path", "file"]));
+  const line = path ? positiveResultPosition(item.line) : undefined;
+  return { path, line, column: line ? positiveResultPosition(item.column) : undefined };
 }
 
 export function normalizeAssignments(payload: unknown): Assignment[] {
@@ -642,21 +660,31 @@ export function normalizeGradeResult(payload: unknown): GradeResult | undefined 
       if (!isRecord(item)) {
         return [];
       }
-      const diagnosticPath = firstString(item, ["path", "file"]);
       const message = firstString(item, ["message"]);
-      if (!diagnosticPath || !message) {
+      if (!message) {
         return [];
       }
+      const location = resultLocation(item);
       return [{
-        path: diagnosticPath,
-        line: firstNumber(item, ["line"]),
-        column: firstNumber(item, ["column"]),
-        endLine: firstNumber(item, ["end_line"]),
-        endColumn: firstNumber(item, ["end_column"]),
+        ...location,
+        endLine: location.line ? positiveResultPosition(item.end_line) : undefined,
+        endColumn: location.line ? positiveResultPosition(item.end_column) : undefined,
         severity: firstString(item, ["severity"]),
         message,
       }];
     }),
+  };
+}
+
+function rubricDetails(item: JsonRecord): Omit<RubricItem, "name"> {
+  const status = item.status;
+  return {
+    score: firstNumber(item, ["score"]),
+    maxScore: firstNumber(item, ["max_score"]),
+    feedback: firstString(item, ["feedback", "message"]),
+    hint: firstString(item, ["hint"]),
+    status: status === "passed" || status === "partial" || status === "failed" || status === "blocked" ? status : undefined,
+    ...resultLocation(item),
   };
 }
 
@@ -668,9 +696,7 @@ function normalizeRubric(value: unknown): RubricItem[] {
       }
       return [{
         name: firstString(item, ["name", "title", "criterion"]) ?? "항목",
-        score: firstNumber(item, ["score"]),
-        maxScore: firstNumber(item, ["max_score"]),
-        feedback: firstString(item, ["feedback", "message"]),
+        ...rubricDetails(item),
       }];
     });
   }
@@ -689,9 +715,7 @@ function normalizeRubric(value: unknown): RubricItem[] {
     }
     return [{
       name: firstString(item, ["name", "title", "criterion"]) ?? name,
-      score: firstNumber(item, ["score"]),
-      maxScore: firstNumber(item, ["max_score"]),
-      feedback: firstString(item, ["feedback", "message"]),
+      ...rubricDetails(item),
     }];
   });
 }

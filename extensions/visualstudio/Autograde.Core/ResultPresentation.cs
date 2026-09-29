@@ -13,7 +13,13 @@ namespace Autograde.Core
         public string Status { get; set; }
         public string Score { get; set; }
         public string Feedback { get; set; }
+        public string Hint { get; set; }
+        public string SourceLocation { get; set; }
         public bool NeedsWork { get; set; }
+        public bool IsBlocked { get; set; }
+        public bool RequiresReview { get; set; }
+        public bool IsPassed { get; set; }
+        public bool IsExpanded => NeedsWork || IsBlocked || RequiresReview;
     }
 
     // Display policy, not a new grading policy: no invented pass threshold.
@@ -37,6 +43,91 @@ namespace Autograde.Core
         }
         static bool Valid(decimal? score, decimal? max) => score.HasValue && max.HasValue && max > 0 && score >= 0 && score <= max;
         static string Format(decimal value) => value.ToString("0.##", CultureInfo.InvariantCulture);
+        static string TextValue(JToken token) => token?.Type == JTokenType.String && !string.IsNullOrWhiteSpace((string)token) ? (string)token : null;
+        static int? PositiveInteger(JToken token)
+        {
+            if (token?.Type != JTokenType.Integer) return null;
+            try { var value = token.Value<int>(); return value > 0 && value <= 10000000 ? (int?)value : null; }
+            catch (Exception ex) when (ex is OverflowException || ex is FormatException || ex is InvalidCastException) { return null; }
+        }
+        static bool UnsafePathCharacters(string value)
+        {
+            int characters = 0;
+            for (int index = 0; index < value.Length; index++)
+            {
+                if (++characters > 512) return true;
+                switch (CharUnicodeInfo.GetUnicodeCategory(value, index))
+                {
+                    case UnicodeCategory.Control:
+                    case UnicodeCategory.Format:
+                    case UnicodeCategory.Surrogate:
+                    case UnicodeCategory.PrivateUse:
+                    case UnicodeCategory.OtherNotAssigned:
+                        return true;
+                }
+                if (char.IsHighSurrogate(value[index]) && index + 1 < value.Length && char.IsLowSurrogate(value[index + 1])) index++;
+            }
+            return false;
+        }
+        static string Location(JObject value)
+        {
+            var path = TextValue(value["path"]);
+            // Locations describe submitted files, never server paths or navigable URLs.
+            if (path == null || path != path.Trim() || path.StartsWith("/", StringComparison.Ordinal) || path.Contains("\\") || path.Contains(":") ||
+                UnsafePathCharacters(path) || path.Split('/').Any(part => part.Length == 0 || part == "." || part == "..")) return null;
+            var line = PositiveInteger(value["line"]); var column = PositiveInteger(value["column"]);
+            return path + (line.HasValue ? ":" + line.Value.ToString(CultureInfo.InvariantCulture) +
+                (column.HasValue ? ":" + column.Value.ToString(CultureInfo.InvariantCulture) : "") : "");
+        }
+        static CriterionPresentation Criterion(string key, JObject value)
+        {
+            var earned = Number(value["score"]); var possible = Number(value["max_score"]);
+            bool comparable = Valid(earned, possible);
+            var status = comparable ? (earned == possible ? "passed" : earned == 0 ? "failed" : "partial") : null;
+            var explicitStatus = TextValue(value["status"]);
+            bool requiresReview = false;
+            if (value["status"] != null && value["status"].Type != JTokenType.Null && explicitStatus == null)
+            {
+                status = null; requiresReview = true;
+            }
+            if (explicitStatus != null)
+            {
+                switch (explicitStatus)
+                {
+                    case "passed":
+                        // Informational stages may omit both score fields. When a
+                        // score is supplied, a success label must agree with it.
+                        bool unscored = value.Property("score") == null && value.Property("max_score") == null;
+                        requiresReview = !unscored && (!comparable || earned != possible);
+                        if (unscored) status = "passed";
+                        else if (!comparable) status = null;
+                        break;
+                    case "partial":
+                    case "failed":
+                        status = explicitStatus;
+                        requiresReview = comparable && earned == possible;
+                        break;
+                    case "blocked":
+                        status = explicitStatus;
+                        requiresReview = comparable && earned > 0;
+                        break;
+                    default:
+                        status = null; requiresReview = true;
+                        break;
+                }
+            }
+            bool needsWork = status == "failed" || status == "partial", blocked = status == "blocked";
+            return new CriterionPresentation
+            {
+                Title = TextValue(value["title"]) ?? Title(key),
+                Status = blocked ? "선행 단계 해결 후 재검사" : needsWork ? (status == "partial" ? "일부 충족 · 수정 필요" : "수정 필요") :
+                    status == "passed" ? "충족" : requiresReview ? "판정 확인 필요" : "참고 · 판정 없음",
+                Score = comparable ? Format(earned.Value) + " / " + Format(possible.Value) : "배점 정보 없음",
+                Feedback = TextValue(value["feedback"]) ?? "공개된 상세 피드백이 없습니다.",
+                Hint = TextValue(value["hint"]), SourceLocation = Location(value), NeedsWork = needsWork,
+                IsBlocked = blocked, RequiresReview = requiresReview, IsPassed = status == "passed"
+            };
+        }
         static string Title(string key)
         {
             switch (key)
@@ -73,15 +164,11 @@ namespace Autograde.Core
                     foreach (var item in rubric.Properties())
                     {
                         if (!(item.Value is JObject value)) continue;
-                        var earned = Number(value["score"]); var possible = Number(value["max_score"]);
-                        bool comparable = Valid(earned, possible), needsWork = comparable && earned < possible;
-                        criteria.Add(new CriterionPresentation { Title = (string)value["title"] ?? Title(item.Name),
-                            Status = comparable ? (needsWork ? "수정 필요" : "충족") : "참고 · 판정 없음",
-                            Score = comparable ? Format(earned.Value) + " / " + Format(possible.Value) : "배점 정보 없음",
-                            Feedback = (string)value["feedback"] ?? "공개된 상세 피드백이 없습니다.", NeedsWork = needsWork });
+                        criteria.Add(Criterion(item.Name, value));
                     }
-                model.Criteria = criteria.OrderByDescending(item => item.NeedsWork).ToList();
-                bool inconsistent = valid && score == max && criteria.Any(item => item.NeedsWork);
+                model.Criteria = criteria.OrderByDescending(item => item.NeedsWork).ThenByDescending(item => item.IsBlocked)
+                    .ThenByDescending(item => item.RequiresReview).ToList();
+                bool inconsistent = criteria.Any(item => item.RequiresReview) || valid && score == max && criteria.Any(item => item.NeedsWork || item.IsBlocked);
                 if (valid && !inconsistent)
                 {
                     model.Headline = score == max ? "자동채점 총점 기준 충족" : "수정이 필요합니다";
@@ -93,15 +180,20 @@ namespace Autograde.Core
                     model.Headline = "결과 확인이 필요합니다";
                     model.NextStep = "점수 또는 항목별 결과가 완성 여부를 판단하기에 충분하지 않습니다. 교수자에게 확인하세요.";
                 }
-                var scored = criteria.Count(item => item.Status != "참고 · 판정 없음");
-                model.Summary = scored > 0 ? $"공개된 채점 항목 {scored}개 중 {criteria.Count(item => item.Status == "충족")}개 충족 · {criteria.Count(item => item.NeedsWork)}개 수정 필요" :
+                var scored = criteria.Count(item => item.IsPassed || item.NeedsWork || item.IsBlocked || item.RequiresReview);
+                model.Summary = scored > 0 ? $"공개된 채점 항목 {scored}개 · {criteria.Count(item => item.IsPassed)}개 충족 · {criteria.Count(item => item.NeedsWork)}개 수정 필요" +
+                    (criteria.Any(item => item.IsBlocked) ? $" · {criteria.Count(item => item.IsBlocked)}개 선행 단계 대기" : "") +
+                    (criteria.Any(item => item.RequiresReview) ? " · 항목 판정 확인 필요" : "") :
                     "항목별 판정은 제공되지 않았습니다. 총점만으로 표시하며 교수자의 최종 평가를 대신하지 않습니다.";
                 if (result["diagnostics"] is JArray diagnostics)
                 {
                     var preview = new List<string>();
                     foreach (var item in diagnostics.OfType<JObject>())
                     {
-                        var line = (string)item["path"] + ":" + item["line"] + " " + (string)item["message"];
+                        var message = TextValue(item["message"]);
+                        if (message == null) continue;
+                        var location = Location(item);
+                        var line = (location == null ? "" : location + " ") + message;
                         details.AppendLine(line);
                         if (preview.Count < 5) preview.Add(line);
                     }

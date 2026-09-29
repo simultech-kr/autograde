@@ -159,7 +159,7 @@ def test_schema_13_upgrade_preserves_receipts_without_fabricated_audit(tmp_path,
         receipt_id = fixture.submit().request.submission_id
         receipt = state.get_bundle_receipt(receipt_id)
     upgraded = PlatformStateStore(state.database)
-    assert upgraded.schema_version() == 14
+    assert upgraded.schema_version() == PlatformStateStore.LATEST_SCHEMA_VERSION
     assert upgraded.get_bundle_assignment(release.assignment_id) == release
     assert upgraded.get_bundle_receipt(receipt_id) == receipt
     with upgraded._connection() as db:
