@@ -14,9 +14,15 @@ SCRIPT = r"""(() => {
       ['checkbox', 'radio'].includes(el.type) ? el.checked : el.value]));
   const dirty = form => form.hasAttribute('data-recovered') || baselines.get(form) !== fingerprint(form);
   const anyDirty = () => guarded.some(dirty);
-  const showDirty = form => {
+  const uploadForm = form => guarded.includes(form) && form.enctype === 'multipart/form-data';
+  const showStatus = (form, text) => {
     const notice = form.querySelector('[data-save-status]');
-    if (notice) notice.textContent = dirty(form) ? '미저장 변경이 있습니다. 이 영역의 저장 버튼을 눌러 주세요.' : '입력 변경 없음';
+    if (notice) notice.textContent = text;
+  };
+  const showDirty = form => {
+    const selected = uploadForm(form) && [...form.querySelectorAll('input[type=file]')].some(el => el.files.length > 0);
+    showStatus(form, selected ? '파일 선택됨 · 아직 서버에 저장되지 않았습니다. 필요한 검토 확인 후 이 영역의 저장 버튼을 눌러 주세요.' :
+      dirty(form) ? '미저장 변경이 있습니다. 이 영역의 저장 버튼을 눌러 주세요.' : '입력 변경 없음');
   };
 
   document.querySelectorAll('form[data-assignment-bulk]').forEach(form => {
@@ -126,15 +132,28 @@ SCRIPT = r"""(() => {
     baselines.set(form, fingerprint(form)); showDirty(form);
     form.addEventListener('input', () => showDirty(form));
     form.addEventListener('change', () => showDirty(form));
+    if (uploadForm(form)) form.addEventListener('invalid', () => {
+      const reasons = [];
+      if ([...form.querySelectorAll('input[type=file]')].some(field => field.required && !field.files.length)) {
+        reasons.push('업로드할 ZIP 파일을 선택해 주세요.');
+      }
+      if ([...form.querySelectorAll('input[type=checkbox]')].some(field => field.required && !field.checked)) {
+        reasons.push('필수 검토 확인란을 선택해 주세요.');
+      }
+      showStatus(form, (reasons.join(' ') || '입력 내용을 확인해 주세요.') + ' 아직 서버로 전송되지 않았습니다.');
+    }, true);
   });
   window.addEventListener('beforeunload', event => {
     if (!leaving && anyDirty()) { event.preventDefault(); event.returnValue = ''; }
   });
   document.addEventListener('submit', event => {
     const otherDirty = guarded.some(form => form !== event.target && dirty(form));
-    if (otherDirty && !window.confirm('다른 입력 영역에 저장하지 않은 변경이 있습니다. 계속하면 해당 변경이 사라집니다. 계속할까요?')) {
-      event.preventDefault(); return;
+    if (otherDirty && !window.confirm('다른 입력 영역에 저장하지 않은 변경이 있습니다. 계속하면 해당 변경이 사라집니다. 다른 영역의 파일 선택은 다음 화면에서 유지되지 않습니다. 파일은 영역별로 하나씩 저장하세요. 계속할까요?')) {
+      event.preventDefault();
+      showStatus(event.target, '저장을 취소했습니다. 서버로 전송되지 않았습니다. 다른 영역의 변경을 먼저 저장하거나 보관한 뒤 다시 시도해 주세요.');
+      return;
     }
+    if (uploadForm(event.target)) showStatus(event.target, '업로드 중 · 서버 저장 완료를 기다려 주세요. 등록 결과는 다음 화면에서 확인하세요.');
     leaving = true;
   });
   window.addEventListener('pageshow', () => { leaving = false; });

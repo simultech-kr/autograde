@@ -1,6 +1,6 @@
 # Configuration
 
-- `nginx-autograde-pilot.conf.example`: QR/password 외부 HTTPS 파일럿의 loopback reverse proxy,
+- `nginx-autograde-pilot.conf.example`: 웹/password 외부 HTTPS 파일럿의 loopback reverse proxy,
   HSTS, 연결 제한과 25명 NAT burst를 고려한 인증 endpoint rate-limit 예제. Domain과 인증서
   경로를 바꾸고 `nginx -t`를 통과한 뒤에만 사용합니다. 처음에는 5분 HSTS로 실제 교실
   회선을 검증하고, 인증서 자동 갱신과 HTTPS 상시 운영을 확인한 뒤에만 1년으로 늘립니다.

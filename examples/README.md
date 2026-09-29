@@ -1,5 +1,7 @@
 # Examples
 
+- [creational-patterns/](creational-patterns/README.md): C++17 Factory Method·Abstract Factory·Singleton 통합 과제. 학생용 문제·힌트·TODO 코드, 100점 채점 자료와 항목별 평가 요소.
+
 - [rubric/](rubric/README.md): 독립 루브릭 CLI의 실행 형식·혼합 평가 profile·82.5점 합성 근거. 실제 학생 평가가 아님.
 
 - [pattern-workshops/](pattern-workshops/README.md): C++17 옵저버·데코레이터 문제 상황, 학생 TODO 코드, 공개 검사와 AI 검토 프롬프트. 참고 정답은 별도 교수자 폴더.

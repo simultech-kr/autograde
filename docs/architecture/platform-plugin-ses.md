@@ -68,7 +68,7 @@ Host는 인증된 Principal과 서버가 확인한 CourseScope를 주입한다. 
 | `course.catalog` / `enrollment.roster_csv` | course_admin, course_runtime, pilot_roster | 교과목 개설·학기·분반·명단·비활성·비밀번호 초기화 |
 | `assignment.authoring` / `assignment.validation` | assignment_admin, instructor_upload, grader | 문제·starter·정답·오답·테스트·초안 검증 |
 | `assignment.release` / `lifecycle.deadlines` | 공개/복제/숨김/연장, 마감 검사 | 검증한 버전만 공개. 별도 수락 기간·개인 예외는 추가 구현 |
-| `delivery.bundle` / `claim.web_code` | platform_portal, platform_qr, platform_service | QR·수령 코드·수락·자료 다운로드 |
+| `delivery.bundle` / `claim.web_code` | platform_portal, platform_service | 웹 접속 링크·수령 코드·수락·자료 다운로드 |
 | `submission.receipt` | platform_service, platform_state | 필수 불변 접수·중복 방지·현재 제출 식별 |
 | `submission.history` / `source.compare` | submission_review, digest 조회 | 제출 시각·버전·점수 증감·코드 비교 |
 | `grading.queue` / `grading.io_cases` | course_runtime, platform_bundle_worker, grader | 접수와 실행 분리, 실행 결과→항목별 증거 |

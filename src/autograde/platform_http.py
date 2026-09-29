@@ -699,11 +699,29 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
         query: Mapping[str, str],
     ) -> tuple[Any, int]:
         facade = self.platform_server.facade
+        participation_fields = {'assignment_id', 'result_view'}
+        portal_path = parameters.get('path', '') if route == 'portal' else ''
+        participation_page = route == 'instructor_page' or bool(
+            re.fullmatch(r'/courses/[A-Za-z0-9][A-Za-z0-9._~-]{0,127}/instructor/submissions', portal_path)
+            or (getattr(facade, 'instructor', None) is None and
+                re.fullmatch(r'/courses/[A-Za-z0-9][A-Za-z0-9._~-]{0,127}/instructor', portal_path)))
+        if participation_page and query:
+            if self.command != 'GET' or not set(query) <= participation_fields:
+                raise PlatformHTTPError(400, "invalid_request", "Unexpected query parameter")
+            if 'assignment_id' in query and self._identifier(query['assignment_id']) is None:
+                raise PlatformHTTPError(400, "invalid_request", "Invalid assignment selection")
+            if 'result_view' in query and query['result_view'] not in {'all', 'submitted', 'unsubmitted', 'pending', 'attention'}:
+                raise PlatformHTTPError(400, "invalid_request", "Invalid result view")
+        elif route in {'instructor_dashboard', 'instructor_dashboard_updates'} and query:
+            raise PlatformHTTPError(400, "invalid_request", "Unexpected query parameter")
         if route == "portal":
             path = parameters['path']
-            query_fields = ({'course_key'} if path == '/instructor/switch' else
+            query_fields = (participation_fields if participation_page else
+                            {'course_key'} if path == '/instructor/switch' else
                             {'q', 'visibility', 'page'} if re.fullmatch(r'/courses/[a-z0-9_-]{1,96}/instructor/assignments', path) else set())
-            if query and (self.command != 'GET' or getattr(facade, 'instructor', None) is None or not set(query) <= query_fields):
+            if query and (self.command != 'GET' or
+                          (getattr(facade, 'instructor', None) is None and not participation_page) or
+                          not set(query) <= query_fields):
                 raise PlatformHTTPError(400, "invalid_request", "Unexpected query parameter")
             if self.command == "POST":
                 path = parameters["path"]

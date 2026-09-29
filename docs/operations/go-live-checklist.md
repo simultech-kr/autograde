@@ -2,7 +2,7 @@
 
 이 체크리스트의 `Go`는 합성·신뢰 코드로 한 컴퓨터, loopback 앞의 외부 HTTPS 또는 엄격히
 제한된 신뢰 LAN에서 사용자 흐름을 검증해도 된다는 뜻입니다. 실제 학생 채점이나 production
-배포 승인이 아닙니다. QR 흐름은 [QR 과제 수령 파일럿](qr-assignment-claim-pilot.md)을,
+배포 승인이 아닙니다. 웹 수령 흐름은 [웹 과제 수령 파일럿](web-assignment-claim-pilot.md)을,
 LAN을 선택했다면 이 체크리스트와 [신뢰 LAN 외부 접속 파일럿](trusted-lan-pilot.md)을 함께
 통과해야 합니다. Docker/Podman 검증은 이번 파일럿 gate에서 제외하고 배포 단계 계획으로만
 관리합니다.
@@ -14,7 +14,7 @@ LAN을 선택했다면 이 체크리스트와 [신뢰 LAN 외부 접속 파일�
 - 실제 학생이 작성한 검토되지 않은 코드를 `pilot-local`로 실행함
 - 공식 성적, 시험, confidential hidden test 또는 민감 데이터를 사용함
 - Built-in HTTP listener를 인터넷, 공용·개방 LAN, router port forwarding 또는 불특정 VPN에
-  직접 공개함. 외부 QR 파일럿은 loopback listener 앞의 검증된 HTTPS reverse proxy만 허용함
+  직접 공개함. 외부 웹 수령 파일럿은 loopback listener 앞의 검증된 HTTPS reverse proxy만 허용함
 - 학교 포털 비밀번호를 Autograde page에서 수집하거나 전용 비밀번호를 HTTP로 전송함
 - 개인 업무 credential이나 중요한 데이터가 있는 host에서 제출물을 신뢰할 수 없음
 - Pilot config/roster의 대상 course 또는 data root를 확인하지 못함
@@ -95,8 +95,8 @@ filesystem, network, process/UID와 kernel 격리를 제공하지 않습니다.
 
 ## 4. 인증과 권한
 
-- [ ] QR에는 공개 HTTPS assignment path만 있고 학생 ID, query/fragment 또는 secret이 없다.
-- [ ] QR page의 domain·교과목·과제 표시가 교수자 안내와 일치한다.
+- [ ] 공유 과제 링크에는 공개 HTTPS assignment path만 있고 학생 ID, query/fragment 또는 secret이 없다.
+- [ ] 학생 수령 page의 domain·교과목·과제 표시가 교수자 안내와 일치한다.
 - [ ] 미등록/inactive 학생, 잘못된 비밀번호와 잠긴 계정은 같은 공개 오류로 거부된다.
 - [ ] 수령 코드는 10분 후 만료되고 한 번 소비하면 재사용할 수 없다.
 - [ ] 학생·교과목·과제·pending device 중 하나라도 다른 수령 코드는 원자적으로 거부된다.
@@ -141,7 +141,7 @@ filesystem, network, process/UID와 kernel 격리를 제공하지 않습니다.
 - [ ] 마감·비활성·다른 course assignment 제출이 durable receipt 없이 거부된다.
 - [ ] Server 재시작 후 accepted/queued/running recovery 정책이 문서와 일치한다.
 - [ ] 기본 profile의 Dashboard 수치가 SQLite submission/result 원장과 일치한다.
-- [ ] Dashboard의 교과목/학생/수락/다운로드 집계와 QR link가 SQLite·public URL과 일치한다.
+- [ ] Dashboard의 교과목/학생/수락/다운로드 집계와 학생 접속 링크가 SQLite·public URL과 일치한다.
 
 ## 6. 자동 시험
 
@@ -163,7 +163,7 @@ shasum -a 256 -c SHA256SUMS
 ```
 
 - [ ] Python 전체 test가 통과했다.
-- [ ] 25명 제출 및 QR 수령 integration test가 유실·소유권 오류 없이 통과했다.
+- [ ] 25명 제출 및 웹 수령 integration test가 유실·소유권 오류 없이 통과했다.
 - [ ] Extension test와 checksum이 통과했다.
 - [ ] Docker smoke test가 파일럿 완료 조건에 포함되지 않았음을 확인했다.
 
@@ -172,7 +172,7 @@ shasum -a 256 -c SHA256SUMS
 
 ## 7. 대상 OS 수동 시험
 
-- [ ] Linux native VS Code에서 QR→수령→다운로드→제출→결과를 완료했다.
+- [ ] Linux native VS Code에서 학생 웹 접속→수령→다운로드→제출→결과를 완료했다.
 - [ ] macOS native VS Code에서 같은 흐름을 완료했다.
 - [ ] Windows에서는 WSL2 filesystem과 WSL extension host에서 완료했다.
 - [ ] Windows native workspace 제출은 지원되지 않는다는 안내가 보인다.
@@ -181,7 +181,7 @@ shasum -a 256 -c SHA256SUMS
       실제 사설 interface 하나에서만 listen하며 `0.0.0.0`을 사용하지 않는다.
 - [ ] HTTPS profile이면 외부에서 인증서 경고 없이 접속되고 proxy upstream은 loopback이며
       HTTP downgrade, origin 변경과 password page의 cache가 없다.
-- [ ] 실제 교실의 공용 NAT에서 25명이 QR 수령을 동시에 시작해도 정상 흐름에 `429`가 없고,
+- [ ] 실제 교실의 공용 NAT에서 25명이 웹 수령을 동시에 시작해도 정상 흐름에 `429`가 없고,
       반복적인 인증 요청에는 rate limit의 `429`가 발생한다.
 - [ ] 첫 파일럿의 HSTS는 짧은 `max-age`로 확인하고 인증서 자동 갱신·HTTPS 상시 운영을 검증한
       뒤에만 1년으로 늘리며 임시 domain에는 `includeSubDomains`/preload를 쓰지 않는다.

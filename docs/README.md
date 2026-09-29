@@ -87,8 +87,8 @@
 - `operations/direct-bundle-mvp.md`: 환경변수·GitHub·Docker 없이 local CSV와 Extension으로
   배포·제출·`pilot-local` 채점·dashboard와 공용 좌석의 로그인별 새 코드·메모리 전용 token을
   시험하는 절차
-- [operations/qr-assignment-claim-pilot.md](operations/qr-assignment-claim-pilot.md): 외부 HTTPS
-  QR 페이지에서 학번과 숫자 6자리 Autograde 전용 비밀번호로 10분·1회용 수령 코드를
+- [operations/web-assignment-claim-pilot.md](operations/web-assignment-claim-pilot.md): 외부 HTTPS
+  웹 페이지에서 학번과 숫자 6자리 Autograde 전용 비밀번호로 10분·1회용 수령 코드를
   발급하고 VS Code로 과제를 자동 다운로드하는 권장 20~25명 파일럿과 사용성 평가 절차
 - [operations/trusted-lan-pilot.md](operations/trusted-lan-pilot.md): 동일한 신뢰 LAN의 외부
   시험 PC에서 암호화되지 않은 HTTP로 기능 흐름만 단기 검증하고 즉시 session/code와 firewall
@@ -108,6 +108,6 @@
   두 IDE 결과 요약 화면, 수정 필요 항목, 관리자 접속·분반 등록·집계 의미·인수 시험.
 
 `requirements/mvp.md`와 `operations/independent-web-pilot.md`가 현재 파일럿 기준입니다.
-`operations/qr-assignment-claim-pilot.md`는 기존 단일 교과목 실행 모드의 참고 문서입니다.
+`operations/web-assignment-claim-pilot.md`는 기존 단일 교과목 실행 모드의 참고 문서입니다.
 `direct-bundle-mvp.md`의 활성화 코드 흐름은 loopback·호환 시험 기준입니다. `student-platform`
 문서는 구현된 제출 vertical slice와 production용 repository/container 목표를 함께 설명합니다.

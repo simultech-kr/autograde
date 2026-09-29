@@ -53,7 +53,6 @@ from .platform_pinner import (
     SubmissionSourceInvalid,
     SubmissionSourceUnavailable,
 )
-from .platform_qr import assignment_claim_qr_svg
 from .web_theme import THEME_CSS
 from .instructor_responsive import RESPONSIVE_CSS, result_table
 from .submission_review import render_review, render_comparison
@@ -1432,7 +1431,13 @@ class StudentPlatformService:
             course_key=self.course_key,
             ready_only=True,
             active_only=True,
+            limit=10_000,
         )
+        # Result grouping includes closed assignments, unlike the claim links.
+        # Hidden releases retain submitted rows but have no missing-work census.
+        ready_ids = {assignment.assignment_id for assignment in claim_assignments}
+        for row in projected_rows:
+            row['assignment_ready'] = row['assignment_id'] in ready_ids
         now = utc_iso(self._aware_now())
         assignments = [
             {
@@ -1455,6 +1460,7 @@ class StudentPlatformService:
             "students": student_summaries,
             "assignments": assignments,
             "rows": projected_rows,
+            "rows_truncated": len(rows) >= 10_000,
         }
 
     def _instructor_results_fragment(self, dashboard, *, portal):
@@ -1491,23 +1497,14 @@ class StudentPlatformService:
                  '활성' if student['active'] else '비활성', html.escape(password_state),
                  str(int(student['acceptances'])), str(int(student['downloads'])), str(int(student['submissions'])))
             )
-        assignment_cards = []
+        assignment_links = []
         for assignment in dashboard["assignments"]:
             claim_url = str(assignment["claim_url"])
             title = str(assignment["title"])
-            assignment_cards.append(
-                "<section>"
-                f"<h2>{html.escape(title)}</h2>"
-                f"<p>{html.escape(str(assignment['assignment_key']))} · "
-                f"{html.escape(str(assignment['release_id']))}</p>"
-                f"<figure role=\"img\" aria-label=\"{html.escape(title, quote=True)} "
-                "과제 수령 페이지 QR 코드\">"
-                f"{assignment_claim_qr_svg(claim_url)}"
-                "</figure>"
-                f"<p><a href=\"{html.escape(claim_url, quote=True)}\">"
-                f"{html.escape(claim_url)}</a></p>"
-                "<p>QR에는 학생 정보나 수령 코드가 포함되지 않습니다.</p>"
-                "</section>"
+            assignment_links.append(
+                f'<li><a href="{html.escape(claim_url, quote=True)}">{html.escape(title)}</a> '
+                f"({html.escape(str(assignment['assignment_key']))} · "
+                f"{html.escape(str(assignment['release_id']))})</li>"
             )
         course_base = '/courses/' + quote(self.course_key, safe='') + '/instructor'
         dashboard_url = course_base + '/submissions' if portal else '/instructor'
@@ -1529,7 +1526,8 @@ class StudentPlatformService:
             "<div class=\"audience\">교수자 관리 · 교과목 전체 현황</div>"
             f"<h1>{html.escape(self.course_key)} 채점 현황</h1>"
             f'<section data-live-results="{updates_url}" data-course-key="{html.escape(self.course_key, quote=True)}">'
-            '<div class="results-toolbar"><label>결과 보기 <select data-results-filter disabled>'
+            '<div class="results-toolbar"><label>과제 선택 <select data-results-assignment disabled><option value="">전체 과제</option></select></label>'
+            '<label>결과 보기 <select data-results-filter disabled>'
             '<option value="all">전체 · 제출 우선</option><option value="submitted">제출한 학생</option>'
             '<option value="pending">채점 대기·진행</option><option value="attention">확인 필요</option>'
             '<option value="unsubmitted">미제출</option></select></label>'
@@ -1543,7 +1541,7 @@ class StudentPlatformService:
             f"활성 학생 {int(course['active_students'])}명 · 수강 정보는 화면을 연 시점 기준입니다.</p>"
             f'<nav class="page-actions" aria-label="결과 화면 이동"><a href="{dashboard_url}">새로 고침</a>'
             f'<a href="#student-results">학생별 결과</a><a href="#student-management">학생 관리</a>'
-            f'<a href="#assignment-qr">과제 수령 QR</a><a href="{management_url}">수업 관리</a></nav>'
+            f'<a href="#assignment-links">과제 수령 링크</a><a href="{management_url}">수업 관리</a></nav>'
             + '<h2 id="student-management">학생 관리 · 수강/접속 정보</h2><p>아래 정보는 화면 조회 시점 기준입니다.</p>'
             + result_table(('학생', '상태', '전용 비밀번호', '수락', '서버 응답 준비', '제출'),
                            student_management_rows, '학생별 수강·접속 현황')
@@ -1552,10 +1550,9 @@ class StudentPlatformService:
                 if not student_management_rows
                 else ""
             )
-            + '<!-- assignment-qr:start --><h2 id="assignment-qr">과제 수령 QR</h2>'
-            + "".join(assignment_cards)
-            + ("<p>공개된 bundle 과제가 없습니다.</p>" if not assignment_cards else "")
-            + '<!-- assignment-qr:end -->'
+            + '<!-- assignment-links:start --><h2 id="assignment-links">과제 수령 링크</h2>'
+            + ('<ul>' + "".join(assignment_links) + '</ul>' if assignment_links else "<p>공개된 bundle 과제가 없습니다.</p>")
+            + '<!-- assignment-links:end -->'
             + "</main>" + SCRIPT_TAG + "</body></html>"
         )
         return PlatformResponse(

@@ -26,7 +26,6 @@ header,.card,section,th,td,article,.steps li,.assignment-choice{border-color:var
 .steps [aria-current]{border-color:var(--accent)}
 :focus-visible,.assignment-choice:focus-within{outline:3px solid var(--focus);outline-offset:3px}
 button:disabled,input:disabled,select:disabled,textarea:disabled{opacity:1;background:var(--secondary);color:var(--muted);cursor:not-allowed}
-figure svg,.course-qr svg{background:#fff;padding:12px;color:#000}
 .source-code{background:var(--page);color:var(--text);border:1px solid var(--border);padding:16px;overflow:auto;white-space:pre;tab-size:4}
 .source-code code{font:14px/1.65 ui-monospace,monospace;unicode-bidi:plaintext}
 @media(forced-colors:active){:focus-visible{outline:3px solid Highlight}button,.button,.assignment-choice{border:1px solid ButtonText}}

@@ -15,9 +15,9 @@ pilot config CSV ─┐
 roster CSV ───────┘             │
                                 ├── starter/assessment/data bundle 등록
                                 ├── 교과목/학생 상태와 전용 비밀번호 관리
-                                └── 과제별 공개 QR 생성
+                                └── 과제별 공개 접속 링크 안내
 
-학생 browser ── HTTPS QR page ──> password 확인 ──> 10분·1회용 수령 코드
+학생 browser ── HTTPS 수령 page ──> password 확인 ──> 10분·1회용 수령 코드
                                                         │
 VS Code Extension ── HTTP(S) (*) ───> Auth + Assignment API
        │                                      │
@@ -38,7 +38,7 @@ VS Code Extension ── HTTP(S) (*) ───> Auth + Assignment API
                                                 (loopback/TLS profile)
 ```
 
-(*) 기본값은 같은 장비의 loopback입니다. 외부 QR 파일럿은 built-in server의 loopback bind를
+(*) 기본값은 같은 장비의 loopback입니다. 외부 웹 수령 파일럿은 built-in server의 loopback bind를
 유지하고 앞단 HTTPS reverse proxy를 사용합니다. 별도 신뢰 LAN 시험에서는 server와 Extension이
 각각 명시적으로 opt-in한 동안에만 실제 RFC 1918 interface의 단기 HTTP 접속을 허용하지만
 비밀번호 기반 수령은 거부합니다.
@@ -81,7 +81,7 @@ Local process가 다른 tree나 host를 읽지 못하게 하는 보안 경계는
 
 ## 인증과 API 경계
 
-권장 흐름에서 학생은 과제의 비밀 없는 QR로 HTTPS page에 접속하고, 학번과 교과목별
+권장 흐름에서 학생은 과제의 공개 링크로 HTTPS page에 접속하고, 학번과 교과목별
 Autograde 전용 비밀번호를 확인해 10분·1회용 수령 코드를 받습니다. Extension은 새 pending
 device authorization과 이 코드를 원자적으로 결합해 과제를 수락하고, 발급된 session을 해당
 과제에만 제한합니다. 기존 교수자 발급 활성화 코드는 호환 login 경로로 남습니다. Extension은
@@ -97,7 +97,7 @@ session은 절대 만료 또는 다음 로그인 교체까지 남을 수 있습�
 환경변수는 파일럿에 사용하지 않습니다.
 
 Server는 기본적으로 loopback HTTP에만 bind합니다. 외부 HTTPS profile은 같은 loopback
-listener 앞에서 TLS를 종료하고 공개 HTTPS origin을 service URL과 QR에 사용합니다. 평문 bind의
+listener 앞에서 TLS를 종료하고 공개 HTTPS origin을 service URL과 학생 접속 링크에 사용합니다. 평문 bind의
 유일한 파일럿 예외인
 `external_access_mode=insecure-http`는 `public_base_url`과 `listen`이 동일한 실제 RFC 1918
 IPv4이고 Extension에서 `autograde.allowInsecureHttpPilot=true`를 선택했을 때만 동작합니다.

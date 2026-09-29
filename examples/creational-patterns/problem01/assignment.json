@@ -1,0 +1,121 @@
+{
+  "title": "Factory Method · Abstract Factory · Singleton — 실습 결과 보고서 생성기",
+  "description": "출력 형식은 Factory Method, 관련 출력 요소는 Abstract Factory, 프로세스 내 공용 일련번호는 Singleton으로 구현합니다. 기능 자동채점 100점과 별도 구조 점검으로 구분합니다.",
+  "language": "cpp",
+  "mode": "direct",
+  "platform": "windows",
+  "opens_at": null,
+  "due_at": null,
+  "result_policy": "immediate",
+  "negative_score": 0,
+  "tests": [
+    {
+      "title": "F1 · TEXT 보고서",
+      "evaluation": "F1 · TEXT 보고서: TEXT 요청의 결과가 title=<제목>;value=<값> 형식으로 출력되는지 확인합니다. 배점 10점.",
+      "hint": "TextReport::render에서 title=, ;value=, 공백과 줄바꿈을 확인하세요. TextReportCreator::createReport가 null 대신 TextReport를 반환하는지도 확인하세요.",
+      "input": "1\nPRINT TEXT PLAIN alpha 7\n",
+      "output": "1 title=alpha;value=7\n",
+      "weight": 10,
+      "public": true
+    },
+    {
+      "title": "F2 · CSV 보고서",
+      "evaluation": "F2 · CSV 보고서: CSV 요청의 결과가 제목,값 형식으로 출력되는지 확인합니다. 배점 10점.",
+      "hint": "CsvReportCreator::createReport의 반환 제품과 CsvReport::render의 쉼표를 확인하세요. CSV에는 title=, value=, 세미콜론을 추가하지 않습니다.",
+      "input": "1\nPRINT CSV PLAIN beta 20\n",
+      "output": "1 beta,20\n",
+      "weight": 10,
+      "public": true
+    },
+    {
+      "title": "A1 · PLAIN 제품군",
+      "evaluation": "A1 · PLAIN 제품군: PLAIN 테마의 제목·값이 이름과 십진 정수로 장식 없이 출력되는지 확인합니다. 배점 10점.",
+      "hint": "PlainThemeFactory의 createTitle/createValue가 각각 PlainTitle/PlainValue를 생성하는지 확인하세요. 두 제품의 format 결과에는 대괄호가 없어야 합니다.",
+      "input": "2\nPRINT TEXT PLAIN low 0\nPRINT CSV PLAIN high 100\n",
+      "output": "1 title=low;value=0\n2 high,100\n",
+      "weight": 10,
+      "public": true
+    },
+    {
+      "title": "A2 · BRACKET 제품군",
+      "evaluation": "A2 · BRACKET 제품군: BRACKET 테마의 제목·값이 각각 한 쌍의 대괄호로 감싸져 출력되는지 확인합니다. 배점 10점.",
+      "hint": "BracketTitle과 BracketValue의 format을 각각 확인하세요. 전체 보고서를 한 번 감싸는 방식이 아니라 제목과 값을 따로 감싸야 합니다.",
+      "input": "2\nPRINT TEXT BRACKET item 42\nPRINT CSV BRACKET exam 100\n",
+      "output": "1 title=[item];value=[42]\n2 [exam],[100]\n",
+      "weight": 10,
+      "public": true
+    },
+    {
+      "title": "교차 조합 검증",
+      "evaluation": "A3 · 독립 조합: TEXT/CSV와 PLAIN/BRACKET의 네 조합을 연속으로 사용해도 직전 제품군이 다음 보고서에 남지 않는지 확인합니다. 배점 10점.",
+      "hint": "형식 선택과 제품군 선택을 분리하세요. 현재 명령으로 선택한 ThemeFactory에서 두 제품을 만들고, 현재 Creator의 공통 render 흐름에 그 결과를 전달하세요.",
+      "input": "4\nPRINT CSV BRACKET one 31\nPRINT TEXT PLAIN two 62\nPRINT CSV PLAIN three 93\nPRINT TEXT BRACKET four 4\n",
+      "output": "1 [one],[31]\n2 title=two;value=62\n3 three,93\n4 title=[four];value=[4]\n",
+      "weight": 10,
+      "public": false
+    },
+    {
+      "title": "S1 · 인스턴스 동일성",
+      "evaluation": "S1 · 인스턴스 동일성: Sequence::instance를 반복 호출할 때 같은 객체의 참조를 반환하고 조회로 값이 증가하지 않는지 확인합니다. 배점 5점.",
+      "hint": "Sequence::instance가 호출마다 객체를 만들거나 복사본을 반환하지 않는지 확인하세요. SAME과 COUNT는 next를 호출하지 않습니다.",
+      "input": "5\nSAME\nSAME\nCOUNT\nSAME\nCOUNT\n",
+      "output": "SAME yes\nSAME yes\nCOUNT 0\nSAME yes\nCOUNT 0\n",
+      "weight": 5,
+      "public": true
+    },
+    {
+      "title": "S2 · 서비스 간 공용 일련번호",
+      "evaluation": "S2 · 공용 상태: PRINT마다 새 ReportService를 만들어도 Sequence가 성공 건수를 공유하며 1부터 연속 번호를 발급하는지 확인합니다. 배점 10점.",
+      "hint": "누적 값을 ReportService의 지역 변수나 멤버에 두지 마세요. Sequence의 멤버에 저장하고 next는 증가 후 값, count는 현재 값을 반환하도록 점검하세요.",
+      "input": "6\nPRINT TEXT PLAIN a 1\nCOUNT\nPRINT CSV PLAIN b 2\nPRINT TEXT BRACKET c 3\nCOUNT\nCOUNT\n",
+      "output": "1 title=a;value=1\nCOUNT 1\n2 b,2\n3 title=[c];value=[3]\nCOUNT 3\nCOUNT 3\n",
+      "weight": 10,
+      "public": true
+    },
+    {
+      "title": "미지원 형식 처리",
+      "evaluation": "E1 · 형식 검증: TEXT/CSV 이외의 형식을 거절하고, 거절 후 정상 명령을 처리할 수 있는지 확인합니다. 배점 10점.",
+      "hint": "형식 비교는 대소문자를 구분합니다. 알 수 없는 형식을 TEXT 또는 CSV로 자동 처리하지 마세요. 형식 오류에서는 제품 생성과 일련번호 증가 전에 ERROR format을 반환하세요.",
+      "input": "4\nPRINT XML PLAIN unsupported 40\nPRINT text BRACKET lowercase 41\nCOUNT\nPRINT CSV PLAIN valid 42\n",
+      "output": "ERROR format\nERROR format\nCOUNT 0\n1 valid,42\n",
+      "weight": 10,
+      "public": false
+    },
+    {
+      "title": "미지원 제품군 처리",
+      "evaluation": "E2 · 제품군 검증: PLAIN/BRACKET 이외의 제품군을 거절하고, 거절 후 정상 제품군의 요청을 처리하는지 확인합니다. 배점 5점.",
+      "hint": "형식이 유효한 경우 다음으로 제품군을 검증하세요. 알 수 없는 제품군을 기본 제품군으로 대체하지 말고 ERROR theme을 반환하세요.",
+      "input": "4\nPRINT TEXT ROUND invalid 18\nPRINT CSV plain lowercase 19\nCOUNT\nPRINT TEXT BRACKET valid 20\n",
+      "output": "ERROR theme\nERROR theme\nCOUNT 0\n1 title=[valid];value=[20]\n",
+      "weight": 5,
+      "public": false
+    },
+    {
+      "title": "점수 경계 처리",
+      "evaluation": "E3 · 값 범위: 0과 100은 허용하고 범위 밖 정수는 거절하는지 확인합니다. 배점 10점.",
+      "hint": "유효 범위는 0 <= value <= 100입니다. 경계값을 거절하거나 범위 밖 값을 0 또는 100으로 보정하지 마세요. 범위 오류는 ERROR value이며 일련번호를 사용하지 않습니다.",
+      "input": "7\nPRINT TEXT PLAIN low 0\nPRINT TEXT PLAIN high 100\nPRINT CSV BRACKET below -1\nPRINT CSV BRACKET above 101\nPRINT TEXT PLAIN farlow -1000\nPRINT TEXT PLAIN farhigh 1000\nCOUNT\n",
+      "output": "1 title=low;value=0\n2 title=high;value=100\nERROR value\nERROR value\nERROR value\nERROR value\nCOUNT 2\n",
+      "weight": 10,
+      "public": false
+    },
+    {
+      "title": "복합 오류와 상태 보존",
+      "evaluation": "E4 · 오류 우선순위·상태 보존: 형식, 제품군, 값 순서로 최초 오류만 보고하고 실패가 누적 건수에 영향을 주지 않는지 확인합니다. 배점 5점.",
+      "hint": "여러 조건이 잘못되어도 ERROR 한 줄만 반환하세요. 검증 순서는 format → theme → value입니다. Sequence::next는 검증과 보고서 생성이 끝난 뒤 정상 결과에만 호출하세요.",
+      "input": "7\nPRINT XML UNKNOWN x -1\nPRINT TEXT UNKNOWN y 101\nPRINT CSV PLAIN z -1\nCOUNT\nPRINT CSV BRACKET valid 50\nPRINT TXT PLAIN unused 0\nCOUNT\n",
+      "output": "ERROR format\nERROR theme\nERROR value\nCOUNT 0\n1 [valid],[50]\nERROR format\nCOUNT 1\n",
+      "weight": 5,
+      "public": false
+    },
+    {
+      "title": "조회와 생성 명령 교차",
+      "evaluation": "I1 · 통합 흐름: COUNT/SAME/PRINT를 섞어 실행할 때 조회는 읽기 전용이며 출력 순서와 성공 번호가 유지되는지 확인합니다. 배점 5점.",
+      "hint": "COUNT와 SAME에서 생성·증가 함수를 호출하지 않는지 확인하세요. 프로그램 시작 때만 값이 0이며 명령 사이에는 초기화하지 않습니다. 안내 문구나 디버그 출력을 추가하지 마세요.",
+      "input": "10\nCOUNT\nSAME\nPRINT TEXT PLAIN r1 41\nSAME\nCOUNT\nPRINT CSV BRACKET r2 42\nPRINT CSV ROUND ignored 25\nPRINT TEXT BRACKET r3 43\nCOUNT\nSAME\n",
+      "output": "COUNT 0\nSAME yes\n1 title=r1;value=41\nSAME yes\nCOUNT 1\n2 [r2],[42]\nERROR theme\n3 title=[r3];value=[43]\nCOUNT 3\nSAME yes\n",
+      "weight": 5,
+      "public": false
+    }
+  ]
+}

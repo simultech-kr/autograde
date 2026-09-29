@@ -207,6 +207,10 @@ def evaluate(source, configuration, work):
                 # An authored hint is explicitly student-public, independently
                 # of the test's input/expected-output disclosure policy.
                 item["hint"] = (item["hint"] + "\n" + test["hint"].strip())[:2048]
+            if isinstance(test.get("evaluation"), str) and test["evaluation"].strip():
+                # Public evaluation criteria explain the case even when it
+                # passes or cannot run; they never imply an executed check.
+                item["feedback"] += "\n평가 요소: " + test["evaluation"].strip()[:2048]
             if test.get("public"):
                 # Only explicitly public instructor inputs/expected outputs are
                 # exposed, never actual student stdout or private case titles.

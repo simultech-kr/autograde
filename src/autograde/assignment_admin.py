@@ -205,13 +205,26 @@ def _document(fields):
         raise ValueError("테스트는 1~50개를 사용하세요.")
     normalized = []
     for test in tests:
-        if not isinstance(test, dict) or set(test) - {"title", "input", "output", "weight", "public", "hint"}:
+        if not isinstance(test, dict):
             raise ValueError("테스트 설정이 올바르지 않습니다.")
+        unknown = set(test) - {"title", "input", "output", "weight", "public", "hint", "evaluation"}
+        if unknown:
+            # Report bounded field names only; private inputs/expected outputs
+            # and unsupported field values must never appear in this message.
+            names = sorted(
+                ("".join(character if character.isprintable() else "?" for character in name[:40])
+                 + ("…" if len(name) > 40 else "")) if isinstance(name, str) else "(문자열이 아닌 필드명)"
+                for name in unknown
+            )
+            shown = ", ".join(names[:5]) + (f" 외 {len(names) - 5}개" if len(names) > 5 else "")
+            raise ValueError(f"테스트 설정이 올바르지 않습니다. 지원하지 않는 필드: {shown}. 채점 ZIP 형식과 서버 버전을 확인하세요.")
         item = {"title": "테스트", "input": "", "output": "", "weight": 1, "public": False, **test}
         if any(not isinstance(item[key], str) for key in ("title", "input", "output")) or len(item["title"]) > 200:
             raise ValueError("테스트 입력/출력은 텍스트여야 합니다.")
         if "hint" in item and (not isinstance(item["hint"], str) or len(item["hint"]) > 2048):
             raise ValueError("학생용 수정 가이드는 2048자 이하의 텍스트여야 합니다.")
+        if "evaluation" in item and (not isinstance(item["evaluation"], str) or len(item["evaluation"]) > 2048):
+            raise ValueError("학생 공개 평가 요소는 2048자 이하의 텍스트여야 합니다.")
         item["weight"] = float(item["weight"])
         if not math.isfinite(item["weight"]) or not 0 < item["weight"] <= 10000 or not isinstance(item["public"], bool):
             raise ValueError("배점 및 공개 설정을 확인하세요.")
@@ -300,6 +313,9 @@ def _grading_template_archive(document):
             "컴파일 실패로 실행하지 못한 항목은 미검사로 구분합니다. "
             "public이 true인 테스트만 제목·입력·예상 출력이 공개됩니다. "
             "비공개 테스트 자료와 학생 프로그램의 원시 출력, 컴파일 로그는 공개하지 않습니다.\n\n"
+            "각 테스트에 선택 항목 evaluation으로 학생 공개 평가 요소(2048자 이하)를 작성할 수 있습니다. "
+            "evaluation은 public이 false여도 통과·실패·미검사 모두에서 학생에게 공개됩니다. "
+            "평가할 개념과 요구사항을 간결하게 적고 정답·비공개 입력·예상 출력은 넣지 마세요.\n\n"
             "각 테스트에 선택 항목 hint로 수정 가이드(2048자 이하)를 작성할 수 있습니다. "
             "hint는 public이 false여도 해당 테스트 실패 시 학생에게 공개됩니다. "
             "정답이나 비공개 입력 대신 점검할 개념·경계 조건을 안내하세요.\n\n"
@@ -686,6 +702,19 @@ class AssignmentAdminService:
             self._event(connection, course, draft_id, "uploaded_" + role)
         return self.get_draft(course, draft_id)
 
+    @staticmethod
+    def missing_materials(document, roles):
+        """Share direct-mode validation prerequisites with the instructor UI."""
+        if document.get("mode") != "direct":
+            return []
+        roles = set(roles)
+        missing = [label for role, label in (
+            ("starter", "학생용 starter ZIP"), ("solution", "정답 코드"), ("negative", "오답 코드"),
+        ) if role not in roles]
+        if not document.get("tests"):
+            missing.append("채점 테스트(1개 이상)")
+        return missing
+
     def queue_check(self, course, draft_id, revision, trusted_code_confirmed=False):
         self._course(course)
         if trusted_code_confirmed is not True:
@@ -701,8 +730,12 @@ class AssignmentAdminService:
             document = json.loads(row["document_json"])
             if document["mode"] == "direct":
                 roles = {r[0] for r in connection.execute("SELECT role FROM instructor_assignment_uploads WHERE draft_id=?", (draft_id,))}
-                if roles != {"starter", "solution", "negative"} or not document["tests"]:
-                    raise ValueError("학생용·정답·오답 ZIP과 1개 이상의 테스트를 등록하세요.")
+                missing = self.missing_materials(document, roles)
+                if missing:
+                    message = "검증 준비 미완료: " + ", ".join(missing) + "."
+                    if "starter" not in roles:
+                        message += " 채점 ZIP에는 학생용 starter가 포함되지 않으므로 별도 등록하세요."
+                    raise ValueError(message)
                 sources = {}
                 for upload in connection.execute("SELECT role,metadata_json FROM instructor_assignment_uploads WHERE draft_id=? AND role IN ('solution','negative')", (draft_id,)):
                     sources[upload[0]] = json.loads(upload[1])["source_sha256"]

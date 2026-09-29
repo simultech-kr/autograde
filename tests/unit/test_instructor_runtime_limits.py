@@ -9,7 +9,6 @@ from autograde.platform_bundle import BundleStore
 from autograde.platform_cli import _exclusive_course_service_lock
 from autograde.platform_state import PlatformStateStore
 from autograde.settings import AppPaths
-from autograde.platform_qr import course_login_qr_svg
 
 
 def test_failed_course_service_creation_releases_lock_and_grader(tmp_path, monkeypatch):
@@ -73,12 +72,3 @@ def test_explicit_configuration_modes(tmp_path, extra, expected):
     else:
         values = load_pilot_config(path).values
         assert (values['instructor_assignment_web_enabled'], values['roster_bootstrap_mode']) == expected
-
-
-def test_course_qr_is_local_svg_and_refuses_credentials():
-    assert '<svg' in course_login_qr_svg('https://example.edu:20010/courses/come2201/login')
-    for address in ('https://user:password@example.edu/courses/come2201/login',
-                    'https://example.edu/courses/come2201/login?password=123456',
-                    'https://example.edu/arbitrary/path', 'javascript:alert(1)'):
-        with pytest.raises(ValueError):
-            course_login_qr_svg(address)

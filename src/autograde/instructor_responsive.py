@@ -22,7 +22,7 @@ def result_table(headers, rows, caption, *, row_attributes=None):
         attributes = ''
         if row_attributes is not None:
             for name, value in row_attributes[row_index].items():
-                if name not in {'id', 'data-result-key', 'data-submitted', 'data-pending', 'data-attention', 'data-version'}:
+                if name not in {'id', 'data-result-key', 'data-assignment-id', 'data-submitted', 'data-pending', 'data-attention', 'data-version'}:
                     raise ValueError('unsupported result row attribute')
                 attributes += f' {name}="{escape(str(value), quote=True)}"'
         body.append('<tr role="row"' + attributes + '>' + ''.join(cells) + '</tr>')
@@ -39,8 +39,6 @@ RESPONSIVE_CSS = """
 .responsive-instructor h2{overflow-wrap:anywhere}
 .responsive-instructor a{overflow-wrap:anywhere}
 .responsive-instructor summary{cursor:pointer;min-height:44px;padding:8px 0}
-.responsive-instructor figure{margin:16px 0}
-.responsive-instructor figure svg{max-width:100%;height:auto}
 .responsive-instructor .page-actions{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center}
 .responsive-instructor .page-actions a,.result-table a{display:inline-block;padding:8px 0;min-height:44px}
 .results-region{width:100%;min-width:0;margin:16px 0}

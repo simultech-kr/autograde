@@ -268,7 +268,7 @@ def test_dashboard_counts_assignment_claim_acceptance(bundle_platform) -> None:
     assert "수락 1건" in service.instructor_dashboard_page(authorization).body
 
 
-def test_dashboard_qr_list_excludes_unavailable_assignments(bundle_platform) -> None:
+def test_dashboard_claim_links_exclude_unavailable_assignments_without_qr(bundle_platform) -> None:
     state, _store, service, _token, _notifications, starter, _payload = bundle_platform
     for assignment_id, ready, opens_at, due_at in (
         (
@@ -317,6 +317,12 @@ def test_dashboard_qr_list_excludes_unavailable_assignments(bundle_platform) -> 
     assert [item["assignment_id"] for item in dashboard["assignments"]] == [
         "basn_lab01"
     ]
+    body = str(service.instructor_dashboard_page(f"Basic {encoded}").body)
+    assert '<h2 id="assignment-links">과제 수령 링크</h2>' in body
+    assert '<a href="http://127.0.0.1:8000/assignment-claim/basn_lab01">Lab &lt;One&gt;</a>' in body
+    assert '<svg' not in body and 'QR' not in body
+    assert all(f'/assignment-claim/{assignment_id}' not in body
+               for assignment_id in ('basn_draft', 'basn_future', 'basn_closed'))
 
 
 def test_unpublished_bundle_result_is_not_exposed(bundle_platform) -> None:

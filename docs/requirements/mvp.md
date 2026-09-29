@@ -7,7 +7,7 @@
 
 ## 목적
 
-기본적으로 교수자 과제 등록, 학생 역할의 QR 수령과 VS Code 다운로드·제출, 자동 결과 반환과
+기본적으로 교수자 과제 등록, 학생 역할의 웹 수령과 VS Code 다운로드·제출, 자동 결과 반환과
 교수자 dashboard를 검증합니다. 같은 장비의 loopback 또는 loopback listener 앞의 외부 HTTPS
 reverse proxy를 사용합니다. 별도 신뢰 LAN HTTP profile은 비밀번호 수령 기능을 제외한 흐름을
 짧게 확인하는 좁은 예외입니다. 20명 이상 상태·동시성은 자동 integration test로 검증하고,
@@ -104,8 +104,8 @@ reverse proxy를 사용합니다. 별도 신뢰 LAN HTTP profile은 비밀번호
     거부해야 합니다. 비밀번호는 argv로 받지 않습니다. 기존 `scrypt$v1` 비밀번호는 인증에
     사용하지 않고 `password_reset_required`로 구분하며, 숫자 6자리 재설정 후에만 설정 완료로
     표시해야 합니다.
-24. 과제 QR에는 `HTTPS origin + /assignment-claim/{assignment_id}`만 포함하고 secret, 학번과
-    query/fragment를 포함하지 않아야 합니다. QR은 server 안에서 생성합니다.
+24. 공유 과제 링크에는 `HTTPS origin + /assignment-claim/{assignment_id}`만 포함하고 secret, 학번과
+    query/fragment를 포함하지 않아야 합니다.
 25. 비밀번호 수령 page는 HTTPS 또는 loopback HTTP에서만 열리고 CSRF, 계정 열거 방지,
     비밀번호 실패 5회당 5분 잠금과 제한된 동시 password hashing을 적용해야 합니다. 서버와
     브라우저 form은 정확히 ASCII 숫자 6자리만 받아야 하며 reverse proxy IP rate limit도
@@ -168,7 +168,7 @@ ignore된 local path에 보관하며, 학생에게는 신원을 확인한 개별
   회전하지 않습니다. 다른 비밀번호는 명시적 `--replace-passwords` 없이는 반영되지 않습니다.
 - 비활성/미등록 학생은 활성화, 다운로드, 제출과 결과 API를 사용할 수 없습니다.
 - 만료·재사용·다른 학생/교과목/과제의 수령 코드는 거부되며 원문은 DB/log에 남지 않습니다.
-- 교수자 교과목/학생 집계와 Dashboard의 QR·수락 상태가 SQLite 원장과 일치합니다.
+- 교수자 교과목/학생 집계와 Dashboard의 학생 접속 링크·수락 상태가 SQLite 원장과 일치합니다.
 - 같은 valid submission retry는 기존 receipt를 반환하고 다른 body의 idempotency 충돌은
   거부됩니다.
 - 다른 학생의 submission/result ID를 알아도 조회할 수 없습니다.
@@ -185,7 +185,7 @@ ignore된 local path에 보관하며, 학생에게는 신원을 확인한 개별
   workspace/source 및 browser/OS profile 잔여물을 정리합니다.
 - 기본 network mode에서 non-loopback HTTP가 거부되고, LAN profile에서는 server/Extension
   이중 opt-in과 로그인별 위험 확인, 시험 후 session/code/firewall 폐기가 검증됩니다.
-- HTTPS reverse proxy profile에서도 built-in server는 loopback만 listen하고 학생 QR과
+- HTTPS reverse proxy profile에서도 built-in server는 loopback만 listen하고 학생 접속 링크와
   Extension origin이 같은 공개 HTTPS 주소를 사용합니다.
 
 ## 안전 요구사항과 No-Go

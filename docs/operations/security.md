@@ -22,7 +22,7 @@ raw token, 비밀번호·비밀번호 hash, 수령/활성화 코드, instructor 
 Environment file과 shell profile을 설정 source로 사용하지 않습니다.
 
 아래 GitHub service 인증과 container 격리 항목은 해당 기능을 선택하는 production 배포
-기준입니다. 외부 QR 파일럿은 TLS reverse proxy를 요구하지만 이것이 `pilot-local` grader를
+기준입니다. 외부 웹 수령 파일럿은 TLS reverse proxy를 요구하지만 이것이 `pilot-local` grader를
 production-safe하게 만들지는 않습니다.
 
 ## Production: GitHub service 인증
@@ -74,8 +74,8 @@ production-safe하게 만들지는 않습니다.
 - 기존 15자 정책의 `scrypt$v1` hash는 DB 호환성을 위해 읽을 수 있지만 인증에는 사용할 수
   없습니다. Dashboard와 학생 조회는 이를 `password_reset_required=true`로 표시하며, 교수자가
   숫자 6자리 비밀번호를 다시 설정하면 `scrypt$v2`로 교체됩니다.
-- QR은 HTTPS origin의 `/assignment-claim/{assignment_id}` 공개 path만 포함합니다. Server가
-  local에서 생성하며 query/fragment, 학생 정보와 secret을 포함하지 않습니다.
+- 공유 과제 링크는 HTTPS origin의 `/assignment-claim/{assignment_id}` 공개 path만 포함합니다.
+  Query/fragment, 학생 정보와 secret을 포함하지 않습니다.
 - 수령 코드는 약 60-bit entropy의 `AK1-XXXX-XXXX-XXXX` 형식으로 원문을 한 번만 표시합니다.
   DB에는 목적 분리 HMAC과 식별용 짧은 tag만 저장하고, 학생·교과목·과제와 pending device를
   한 transaction에서 결합해 소비합니다. 전체 HMAC exact lookup을 사용하여 앞 4자만 같은

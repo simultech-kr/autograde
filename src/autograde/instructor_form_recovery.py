@@ -26,7 +26,7 @@ class FormRecovery(HTMLParser):
                 attributes['data-recovered'] = ''
         name = attributes.get('name', '')
         value = self.values.get(name)
-        if self.values.get('tests_present') == 'yes' and re.fullmatch(r'test_\d+_(title|input|output|weight|public|hint)', name):
+        if self.values.get('tests_present') == 'yes' and re.fullmatch(r'test_\d+_(title|input|output|weight|public|hint|evaluation)', name):
             # Disabled/removed case controls are absent from enhanced submissions.
             # Do not resurrect their old database values after a failed save.
             value = self.values.get(name, '')

@@ -266,9 +266,9 @@ class CoursePortal:
                     return self._entry(course)
         if method == "GET" and action == "instructor":
             page = service.instructor_dashboard_page(authorization or "", portal=True)
-            # Remove legacy API-origin claim links and QR images from this entry point.
-            body = re.sub(r'<!-- assignment-qr:start -->.*?<!-- assignment-qr:end -->',
-                          f'<p id="assignment-qr">학생 접속: <a href="/courses/{course}">{html.escape(self.web_url)}/courses/{course}</a></p>',
+            # Keep student entry on the web portal instead of the legacy API origin.
+            body = re.sub(r'<!-- assignment-links:start -->.*?<!-- assignment-links:end -->',
+                          f'<p id="assignment-links">학생 접속: <a href="/courses/{course}">{html.escape(self.web_url)}/courses/{course}</a></p>',
                           str(page.body), flags=re.S)
             links = " · ".join(f'<a href="/courses/{c}/instructor">{c}</a>' for c in self.services)
             body = re.sub(r'(<body\b[^>]*>)', lambda match: match[1] + f'<nav aria-label="수업 선택">{links}</nav>', body, count=1)

@@ -18,7 +18,6 @@ from urllib.parse import quote, urlencode
 from .platform_auth import InvalidSignedValue, sign_browser_value, verify_browser_value
 from .platform_service import PlatformAPIError, PlatformFileResponse, PlatformResponse
 from .platform_state import PlatformAccessDenied, PlatformConflict, PlatformNotFound, utc_iso
-from .platform_qr import course_login_qr_svg
 from .web_theme import THEME_CSS
 from .instructor_responsive import RESPONSIVE_CSS, result_table
 from .instructor_assignment_catalog import InstructorAssignmentCatalog
@@ -45,7 +44,6 @@ input:not([type=checkbox]),select,textarea{width:100%;min-height:44px;padding:9p
 input[type=checkbox]{width:20px;height:20px;vertical-align:middle}textarea{min-height:100px}
 button,.button{display:inline-block;min-height:44px;padding:10px 16px;border:0;border-radius:6px;background:#2563eb;color:#fff;text-decoration:none;cursor:pointer;margin-top:12px}
 .secondary{background:#e2e8f0;color:#0f172a}.danger{background:#b91c1c}.hint{color:#475569}.notice{padding:16px;background:#eff6ff;border-left:4px solid #2563eb;margin:16px 0}
-.course-qr svg{width:240px;max-width:100%;height:auto}
 .warning{background:#fff7ed;border-left-color:#c2410c}.error{background:#fef2f2;border-left-color:#b91c1c}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px}
 table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:12px;border-bottom:1px solid #cbd5e1;vertical-align:top;overflow-wrap:anywhere}
 .table-scroll{overflow-x:auto}pre{white-space:pre-wrap;overflow-wrap:anywhere}code{font-size:1.05em}
@@ -270,7 +268,7 @@ class InstructorWeb:
             base = self._base(course)
             links += [(base, '수업 개요'), (base + '/assignments', '과제 관리'),
                       (base + '/students', '학생 관리'), (base + '/submissions', '제출·채점 현황'),
-                      (base + '/settings', '수업 설정·QR')]
+                      (base + '/settings', '수업 설정')]
             if self.rubrics:
                 links.insert(3, (base + '/rubrics', '루브릭 관리'))
             context = f'{course["code"]} · {course.get("name") or "정보 확인 필요"} · {course.get("year") or "학년도 미설정"} / {course.get("semester") or "학기 미설정"} · {course.get("section") or "분반 미설정"}'
@@ -439,7 +437,7 @@ class InstructorWeb:
                          f'기준 충족 <strong>{course["completed"]}</strong> · 수정 필요 <strong>{course["needs_work"]}</strong><br>'
                          f'미제출 {course["not_submitted"]} · 채점·공개 대기 {course["waiting"]}<br>처리 오류 {course["errors"]} · 확인 필요 {course["unknown"]}',
                          f'<a href="{base}/students">학생 관리</a><br><a href="{base}/assignments">과제 등록·관리</a><br>'
-                         f'<a href="{base}/submissions">학생별 결과·코드 확인</a><br><a href="{base}">분반 설정·QR</a>'))
+                         f'<a href="{base}/submissions">학생별 결과·코드 확인</a><br><a href="{base}/settings">분반 설정</a>'))
             body += result_table(('분반 / 수업명', '운영 상태', '수강 중 / 등록', '활성 과제', '제출 현황 (학생 × 과제)', '관리'),
                                  offering_rows, code + ' 분반별 최신 현황') + '</section>'
         template = next((c for c in offerings if c['year']), offerings[0])
@@ -512,9 +510,6 @@ class InstructorWeb:
         body = f'<p>수업 상태: <strong>{_e(_STATUS.get(course["status"], course["status"]))}</strong></p>'
         body += f'<div class="actions"><a class="button" href="{base}/students">학생 등록</a><a class="button" href="{base}/assignments">과제 등록·검증</a></div>'
         body += f'<p>학생 접속: <a href="/courses/{_e(key)}/login">{_e(self.web_url)}/courses/{_e(key)}/login</a></p>'
-        body += ('<details class="course-qr"><summary>학생 접속 QR 코드</summary>'
-                 '<p>학번·비밀번호·수령 코드가 포함되지 않은 수업 로그인 주소입니다.</p>'
-                 + course_login_qr_svg(self.web_url + '/courses/' + key + '/login') + '</details>')
         if course['status'] != 'archived':
             body += '<section><h3>수업 정보 수정</h3>' + self._form(base + '/update', session, self._course_fields(course) + _button('수업 정보 저장')) + '</section>'
         else:
@@ -522,7 +517,7 @@ class InstructorWeb:
         body += '<section><h3>운영 상태</h3><p>보관하면 해당 수업의 인증·수령 코드를 폐기하고 학생 접근을 막습니다. 점수와 제출은 보존합니다. 처리 중 작업이 있으면 보관할 수 없습니다.</p>'
         body += self._form(base + '/status', session, _select('status', '변경할 상태', [('preparation', '준비'), ('active', '운영'), ('archived', '보관')], course['status']) +
                            _checkbox('confirm', '인증 폐기와 학생 접근에 미치는 영향을 확인했습니다.') + _button('수업 상태 변경')) + '</section>'
-        return '수업 설정·QR', body
+        return '수업 설정', body
 
     def _course_overview(self, course):
         base = self._base(course)
@@ -538,7 +533,7 @@ class InstructorWeb:
             if catalog['count'] > 5:
                 body += f'<a href="{base}/assignments?visibility=open">진행 과제 전체 보기</a>'
             body += '</section>'
-        body += f'<section><h3>수업 운영</h3><p><a href="{base}/students">학생 등록·수강 관리</a></p><p><a href="{base}/settings">수업 정보·운영 상태·학생 접속 QR</a></p></section>'
+        body += f'<section><h3>수업 운영</h3><p><a href="{base}/students">학생 등록·수강 관리</a></p><p><a href="{base}/settings">수업 정보·운영 상태·학생 접속 링크</a></p></section>'
         return '수업 개요', body
 
     def _password_result(self, result, base, title='학생 등록 완료'):
@@ -683,11 +678,13 @@ class InstructorWeb:
                 outgoing = _value(form, f'test_{index}_output')
                 weight = _value(form, f'test_{index}_weight')
                 hint = _value(form, f'test_{index}_hint')
-                if not any((title, incoming, outgoing, weight, hint)):
+                evaluation = _value(form, f'test_{index}_evaluation')
+                if not any((title, incoming, outgoing, weight, hint, evaluation)):
                     continue
                 tests.append({'title': title or f'케이스 {index + 1}', 'input': incoming, 'output': outgoing,
                               'weight': float(weight), 'public': _value(form, f'test_{index}_public') == 'yes',
-                              **({'hint': hint} if hint else {})})
+                              **({'hint': hint} if hint else {}),
+                              **({'evaluation': evaluation} if evaluation else {})})
             fields['tests'] = tests
         return fields
 
@@ -967,6 +964,9 @@ class InstructorWeb:
             origin = '웹 등록 · ' + {'c': 'C17', 'cpp': 'C++17'}.get(item['language'], '언어 확인 필요') if item['origin'] == 'web' else 'CLI 등록'
             counts = (f'수락 {item["accepted_students"]}명 · 제출 {item["submitted_students"]}명<br><span class="meta">접수 {item["submission_count"]}건 (재제출 포함)</span>'
                       if item['assignment_id'] else '아직 비공개')
+            if item['assignment_id'] and item['active'] and (item['ready'] or item['submission_count']):
+                query = urlencode({'assignment_id': item['assignment_id']})
+                counts += f'<br><a href="{base}/submissions?{_e(query)}">제출·미제출 명단</a>'
             selection = ''
             if course['status'] != 'archived' and item['assignment_id'] and item['visibility'] != 'deleted':
                 selectable += 1
@@ -1038,6 +1038,9 @@ class InstructorWeb:
         body += f'<p>수락 {item["accepted_students"]}명 · 제출 {item["submitted_students"]}명 · 접수 {item["submission_count"]}건 (재제출 포함)</p>'
         body += '<p class="hint">마감은 서버 접수 시각 기준입니다. 업로드 중 마감을 넘으면 새 제출은 거절될 수 있습니다.</p>'
         body += f'<a class="button" href="{base}/submissions">수업의 학생 제출·결과 확인</a>'
+        if item['active'] and (item['ready'] or item['submission_count']):
+            query = urlencode({'assignment_id': assignment_id})
+            body += f'<p><a class="button" href="{base}/submissions?{_e(query)}">이 과제의 제출·미제출 명단</a></p>'
         document_label = '설명·이력 조회' if item['visibility'] == 'deleted' else '설명 수정·이력'
         document_hint = '보존된 안내문을 조회합니다. 수정은 복원 후 가능합니다.' if item['visibility'] == 'deleted' else '기존 수락·제출·점수를 유지한 안내문 보완'
         body += f'<p><a href="{base}/assignments/{quote(assignment_id, safe="")}/document">{document_label}</a> · {document_hint}</p>'
@@ -1140,6 +1143,7 @@ class InstructorWeb:
         body += f'<p class="meta">마지막 저장: {_e(_timestamp(draft.get("updated_at")))} KST · 각 영역의 저장 버튼을 누른 내용만 보존됩니다.</p>'
         uploads = {item['role']: item for item in draft.get('uploads', [])}
         template = draft['mode'] == 'template'
+        missing_materials = self.assignments.missing_materials(draft, uploads)
         material_status = lambda roles: ('예제 템플릿 준비됨' if template else
             '서버 등록 완료' if all(role in uploads for role in roles) else
             '미등록: ' + ', '.join({'starter': '학생 코드', 'solution': '정답', 'negative': '오답'}[role] for role in roles if role not in uploads))
@@ -1150,6 +1154,7 @@ class InstructorWeb:
                 ('제출 마감 (한국 시간)', (_timestamp(deadline).replace('T', ' ') + ' KST') if deadline else '마감 없음'),
                 ('학생 배포 자료', material_status(('starter',))),
                 ('교수자 채점 자료', material_status(('solution', 'negative')) + f' · {draft.get("max_score", 0):g}점 만점'),
+                ('채점 테스트', '예제 테스트 준비됨' if template else f'{len(draft.get("tests") or [])}개 서버 등록됨'),
                 ('검증 상태', verification))) + '</div>'
         body += '<ul class="draft-navigation" aria-label="작성 영역 바로가기">' + ''.join(
             f'<li><a href="#draft-{key}">{_e(label)}</a></li>' for key, label in (
@@ -1190,11 +1195,27 @@ class InstructorWeb:
         body += self._upload_section(path, draft, 'starter', session, revision_field, locked) + '</section>'
 
         body += '<section id="draft-grading"><h3>3. 교수자 채점 자료</h3><div class="notice warning">정답·오답·비공개 테스트는 교수자 전용이며 학생용 starter에 포함되지 않습니다.</div>'
+        if not template:
+            roles_ready = all(role in uploads for role in ('solution', 'negative'))
+            tests_count = len(draft.get('tests') or [])
+            if roles_ready and tests_count:
+                body += ('<div class="notice" data-grading-receipt role="status"><strong>채점 자료 서버 저장 확인</strong>'
+                         f'<p>정답 코드 등록됨 · 오답 코드 등록됨 · 테스트 {tests_count}개 · {draft.get("max_score", 0):g}점 만점</p>'
+                         f'<p>현재 저장 버전 {draft["revision"]} 기준입니다. 아래 파일 선택란이 비어 있어도 서버에 저장된 자료는 유지됩니다. '
+                         '이 표시는 자료 저장 확인이며 검증 통과나 학생 공개를 뜻하지 않습니다.</p></div>')
+            else:
+                grading_missing = [label for label in missing_materials if label != '학생용 starter ZIP']
+                body += ('<div class="notice warning" data-grading-receipt role="status"><strong>채점 자료 등록 미완료</strong>'
+                         f'<p>미등록: {_e(", ".join(grading_missing))}</p></div>')
+            body += ('<p class="hint">grading-private.zip은 정답·오답·테스트를 함께 저장하는 파일입니다. '
+                     '학생용 starter.zip은 <a href="#draft-starter">2. 학생 배포 자료</a>에 별도로 등록하세요.</p>')
         body += '<p>자동채점은 입력에 대한 출력 결과를 확인합니다. Observer·Decorator 등 설계 패턴의 역할 분리와 구조는 제출 코드를 열어 별도로 평가하세요.</p>'
-        body += '<p class="hint">학생에게 실패 단계와 수정 가이드를 제공합니다. 테스트별 학생용 수정 가이드에는 정답·비공개 입력을 적지 마세요. 원시 컴파일 로그나 실행 출력은 학생에게 전송하지 않습니다.</p>'
+        body += '<p class="hint">학생에게 실패 단계와 수정 가이드를 제공하며, 작성한 평가 요소는 통과·실패·미검사 모두에 표시합니다. 학생 공개 평가 요소와 수정 가이드에는 정답·비공개 입력을 적지 마세요. 원시 컴파일 로그나 실행 출력은 학생에게 전송하지 않습니다.</p>'
         body += f'<p><a class="button secondary" href="{path}/grading-template.zip">현재 설정의 채점 템플릿 ZIP 다운로드</a></p>'
         body += '<p class="hint">작성용 정답·오답 예제와 현재 테스트 설정을 담은 템플릿입니다. 업로드한 정답·오답 코드의 백업이 아닙니다.</p>'
         if draft['mode'] == 'direct' and not locked:
+            body += ('<p>파일 선택만으로 등록되지 않습니다. 아래 검토 확인란을 체크한 뒤 '
+                     '<strong>채점 템플릿 한 번에 저장</strong>을 누르세요. 저장 후 위의 등록 상태와 테스트 개수를 확인하세요.</p>')
             fields = revision_field + _field('file', '수정한 채점 템플릿 ZIP', kind='file', required=True, extra='accept=".zip,application/zip"')
             fields += _checkbox('grading_confirm', 'solution, negative, tests.json을 검토했으며 기존 채점 자료를 교체합니다.')
             body += self._form(path + '/grading-template', session, fields + _button('채점 템플릿 한 번에 저장'), multipart=True)
@@ -1212,6 +1233,11 @@ class InstructorWeb:
         body += '</section>'
 
         body += '<section id="draft-validation"><h3>4. 서버 검증</h3>'
+        if missing_materials and not locked:
+            body += ('<div class="notice warning" id="missing-validation-materials"><strong>검증 전에 등록할 자료</strong><ul>'
+                     + ''.join(f'<li><a href="#draft-{"starter" if label == "학생용 starter ZIP" else "grading"}">{_e(label)}</a></li>'
+                               for label in missing_materials)
+                     + '</ul><p>파일을 선택한 상태와 서버에 저장된 상태는 다릅니다. 각 영역의 저장 버튼을 누른 뒤 다시 확인하세요.</p></div>')
         if job.get('job_id') != latest_job.get('job_id'):
             body += f'<div class="notice warning">이전 검증 작업을 보고 있습니다. 공개 여부는 최신 작업으로 판단합니다. <a href="{path}#draft-validation">최신 검증 확인</a></div>'
         if job:
@@ -1219,9 +1245,12 @@ class InstructorWeb:
         else:
             body += '<p>아직 서버 검증을 실행하지 않았습니다.</p>'
         if not locked and not current_check:
+            check_button = _button('현재 저장 버전 검증 시작')
+            if missing_materials:
+                check_button = check_button.replace('<button ', '<button disabled aria-describedby="missing-validation-materials" ')
             body += self._form(path + '/checks', session, revision_field +
                 _checkbox('trusted_code', '정답·오답 코드를 직접 검토했으며 서버 실행을 승인합니다.') +
-                _button('현재 저장 버전 검증 시작'))
+                check_button)
         body += '</section><div id="draft-publish"><h3>5. 학생 공개</h3>'
         body += self._publish_section(course, draft, latest_job, session, revision_field, path, current_check)
         body += '</div>'
@@ -1235,6 +1264,7 @@ class InstructorWeb:
 
     def _test_case_editor(self, path, draft, session, revision_field):
         body = '<section><h3>표준 입출력 테스트</h3><p>CRLF/LF만 동등 취급하며 추가 공백·출력은 오답입니다. 1~50개 케이스, 배점 합계가 만점입니다. 웹 입력 요청은 64 KiB 이하로 작성하세요.</p>'
+        body += '<p class="hint">학생 공개 평가 요소는 선택 입력(2048자 이하)입니다. 비공개 케이스도 통과·실패·미검사 모두에서 이 문구는 학생에게 공개되므로 평가할 개념과 요구사항만 적고 정답·비공개 입력·예상 출력은 넣지 마세요.</p>'
         body += '<p class="hint">학생용 수정 가이드는 선택 입력(2048자 이하)입니다. 비공개 케이스도 실패 시 이 문구는 학생에게 공개되므로 점검할 개념만 적고 정답·비공개 데이터는 넣지 마세요.</p>'
         fields = revision_field + '<input type="hidden" name="tests_present" value="yes">'
         fields += '<div data-case-editor><p data-case-total role="status" aria-live="polite">저장 전 각 케이스의 배점을 확인하세요.</p><div data-case-list>'
@@ -1244,6 +1274,7 @@ class InstructorWeb:
             fields += f'<details data-case {"open" if index < max(1, len(tests)) else ""}><summary>케이스 {index + 1}{" · 등록됨" if test else " · 미입력"}</summary>'
             fields += _field(f'test_{index}_title', '케이스 제목', test.get('title')) + _textarea(f'test_{index}_input', '입력', test.get('input'))
             fields += _textarea(f'test_{index}_output', '예상 출력', test.get('output')) + _field(f'test_{index}_weight', '배점', test.get('weight'), kind='number', extra='min="0" step="any"')
+            fields += _textarea(f'test_{index}_evaluation', '학생 공개 평가 요소 (선택 · 항상 공개)', test.get('evaluation'))
             fields += _textarea(f'test_{index}_hint', '학생용 수정 가이드 (선택 · 실패 시 공개)', test.get('hint'))
             checked = 'checked' if test.get('public') else ''
             fields += f'<label><input type="checkbox" name="test_{index}_public" value="yes" {checked}> 학생에게 이 케이스 공개</label>'

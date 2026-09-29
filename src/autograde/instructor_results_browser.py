@@ -12,6 +12,7 @@ SCRIPT = r"""(() => {
   const refresh = panel.querySelector('[data-results-refresh]');
   const toggle = panel.querySelector('[data-results-toggle]');
   const filter = panel.querySelector('[data-results-filter]');
+  const assignment = panel.querySelector('[data-results-assignment]');
   const message = panel.querySelector('[data-results-message]');
   const checked = panel.querySelector('[data-results-time]');
   if (!content || !refresh || !toggle || !filter || !message || !checked) return;
@@ -30,6 +31,35 @@ SCRIPT = r"""(() => {
   let failures = 0, paused = false, terminal = false, navigating = false, epoch = 0;
   let pending = null, lastHTML = content.innerHTML, latestTime = -Infinity;
   const rows = () => [...content.querySelectorAll('[data-result-key]')];
+  const summaries = () => [...content.querySelectorAll('[data-result-assignment-summary]')];
+  const initial = new URL(window.location.href).searchParams;
+  let selectedAssignment = assignment ? (initial.get('assignment_id') || '') : '';
+  const views = new Set(['all', 'submitted', 'pending', 'attention', 'unsubmitted']);
+  if (views.has(initial.get('result_view'))) filter.value = initial.get('result_view');
+  const updateAssignments = () => {
+    if (!assignment) return;
+    const choices = [['', '전체 과제'], ...summaries().map(item => [item.dataset.assignmentId, item.dataset.assignmentLabel])];
+    if (selectedAssignment && !choices.some(([id]) => id === selectedAssignment)) {
+      // A deleted/archived selection must not silently expand to the whole course.
+      choices.push([selectedAssignment, '선택한 과제 · 현재 조회 대상 없음']);
+    }
+    assignment.replaceChildren(...choices.map(([value, label]) => {
+      const option = document.createElement('option');
+      option.value = value; option.textContent = label;
+      return option;
+    }));
+    assignment.value = selectedAssignment;
+    assignment.disabled = false;
+  };
+  const syncAddress = () => {
+    const url = new URL(window.location.href);
+    if (selectedAssignment) url.searchParams.set('assignment_id', selectedAssignment);
+    else url.searchParams.delete('assignment_id');
+    if (filter.value !== 'all') url.searchParams.set('result_view', filter.value);
+    else url.searchParams.delete('result_view');
+    refresh.href = url.href;
+    try { window.history.replaceState(null, '', url.href); } catch (_) { /* Filtering still works without history access. */ }
+  };
   const stop = () => {
     epoch++;
     clearTimeout(timer); clearTimeout(requestTimeout);
@@ -51,7 +81,22 @@ SCRIPT = r"""(() => {
       unsubmitted: row => row.dataset.submitted === 'no'
     };
     const matches = predicates[filter.value] || predicates.all;
-    rows().forEach(row => { row.hidden = !matches(row); if (!row.hidden) visible++; });
+    rows().forEach(row => {
+      row.hidden = Boolean(selectedAssignment && row.dataset.assignmentId !== selectedAssignment) || !matches(row);
+      if (!row.hidden) visible++;
+    });
+    summaries().forEach(item => { item.hidden = Boolean(selectedAssignment && item.dataset.assignmentId !== selectedAssignment); });
+    const courseSummary = content.querySelector('[data-results-course-summary]');
+    if (courseSummary) courseSummary.hidden = Boolean(selectedAssignment);
+    const selection = content.querySelector('[data-results-selection]');
+    if (selection) selection.textContent = selectedAssignment ?
+      `선택한 과제 · 현재 명단 ${visible}명 · 제출·미제출 인원은 보기 조건과 관계없이 해당 과제 전체를 기준으로 표시합니다.` :
+      `전체 과제 · 현재 명단 ${visible}건 · 같은 학생도 과제마다 별도 행으로 표시합니다.`;
+    content.querySelectorAll('[data-results-choice]').forEach(link => {
+      const params = new URL(link.href, window.location.href).searchParams;
+      if (selectedAssignment === params.get('assignment_id') && filter.value === params.get('result_view')) link.setAttribute('aria-current', 'true');
+      else link.removeAttribute('aria-current');
+    });
     const empty = content.querySelector('[data-results-empty-filter]');
     if (empty) empty.hidden = visible !== 0;
   };
@@ -72,6 +117,7 @@ SCRIPT = r"""(() => {
     const anchorTop = anchor && anchor.getBoundingClientRect().top;
     content.replaceChildren(...update.document.body.childNodes);
     content.querySelectorAll('details[id]').forEach(el => { el.open = open.has(el.id); });
+    updateAssignments();
     applyFilter();
     clearTimeout(highlightTimer);
     rows().forEach(row => {
@@ -156,7 +202,23 @@ SCRIPT = r"""(() => {
       if (current === epoch) { controller = null; schedule(Math.min(60000, 5000 * 2 ** failures)); }
     }
   };
-  filter.addEventListener('change', applyFilter);
+  filter.addEventListener('change', () => { applyFilter(); syncAddress(); });
+  if (assignment) assignment.addEventListener('change', () => {
+    selectedAssignment = assignment.value;
+    applyFilter(); syncAddress();
+  });
+  content.addEventListener('click', event => {
+    if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey || event.button > 0) return;
+    const link = event.target.closest && event.target.closest('[data-results-choice]');
+    if (!assignment || !link || !content.contains(link)) return;
+    const params = new URL(link.href, window.location.href).searchParams;
+    const selected = params.get('assignment_id'), view = params.get('result_view');
+    if (!summaries().some(item => item.dataset.assignmentId === selected) || !views.has(view)) return;
+    event.preventDefault();
+    selectedAssignment = selected; filter.value = view;
+    assignment.value = selectedAssignment;
+    applyFilter(); syncAddress();
+  });
   filter.disabled = false;
   refresh.addEventListener('click', event => {
     if (terminal || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey || event.button > 0) return;
@@ -199,7 +261,7 @@ SCRIPT = r"""(() => {
     const destination = new URL(link.href, window.location.href);
     if (destination.origin !== window.location.origin || destination.pathname !== window.location.pathname || destination.search !== window.location.search) leave();
   });
-  applyFilter(); resume();
+  updateAssignments(); applyFilter(); syncAddress(); resume();
 })();"""
 
 SCRIPT_HASH = base64.b64encode(hashlib.sha256(SCRIPT.encode('utf-8')).digest()).decode('ascii')

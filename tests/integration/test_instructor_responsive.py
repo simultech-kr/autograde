@@ -58,7 +58,7 @@ def test_responsive_pages(portal, setup, tmp_path, monkeypatch):
     for portal_mode, name in ((True, 'results'), (False, 'basic-results')):
         page = service.instructor_dashboard_page(AUTH, portal=portal_mode).body
         assert 'Observer &lt;script&gt;' in page and '<script>bad()' not in page
-        assert page.index('id="student-results"') < page.index('id="student-management"') < page.index('id="assignment-qr"')
+        assert page.index('id="student-results"') < page.index('id="student-management"') < page.index('id="assignment-links"')
         assert '<body class="responsive-instructor">' in page
         tables = Tables(page)
         assert (tables.tables, tables.rowheaders, tables.labels) == (2, 4, 24)

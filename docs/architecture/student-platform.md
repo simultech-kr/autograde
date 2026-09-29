@@ -13,7 +13,7 @@
 ```text
 pilot config CSV + roster CSV ──> 교수자 CLI ── starter + assessment/data 등록 ──┐
                                                v
-과제 QR ─> 학생 브라우저 ─ 학번 + 전용 비밀번호 ─> 10분·1회용 과제 수령 코드
+과제 접속 링크 ─> 학생 브라우저 ─ 학번 + 전용 비밀번호 ─> 10분·1회용 과제 수령 코드
                                                     │
                                                     v
                    VS Code Extension ─ 코드 교환 ─> Autograde API ─> SQLite + bundle CAS
@@ -159,7 +159,7 @@ credential 어느 쪽으로도 교환하거나 복사하지 않습니다.
 ### 권장 비밀번호·과제 수령 흐름
 
 ```text
-교수자 Dashboard QR ─> Browser /assignment-claim/{assignment_id}
+교수자 Dashboard의 과제 링크 ─> Browser /assignment-claim/{assignment_id}
                                   │ 학번 + 학생별 전용 비밀번호
                                   v
                          10분·1회용 수령 코드
@@ -456,12 +456,12 @@ repository reconciliation/deadline event를 플랫폼 PyJevSim stream으로 통�
 ## 구현 단계
 
 1. student platform schema와 course/assignment/repository ownership — 구현됨
-2. 학생별 전용 비밀번호, QR 수령 코드와 호환 활성화 코드, enrollment 확인,
+2. 학생별 전용 비밀번호, 웹 수령 코드와 호환 활성화 코드, enrollment 확인,
    device authorization/session API — 구현됨
 3. Linux/macOS/WSL2 Extension의 수령·자동 다운로드/제출·diagnostics — 구현됨
 4. direct bundle API와 existing exact-SHA collection 연결 — bundle과 branch mode 구현됨
 5. 파일럿 local-process grader와 result projection API — 파일럿 범위
-6. 교과목/학생 관리 CLI와 QR·수락 상태를 포함한 instructor read-only dashboard — 구현됨
+6. 교과목/학생 관리 CLI와 접속 링크·수락 상태를 포함한 instructor read-only dashboard — 구현됨
 7. GitHub repository provisioning/reconciliation와 instructor release PR — 미구현
 8. PR submission remote 검증, session 관리 UI, 학생용 CLI fallback — 미구현
 9. Docker/Podman 또는 microVM worker, confidential-test child sandbox와 공식 성적 제출
