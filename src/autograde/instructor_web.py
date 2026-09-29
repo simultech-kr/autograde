@@ -784,7 +784,7 @@ class InstructorWeb:
                 return self._redirect(base + '/assignments/' + assignment_id)
             elif action == 'delete':
                 self.assignments.delete_release(key, assignment_id)
-                return self._redirect(base + '/assignments?visibility=deleted')
+                return self._redirect(base + '/assignments')
             elif action == 'restore':
                 self.assignments.restore_release(key, assignment_id)
                 return self._redirect(base + '/assignments/' + assignment_id)
@@ -881,7 +881,7 @@ class InstructorWeb:
         if action == 'archive':
             body += '<p>학생의 새 수령·다운로드·제출을 중단합니다. 이미 보관된 과제는 그대로 유지합니다.</p>'
         else:
-            body += '<p>보관된 과제를 일반 관리 목록에서 제외하고 삭제 목록으로 옮깁니다. 삭제 목록에서 보관 상태로 복원할 수 있습니다.</p>'
+            body += '<p>보관된 과제를 일반 관리 목록에서 제외하고 휴지통으로 옮깁니다. 완료 후에는 삭제한 과제가 빠진 관리 목록으로 돌아갑니다. 휴지통에서 보관 상태로 복원할 수 있습니다.</p>'
         body += '<p>기존 제출 코드·점수·이력과 이미 접수된 채점 작업은 유지합니다. 파일을 영구 삭제하거나 압축하지 않습니다.</p>'
         rows = []
         for item in preview['items']:
@@ -912,32 +912,51 @@ class InstructorWeb:
             raise ValueError('다른 수업 또는 로그인에서 만든 확인 정보입니다. 현재 목록에서 다시 선택해 주세요.')
         result = self.assignments.apply_release_batch(course['course_key'], reviewed.get('action'),
             reviewed.get('assignment_ids'), reviewed.get('fingerprint'))
-        label, visibility = ('보관', 'inactive') if result['action'] == 'archive' else ('삭제', 'deleted')
         base = self._base(course)
-        body = (f'<div class="notice" role="status"><strong>일괄 {label} 완료</strong> · 선택 {result["count"]}개 중 '
+        if result['action'] == 'delete':
+            # Refresh the ordinary catalog with a GET, never reopen deleted
+            # rows or leave a destructive POST to be replayed on refresh.
+            return self._redirect(base + '/assignments')
+        body = (f'<div class="notice" role="status"><strong>일괄 보관 완료</strong> · 선택 {result["count"]}개 중 '
                 f'{result["changed_count"]}개 변경, {result["unchanged_count"]}개는 기존 상태 유지.</div>'
                 '<p>제출 코드·점수·이력은 보존했습니다. 이미 접수된 채점 작업은 계속됩니다.</p>'
-                f'<div class="actions"><a class="button" href="{base}/assignments?visibility={visibility}">{label} 목록 확인</a>'
+                f'<div class="actions"><a class="button" href="{base}/assignments?visibility=inactive">보관 목록 확인</a>'
                 f'<a class="button secondary" href="{base}/assignments">과제 관리로</a></div>')
-        return f'일괄 {label} 완료', body
+        return '일괄 보관 완료', body
 
     def _assignment_list(self, course, form, session):
         base = self._base(course)
         search, visibility = _value(form, 'q'), _value(form, 'visibility', 'all')
+        trash = visibility == 'deleted'
         catalog = self.catalog.list(course['course_key'], search=search, visibility=visibility,
                                     page=int(_value(form, 'page', '1')))
-        body = '<p>웹·CLI 등록 과제를 한곳에서 확인합니다. 검증과 학생 공개는 별개이며 초안은 학생에게 보이지 않습니다.</p>'
-        body += '<p class="hint">공개 과제는 먼저 보관한 뒤 삭제할 수 있습니다. 삭제 후에도 제출·점수·코드 이력은 보존되며, 삭제 목록에서 보관 상태로 복원할 수 있습니다.</p>'
-        body += f'<div class="actions"><a class="button secondary" href="{base}/assignments">관리 목록</a><a class="button secondary" href="{base}/assignments?visibility=inactive">보관 과제</a><a class="button secondary" href="{base}/assignments?visibility=deleted">삭제 목록</a></div>'
-        if visibility == 'deleted':
-            body += '<div class="notice warning"><strong>삭제 목록</strong> · 일반 관리 목록에서 제외한 공개 과제입니다. 학생 접근은 중단되며 복원해도 자동 공개되지 않습니다. 파일을 영구 삭제하거나 압축한 상태는 아닙니다.</div>'
+        if trash:
+            body = '<div class="notice warning"><strong>휴지통 · 삭제된 과제만 표시</strong><p>이 과제들은 기본 관리 목록에서 이미 제외되었습니다. 학생 접근은 중단되어 있습니다.</p>'
+            body += '<p>과제를 열면 보존된 자료를 조회하거나 보관 상태로 복원할 수 있습니다. 복원해도 학생에게 자동 공개되지 않습니다.</p>'
+            body += '<p>제출 코드·점수·이력은 보존하며 파일을 영구 삭제하거나 압축한 상태는 아닙니다.</p></div>'
+        else:
+            body = '<p>웹·CLI 등록 과제를 한곳에서 확인합니다. 검증과 학생 공개는 별개이며 초안은 학생에게 보이지 않습니다.</p>'
+            body += '<p class="hint">삭제한 과제는 이 관리 목록에 표시하지 않습니다. 제출·점수·코드 이력은 보존되며, 휴지통에서 조회하거나 보관 상태로 복원할 수 있습니다.</p>'
+        body += '<div class="actions">'
+        for target, label, current in (
+                ('', '관리 목록', visibility not in {'inactive', 'deleted'}),
+                ('?visibility=inactive', '보관 과제', visibility == 'inactive'),
+                ('?visibility=deleted', '휴지통', trash)):
+            selected = ' aria-current="page"' if current else ''
+            body += f'<a class="button {"" if current else "secondary"}" href="{base}/assignments{target}"{selected}>{label}</a>'
+        body += '</div>'
         if course['status'] != 'active':
             body += '<div class="notice warning">수업이 운영 상태가 아니므로 학생 접근은 차단됩니다. 아래 공개 상태는 과제 자체의 일정·상태입니다.</div>'
-        if course['status'] != 'archived':
+        if course['status'] != 'archived' and not trash:
             body += f'<a class="button" href="{base}/assignments/new">새 과제 등록</a>'
         body += f'<form method="get" action="{base}/assignments" class="catalog-tools"><div>'
-        body += _field('q', '과제 검색', search, extra='maxlength="200"') + '</div><div>'
-        body += _select('visibility', '공개 상태', [('all', '전체 (삭제 제외)'), *_VISIBILITY.items()], visibility) + '</div><button>조회</button></form>'
+        body += _field('q', '휴지통에서 검색' if trash else '과제 검색', search, extra='maxlength="200"') + '</div>'
+        if trash:
+            body += '<input type="hidden" name="visibility" value="deleted">'
+        else:
+            states = [('all', '전체 (삭제 제외)'), *((key, text) for key, text in _VISIBILITY.items() if key != 'deleted')]
+            body += '<div>' + _select('visibility', '공개 상태', states, visibility) + '</div>'
+        body += '<button>조회</button></form>'
         rows = []
         selectable = 0
         for item in catalog['items']:
@@ -957,8 +976,10 @@ class InstructorWeb:
                              f'aria-label="{_e(item["title"])} 선택"> 선택</label>')
             rows.append((selection + f'<a href="{_e(target)}">{_e(item["title"])}</a><div class="meta">{_e(origin)}</div>',
                          f'<span class="status-badge">{_e(_VISIBILITY[item["visibility"]])}</span><div class="meta">{_e(check)}</div>',
-                         _e(_timestamp(item['due_at']) or '마감 없음'), counts))
-        table = result_table(('과제', '공개·검증', '마감 (KST)', '학생 현황'), rows, f'과제·초안 {catalog["count"]}건')
+                         _e(_timestamp(item['deleted_at']) if trash else _timestamp(item['due_at']) or '마감 없음'), counts))
+        headers = ('삭제된 과제', '상태', '삭제 시각 (KST)', '보존된 학생 이력') if trash else ('과제', '공개·검증', '마감 (KST)', '학생 현황')
+        caption = f'삭제된 과제 {catalog["count"]}건' if trash else f'과제·초안 {catalog["count"]}건'
+        table = result_table(headers, rows, caption)
         if selectable:
             body += f'<form method="post" action="{base}/assignments/bulk/preview" data-assignment-bulk>'
             body += f'<input type="hidden" name="csrf" value="{_e(session["csrf"])}">'
@@ -974,14 +995,15 @@ class InstructorWeb:
         else:
             body += table
         if not rows:
-            body += '<p>등록된 과제가 없거나 검색 조건에 맞는 과제가 없습니다.</p>'
+            empty = ('검색 조건에 맞는 삭제된 과제가 없습니다.' if search else '휴지통이 비어 있습니다.') if trash else '등록된 과제가 없거나 검색 조건에 맞는 과제가 없습니다.'
+            body += f'<p>{empty}</p>'
         body += f'<div class="catalog-actions">{catalog["page"]} / {catalog["pages"]} 페이지'
         for number, label in ((catalog['page'] - 1, '이전'), (catalog['page'] + 1, '다음')):
             if 1 <= number <= catalog['pages']:
                 query = urlencode(dict(q=search, visibility=visibility, page=number))
                 body += f' <a href="{base}/assignments?{_e(query)}">{label}</a>'
         body += f'</div><p class="meta">{_e(_timestamp(catalog["generated_at"]))} KST 기준. 학생 수는 해당 공개본 전체 이력 기준이며 현재 수강 중인 인원과 다를 수 있습니다. 초안·공개본 버전을 최종 성적 의무 과제 수로 해석하지 마세요.</p>'
-        return '과제 관리', body
+        return '과제 휴지통' if trash else '과제 관리', body
 
     def _release_lifecycle(self, course, assignment_id, visibility, session, deleted_at=None, *, needs_archive=False):
         """Only reversible lifecycle operations; never expose a physical purge."""
@@ -998,12 +1020,12 @@ class InstructorWeb:
         if course['status'] == 'archived':
             return ''
         if visibility == 'inactive' and not needs_archive:
-            return ('<section><h3>보관된 과제 삭제</h3><p>이 과제는 보관되어 학생 접근이 중단된 상태입니다. 삭제하면 일반 관리 목록에서 제외하고 삭제 목록으로 옮깁니다.</p>'
+            return ('<section><h3>보관된 과제 삭제</h3><p>이 과제는 보관되어 학생 접근이 중단된 상태입니다. 삭제하면 휴지통으로 옮기고, 이 과제가 빠진 기본 관리 목록으로 돌아갑니다.</p>'
                 '<p>제출·점수·코드·감사 기록과 이미 접수된 채점 작업은 유지합니다. 파일 영구 삭제나 저장 공간 정리는 수행하지 않습니다.</p>' +
                 self._form(path + '/delete', session,
-                    _checkbox('confirm', '제출 이력은 보존하고 이 과제를 삭제 목록으로 옮깁니다. 복원할 수 있음을 확인했습니다.') + _button('과제 삭제', danger=True)) + '</section>')
+                    _checkbox('confirm', '제출 이력은 보존하고 이 과제를 휴지통으로 옮깁니다. 복원할 수 있음을 확인했습니다.') + _button('과제 삭제', danger=True)) + '</section>')
         return ('<details><summary>과제 보관</summary><p>학생 수령·다운로드·신규 제출을 중단합니다. 기존 접수의 채점은 계속되며 제출·점수·코드·감사 기록은 삭제하지 않습니다.</p>'
-            '<p>보관 완료 후 이 화면에서 과제를 삭제 목록으로 옮길 수 있습니다.</p>' +
+            '<p>보관 완료 후 이 화면에서 과제를 휴지통으로 옮길 수 있습니다.</p>' +
             self._form(path + '/archive', session,
                 _checkbox('confirm', '이 과제를 보관하고 학생의 새 접근을 중단합니다.') + _button('과제 보관', danger=True)) + '</details>')
 
@@ -1023,7 +1045,7 @@ class InstructorWeb:
             body += self._release_lifecycle(course, assignment_id, 'deleted', session, item.get('deleted_at'))
             if item['draft_id']:
                 body += f'<p><a href="{base}/drafts/{_e(item["draft_id"])}">보존된 과제·채점 자료 조회</a></p>'
-            return item['title'], body + f'<p><a href="{base}/assignments?visibility=deleted">삭제 목록으로</a></p>'
+            return item['title'], body + f'<p><a href="{base}/assignments?visibility=deleted">휴지통으로</a> · <a href="{base}/assignments">관리 목록으로</a></p>'
         if self.rubrics and course['status'] != 'archived':
             body += f'<p><a href="{base}/rubrics/new/{_e(item["assignment_id"])}">루브릭 작성 (학생 점수 미연결)</a></p>'
         if item['draft_id']:

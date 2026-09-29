@@ -71,13 +71,22 @@ def test_bulk_archive_then_delete_requires_review_and_preserves_unselected(setup
 
     assert browser.post(APPLY, ticket=reviewed).status == 400
     assert all(state.get_bundle_assignment(item.assignment_id).active for item in (web, cli))
-    assert browser.post(APPLY, ticket=reviewed, confirm='yes').status in (200, 303)
+    assert browser.post(APPLY, ticket=reviewed, confirm='yes').status == 200
     assert [visibility(browser, item.assignment_id) for item in (web, cli, kept)] == ['inactive', 'inactive', 'open']
 
     delete_preview = browser.post(PREVIEW, action='delete', **selected)
     assert [visibility(browser, item.assignment_id) for item in (web, cli)] == ['inactive', 'inactive']
-    assert browser.post(APPLY, ticket=ticket(delete_preview), confirm='yes').status in (200, 303)
+    deleted = browser.post(APPLY, ticket=ticket(delete_preview), confirm='yes')
+    assert deleted.status == 303 and deleted.headers['Location'] == BASE + '/assignments'
     assert [visibility(browser, item.assignment_id) for item in (web, cli, kept)] == ['deleted', 'deleted', 'open']
+    for _ in range(2):
+        normal = browser.get(deleted.headers['Location'])
+        assert normal.status == 200 and '<h2>과제 관리</h2>' in normal.body
+        assert BASE + '/assignments/' + web.assignment_id not in normal.body
+        assert BASE + '/assignments/' + cli.assignment_id not in normal.body
+        assert '웹 보관 삭제 &lt;과제&gt;' not in normal.body
+        assert BASE + '/assignments/' + kept.assignment_id in normal.body
+        assert [visibility(browser, item.assignment_id) for item in (web, cli, kept)] == ['deleted', 'deleted', 'open']
     assert assignments.get_draft('come2201', draft['draft_id'])['published_assignment_id'] == web.assignment_id
     assert state.get_bundle_assignment(web.assignment_id).due_at == web.due_at
     assert state.get_bundle_assignment(cli.assignment_id).assignment_id == cli.assignment_id
