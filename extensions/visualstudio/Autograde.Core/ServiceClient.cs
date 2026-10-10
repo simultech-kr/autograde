@@ -45,6 +45,7 @@ namespace Autograde.Core
         string access, refresh;
         DateTime expires;
         public string BaseUrl { get; }
+        public bool ClaimRedeemed { get; private set; }
         public bool HasSession { get { lock (stateLock) return !disposed && access != null; } }
 
         public static string NormalizeAddress(string value)
@@ -174,6 +175,7 @@ namespace Autograde.Core
             try
             {
                 Clear();
+                ClaimRedeemed = false;
                 if (claim == null || claim.Length > 256) throw new ArgumentException("수령 코드 길이가 올바르지 않습니다.");
                 claim = claim.Trim().ToUpperInvariant();
                 if (!Regex.IsMatch(claim, "^AK1-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$"))
@@ -182,16 +184,18 @@ namespace Autograde.Core
                 var device = Parse(await Send("POST", "/v1/device-authorizations", new JObject
                 {
                     ["client"] = "visualstudio-extension",
-                    ["extension_version"] = "0.5.7",
+                    ["extension_version"] = "0.5.8",
                     ["device_name"] = "Visual Studio / Windows",
                     ["claim_code"] = claim
                 }, null, null, null, cancel).ConfigureAwait(false));
                 var code = Required(device, "device_code");
-                var accepted = Parse(await Send("POST", "/v1/assignment-claims/redeem", new JObject
+                var acceptedBytes = await Send("POST", "/v1/assignment-claims/redeem", new JObject
                 {
                     ["claim_code"] = claim,
                     ["device_code"] = code
-                }, null, null, null, cancel).ConfigureAwait(false));
+                }, null, null, null, cancel).ConfigureAwait(false);
+                ClaimRedeemed = true; // Redeeming can revoke the previous assignment's session.
+                var accepted = Parse(acceptedBytes);
                 if (Required(accepted, "delivery_mode") != "bundle") throw new InvalidDataException("이 확장은 bundle 과제만 지원합니다.");
                 var assignment = Required(accepted, "assignment_id");
                 for (int attempt = 0; ; attempt++)
@@ -262,6 +266,30 @@ namespace Autograde.Core
         {
             var value = Parse(await Authorized("GET", "/v1/assignments", null, null, cancel).ConfigureAwait(false));
             return value["assignments"] as JArray ?? throw new InvalidDataException("과제 목록 오류");
+        }
+        public async Task<JArray> AcceptedAssignmentsAsync(CancellationToken cancel)
+        {
+            try
+            {
+                var value = Parse(await Authorized("GET", "/v1/accepted-assignments/catalog", null, null, cancel).ConfigureAwait(false));
+                var rows = value["assignments"] as JArray ?? throw new InvalidDataException("수락 이력 응답 오류");
+                var seen = new HashSet<string>(StringComparer.Ordinal);
+                foreach (var row in rows)
+                {
+                    if (!seen.Add(Required(row, "assignment_id"))) throw new InvalidDataException("수락 이력의 과제가 중복되었습니다.");
+                    Required(row, "title"); Required(row, "course_key"); Required(row, "accepted_at");
+                    var status = Required(row, "status");
+                    if ((status != "available" && status != "closed" && status != "unavailable") ||
+                        row["current_session_authorized"]?.Type != JTokenType.Boolean ||
+                        row["can_reconnect"]?.Type != JTokenType.Boolean || row["can_submit"]?.Type != JTokenType.Boolean)
+                        throw new InvalidDataException("수락 이력의 과제 상태 오류");
+                    if (((bool)row["can_submit"] && (!(bool)row["current_session_authorized"] || status != "available")) ||
+                        ((bool)row["can_reconnect"] && status != "available"))
+                        throw new InvalidDataException("수락 이력의 권한 상태 오류");
+                }
+                return rows;
+            }
+            catch (ServiceError ex) when (ex.Status == 404) { return null; }
         }
         public async Task<AssignmentDocument> DocumentAsync(string assignment, CancellationToken cancel)
         {

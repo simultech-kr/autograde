@@ -540,6 +540,9 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
             "/v1/accepted-assignments": (
                 "accepted_assignments", frozenset({"GET"}), "list_accepted_assignments",
             ),
+            "/v1/accepted-assignments/catalog": (
+                "accepted_assignment_catalog", frozenset({"GET"}), "list_accepted_assignment_catalog",
+            ),
             "/v1/submissions": (
                 "submit",
                 frozenset({"POST"}),
@@ -812,6 +815,9 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
         if route == "accepted_assignments":
             self._ensure_no_body()
             return facade.list_accepted_assignments(self._bearer_token()), 200
+        if route == "accepted_assignment_catalog":
+            self._ensure_no_body()
+            return facade.list_accepted_assignment_catalog(self._bearer_token()), 200
         if route == "assignment_repository":
             self._ensure_no_body()
             return (

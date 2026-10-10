@@ -282,7 +282,7 @@ test("a redeemed claim refreshes the authenticated list and targets the returned
   assert.match(wiring, /cloneAssignment\([\s\S]*new AssignmentTreeItem\(accepted\)/);
   assert.match(
     wiring,
-    /if \(!assignmentId\)[\s\S]*cloneAssignment\(client, treeProvider, refreshAssignments\)/,
+    /if \(!assignmentId\)[\s\S]*cloneAssignment\(client, treeProvider, refreshAssignments, undefined, assignmentWorkspaces\)/,
     "a recovered token exchange must still let the student choose a downloadable assignment",
   );
 });

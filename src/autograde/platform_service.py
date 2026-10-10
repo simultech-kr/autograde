@@ -714,9 +714,9 @@ class StudentPlatformService:
             raise PlatformAPIError(404, "not_found", "session was not found") from exc
         return None
 
-    def require_assignment_acceptance(self, access_token: str) -> tuple[str, str]:
+    def require_assignment_acceptance(self, access_token: str, *, touch: bool = True) -> tuple[str, str]:
         """Student portal credentials must come from an accepted assignment."""
-        session, _student = self._authorize(access_token)
+        session, _student = self._authorize(access_token, touch=touch)
         scope = self.state.get_session_assignment_scope(
             session_id=session.session_id, course_key=self.course_key
         )
@@ -803,6 +803,18 @@ class StudentPlatformService:
             )
         )
         return {"assignments": projected}
+
+    def list_accepted_assignment_catalog(self, access_token: str) -> Mapping[str, Any]:
+        """Historical acceptance metadata; file and submission scopes stay unchanged."""
+        self.require_assignment_acceptance(access_token, touch=False)
+        try:
+            assignments = self.state.list_accepted_assignment_catalog(
+                access_token_hash=self._access_verifier(access_token),
+                course_key=self.course_key, at=self._aware_now(),
+            )
+        except PlatformAccessDenied as exc:
+            raise PlatformAPIError(401, "invalid_token", "access token is invalid or expired") from exc
+        return {"assignments": assignments}
 
     def report_download_diagnostic(self, access_token, assignment_id, payload):
         from .download_diagnostics import record
@@ -2350,7 +2362,7 @@ class StudentPlatformService:
     def _access_verifier(self, access_token: str) -> str:
         return self._digest("access", _required_string(access_token, "access token", maximum=256))
 
-    def _authorize(self, access_token: str) -> tuple[PlatformSession, Any]:
+    def _authorize(self, access_token: str, *, touch: bool = True) -> tuple[PlatformSession, Any]:
         try:
             verifier = self._access_verifier(access_token)
         except PlatformAPIError as exc:
@@ -2369,6 +2381,7 @@ class StudentPlatformService:
                 access_token_hash=verifier,
                 course_key=self.course_key,
                 at=self._aware_now(),
+                touch=touch,
             )
         except PlatformAccessDenied as exc:
             raise PlatformAPIError(

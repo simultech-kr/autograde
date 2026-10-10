@@ -63,6 +63,9 @@ export class AssignmentsTreeProvider implements vscode.TreeDataProvider<Assignme
     const assignment = element.assignment;
     const details: DetailTreeItem[] = [];
     if (isBundleAssignment(assignment)) {
+      const openItem = new DetailTreeItem("기존 과제 이어서 열기", "다운로드한 폴더 선택 · 코드 보존", "folder-opened");
+      openItem.command = { command: "autograde.openAssignment", title: "기존 과제 이어서 열기", arguments: [element] };
+      details.push(openItem);
       const status = this.documents.summary(assignment);
       const documentItem = new DetailTreeItem("과제 설명", `v${status.revision}${status.unread ? " · 새 설명 있음" : " · 읽기 전용"}`, status.unread ? "bell-dot" : "book");
       documentItem.command = {command: "autograde.viewAssignmentDocument", title: "과제 설명 보기", arguments: [element]};

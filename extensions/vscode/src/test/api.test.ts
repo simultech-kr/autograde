@@ -29,6 +29,31 @@ test("student assignment list uses accepted-only endpoint and never falls back t
   }
 });
 
+test("optional accepted history uses its own endpoint and old servers do not break current assignments", async () => {
+  const transport = new FakeTransport([{ assignments: [{ assignment_id: "a", title: "A", course_key: "course", accepted_at: "2026-09-29T00:00:00Z",
+    current_session_authorized: true, can_reconnect: true, can_submit: true, status: "available" }] }, new ApiError("Missing endpoint", 404), { assignments: [] }]);
+  const client = new AutogradeClient(transport, new FakeTokens());
+  assert.equal((await client.getAcceptedAssignmentCatalog())[0]?.assignmentId, "a");
+  await assert.rejects(client.getAcceptedAssignmentCatalog(), /현재 과제의 열기/);
+  assert.deepEqual(await client.getAssignments(), []);
+  assert.deepEqual(transport.calls.map(call => call.endpoint), ["/v1/accepted-assignments/catalog", "/v1/accepted-assignments/catalog", "/v1/accepted-assignments"]);
+  assert.ok(transport.calls.every(call => call.init.method === "GET" && call.bearerToken === "access-token" && call.options?.expectedBaseUrl === transport.baseUrl));
+});
+
+test("routine refresh keeps the UI session identity, while new login and logout invalidate it", async () => {
+  const transport = new FakeTransport([{ access_token: "rotated-access", refresh_token: "rotated-refresh", expires_in: 3600 }]);
+  const tokens = new TokenManager(transport);
+  await tokens.storeSession({ access_token: "a", refresh_token: "r", expires_in: 1 }, transport.baseUrl);
+  const identity = tokens.getSessionGeneration();
+  assert.equal(await tokens.getAccessToken(), "rotated-access");
+  assert.equal(tokens.getSessionGeneration(), identity);
+  await tokens.storeSession({ access_token: "new-a", refresh_token: "new-r", expires_in: 3600 }, transport.baseUrl);
+  assert.notEqual(tokens.getSessionGeneration(), identity);
+  const replacement = tokens.getSessionGeneration();
+  await tokens.clear();
+  assert.notEqual(tokens.getSessionGeneration(), replacement);
+});
+
 test("history and source use authenticated same-origin endpoints and verify source hash", async () => {
   const bytes = Buffer.from("archived source");
   const transport = new FakeTransport([{ submissions: [{ submission_id: "bsub_1", assignment_id: "asn_1",

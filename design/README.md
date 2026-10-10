@@ -1,5 +1,7 @@
 # Design
 
+- [Next.js 웹 전환 계획](../docs/architecture/nextjs-migration-plan.md): 공통 UI와 업무별 모듈, 기존 Python 서비스 경계, 단계별 전환·완료 기준과 복구 계획.
+
 - [루브릭 평가 설계](../docs/architecture/rubric-evaluation-plugin.md), [C++ 옵저버 루브릭 예시](rubrics/observer.rubric.example.json): 설계용이며 현행 평가기에 바로 등록할 수 없음.
 - [SPL 사업화 설계](../docs/architecture/software-product-line.md), [초기 기능/제품 template 카탈로그 예시](ses/product-line.catalog.example.json): 실행/가격/사용권은 미확정.
 

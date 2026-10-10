@@ -60,6 +60,7 @@ internal static class Program
         checks += ResultPresentationChecks.Run();
         checks += AssignmentSelectionChecks.Run();
         checks += await AssignmentDocumentChecks.Run();
+        checks += await WorkspaceBindingChecks.Run();
         Console.WriteLine(checks + " checks passed");
     }
 

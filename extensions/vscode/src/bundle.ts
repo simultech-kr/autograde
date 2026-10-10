@@ -322,6 +322,13 @@ async function collectWorkspaceFiles(
   if (!directoryStat.isDirectory() || directoryStat.isSymbolicLink()) {
     throw new Error(`symbolic link 디렉터리는 제출할 수 없습니다: ${relativeDirectory || "."}`);
   }
+  if (relativeDirectory) {
+    const nestedMetadata = await lstat(path.join(directory, MARKER_DIRECTORY)).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return undefined;
+      throw error;
+    });
+    if (nestedMetadata) throw new Error(`과제 안에 다른 과제 폴더가 포함되어 있어 제출을 중단했습니다: ${relativeDirectory}. 각 과제를 수업 폴더 아래 별도 폴더로 옮긴 뒤 제출하세요.`);
+  }
   const children = await readdir(directory);
   children.sort(compareUtf8);
   for (const name of children) {

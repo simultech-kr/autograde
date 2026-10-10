@@ -25,7 +25,7 @@ class CourseAPI:
     TOKEN_METHODS = frozenset({
         "get_me", "list_sessions", "revoke_current", "revoke_session", "list_assignments",
         "get_bundle_starter", "submit_bundle", "get_submission", "get_result",
-        "get_bundle_history", "get_bundle_source", "list_accepted_assignments",
+        "get_bundle_history", "get_bundle_source", "list_accepted_assignments", "list_accepted_assignment_catalog",
         "report_download_diagnostic", "get_assignment_document",
     })
 
@@ -69,7 +69,7 @@ class CourseAPI:
             if name in {"list_assignments", "list_accepted_assignments"}:
                 return service.list_accepted_assignments(token)
             if name not in {"get_me", "list_sessions", "revoke_current", "revoke_session"}:
-                service.require_assignment_acceptance(token)
+                service.require_assignment_acceptance(token, touch=name != "list_accepted_assignment_catalog")
             return getattr(service, name)(token, *args, **kwargs)
         return call
 

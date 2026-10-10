@@ -68,7 +68,7 @@ def test_toolbar_alignment_and_signed_out_visibility_contract():
     assert 'button.MinHeight = 32' in theme
     assert 'button.Padding = new Thickness(10, 4, 10, 4)' in theme
     assert 'logoutButton.Visibility = authenticated ? Visibility.Visible : Visibility.Collapsed' in ui
-    assert 'assignmentManagement.Visibility = folderManagement.Visibility = authenticated' in ui
+    assert 'assignmentManagement.Visibility = folderManagement.Visibility = acceptedManagement.Visibility = authenticated' in ui
     assert 'output.TextChanged += (_, __) => UpdateOutputVisibility()' in ui
     assert 'string.IsNullOrWhiteSpace(output.Text) ? Visibility.Collapsed : Visibility.Visible' in ui
 
@@ -113,11 +113,11 @@ def test_theme_release_preserves_upgrade_identity_and_versions():
     ns = {'v': 'http://schemas.microsoft.com/developer/vsx-schema/2011'}
     identity = ET.parse(directory / 'source.extension.vsixmanifest').find('v:Metadata/v:Identity', ns)
     assert identity.attrib['Id'] == 'Autograde.VisualStudio.74db5571-a3ad-4451-a5f4-e8cc28d20536'
-    assert identity.attrib['Version'] == '0.5.7'
+    assert identity.attrib['Version'] == '0.5.8'
     project = ET.parse(directory / 'Autograde.VisualStudio.csproj')
     assert project.find('PropertyGroup/Version').text == identity.attrib['Version']
-    assert '"0.5.7")]' in (directory / 'AutogradePackage.cs').read_text()
-    assert '["extension_version"] = "0.5.7"' in (directory.parent / 'Autograde.Core/ServiceClient.cs').read_text()
+    assert '"0.5.8")]' in (directory / 'AutogradePackage.cs').read_text()
+    assert '["extension_version"] = "0.5.8"' in (directory.parent / 'Autograde.Core/ServiceClient.cs').read_text()
     build = (directory.parent / 'build.ps1').read_text()
     assert '$builtIdentity.Id -ne $expectedIdentity.Id' in build
     assert '$builtIdentity.Version -ne $expectedIdentity.Version' in build
@@ -128,7 +128,7 @@ def test_download_opens_installed_folder_without_deleting_files_on_open_failure(
     directory = ROOT / 'extensions/visualstudio/Autograde.VisualStudio'
     ui = (directory / 'AssignmentControl.cs').read_text()
     download = ui.split('async Task DownloadAsync(', 1)[1].split('async Task ReportDownloadAsync', 1)[0]
-    assert download.index('Bundle.ExtractStarter(') < download.index('folder.Text = target;') < download.index('await OpenDownloadedFolderAsync(target, ct, diagnostic)')
+    assert download.index('Bundle.ExtractStarter(') < download.index('RememberWorkspace(target);') < download.index('await OpenDownloadedFolderAsync(target, ct, diagnostic)')
     opening = ui.split('async Task OpenDownloadedFolderAsync(', 1)[1].split('void RequireClient()', 1)[0]
     assert 'catch (OperationCanceledException ex)' in opening and 'catch (Exception ex)' in opening
     assert 'DownloadDiagnostic.OpenRecoveryGuidance(target)' in opening
@@ -153,7 +153,7 @@ def test_extension_manager_description_and_open_recovery_are_connected():
     assert 'ShowDownloadDiagnostic(diagnostic, target)' in ui
     presentation = ui.split('void ShowDownloadDiagnostic(', 1)[1].split('async Task ReportDownloadAsync', 1)[0]
     assert 'OpenRecoveryGuidance(target)' in presentation and '저장 위치: ' in presentation
-    retry = ui.split('folderButton = AddButton', 1)[1].split('AddButton(panel, "기존 과제 폴더 선택"', 1)[0]
+    retry = ui.split('folderButton = AddButton', 1)[1].split('submitButton = AddButton', 1)[0]
     assert 'Bundle.VerifyWorkspace' in retry and 'await ReportDownloadAsync(Id, diagnostic)' in retry
     assert 'ShowDownloadDiagnostic(diagnostic, folder.Text)' in retry
     assert 'StarterAsync' not in retry and 'ExtractStarter' not in retry
@@ -173,7 +173,7 @@ def test_wpf_theme_uses_dynamic_resources_and_preserves_password_masking():
                 'TextBoxBackgroundDisabledBrushKey', 'TextBoxTextDisabledBrushKey',
                 'TextBoxBorderFocusedBrushKey', 'FocusVisualBorderBrushKey'):
         assert key in theme
-    assert 'ThemeResources.Apply(this, claim, new[] { assignments, history }, address, folder, output, gradingOutput, diagnosticText)' in ui
+    assert 'ThemeResources.Apply(this, claim, new[] { assignments, history, acceptedAssignments }, address, folder, output, gradingOutput, diagnosticText)' in ui
     assert 'ThemeResources.Button(cancel)' in ui and 'ThemeResources.Button(button)' in ui
     assert 'ThemeResources.Label(status)' in ui and 'ThemeResources.Label(label)' in ui
     assert 'new PasswordBox { MaxLength = 256 }' in ui and 'claim.Clear()' in ui
@@ -212,6 +212,50 @@ def test_result_cards_are_themed_and_cleared_at_session_boundary():
     assert 'AutomationProperties.SetName' in view
     assert 'model.Details' in view
     assert 'new Expander' in view
+
+
+def test_workspace_reconnect_guards_submission_and_preserves_existing_work():
+    """UI wiring guard, with filesystem behavior exercised by the C# checks."""
+    directory = ROOT / "extensions/visualstudio"
+    ui = (directory / "Autograde.VisualStudio/AssignmentControl.cs").read_text()
+    attach = ui.split("async Task AttachWorkspaceAsync(", 1)[1].split("async Task ReloadAcceptedAsync(", 1)[0]
+    assert "WorkspaceBinding.FromOpenDirectory(dialog.SelectedPath)" in attach
+    assert "RememberWorkspace(binding.Root)" in attach
+    assert "OpenDownloadedFolderAsync(binding.Root, ct)" in attach
+    assert "StarterAsync" not in attach and "ExtractStarter" not in attach
+    submit = ui.split('AddButton(footerActions, "파일 확인 후 제출"', 1)[1].split("panel = resultPanel;", 1)[0]
+    assert submit.count("WorkspaceBinding.VerifyActive(root, WorkspaceOpener.CurrentDirectory(), client.BaseUrl, id)") == 2
+    assert submit.index("WorkspaceBinding.VerifyActive") < submit.index("Bundle.CreateSubmission")
+    assert submit.index("SubmissionReviewDialog.Confirm") < submit.rindex("WorkspaceBinding.VerifyActive") < submit.index("client.SubmitAsync")
+    assert "if (!CanSubmitSelected())" in submit
+    assert ui.count("WorkspaceBinding.DownloadParent(dialog.SelectedPath)") == 2  # New starter and historical source.
+    assert "현재 제출 과제: " in ui and "제출 폴더: " in ui
+    assert "RestoreWorkspace();" in ui
+    clear = ui.split("void ClearScreen(", 1)[1].split("void ShowExpiredSession(", 1)[0]
+    assert "workspacePaths.Clear()" in clear and "acceptedAssignments.Items.Clear()" in clear
+    core = (directory / "Autograde.Core/Bundle.cs").read_text()
+    assert 'relative != "" && Directory.Exists(System.IO.Path.Combine(directory, ".autograde"))' in core
+    adapter = (directory / "Autograde.VisualStudio/WorkspaceOpener.cs").read_text()
+    assert adapter.index("WorkspaceBinding.SamePath(opened.Root, fullPath)") < adapter.index("solution.OpenFolder(fullPath)")
+
+
+def test_accepted_history_is_not_a_second_authorized_assignment_list():
+    directory = ROOT / "extensions/visualstudio"
+    ui = (directory / "Autograde.VisualStudio/AssignmentControl.cs").read_text()
+    assert 'Header = "수락 이력 · 다른 과제로 전환"' in ui
+    assert '새 과제 수락 · 다른 과제 재연결' in ui
+    assert 'loginPanel.Visibility = authenticated && !showClaim' in ui
+    assert 'acceptedAssignments.Items.Add(new AcceptedItem { Value = item })' in ui
+    transition = ui.split('AddButton(acceptedPanel, "선택 과제로 전환 안내"', 1)[1].split("var folderPanel =", 1)[0]
+    assert 'selected["can_reconnect"]' in transition
+    assert '새 수령 코드' in transition
+    assert "assignments.SelectedItem =" not in transition and "client =" not in transition
+    login = ui.split('AddButton(panel, "코드로 로그인"', 1)[1].split("var management =", 1)[0]
+    assert "if (next.ClaimRedeemed)" in login
+    assert login.index("client = next; ClearScreen();") < login.index("await ReloadAsync(id, ct)")
+    service = (directory / "Autograde.Core/ServiceClient.cs").read_text()
+    assert '"/v1/accepted-assignments/catalog"' in service
+    assert "catch (ServiceError ex) when (ex.Status == 404) { return null; }" in service
 
 
 @pytest.fixture(scope="module")

@@ -105,6 +105,8 @@ namespace Autograde.Core
             collect = (directory, relative) =>
             {
                 CheckDirectory(directory);
+                if (relative != "" && Directory.Exists(System.IO.Path.Combine(directory, ".autograde")))
+                    throw new InvalidDataException("제출 폴더 안에 다른 과제 폴더가 있습니다. 다른 과제를 상위 폴더로 옮긴 뒤 다시 제출하세요.");
                 // Sort only the bounded, selected entries later, not an unbounded directory listing.
                 foreach (var path in Directory.EnumerateFileSystemEntries(directory))
                 {
@@ -232,15 +234,9 @@ namespace Autograde.Core
 
         public static void VerifyWorkspace(string root, string service, string assignment)
         {
-            CheckDirectory(root);
-            var directory = System.IO.Path.Combine(root, ".autograde");
-            CheckDirectory(directory);
-            var path = System.IO.Path.Combine(directory, "assignment.json");
-            if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0 || new FileInfo(path).Length > 8192)
-                throw new InvalidDataException("과제 연결 파일 오류");
-            var marker = JObject.Parse(File.ReadAllText(path));
-            if ((int?)marker["schemaVersion"] != 1 || (string)marker["serviceBaseUrl"] != service || (string)marker["assignmentId"] != assignment)
-                throw new InvalidDataException("선택한 폴더의 서버 또는 과제가 다릅니다.");
+            var marker = WorkspaceBinding.Read(root);
+            if (marker.Service != ServiceClient.NormalizeAddress(service) || marker.AssignmentId != assignment)
+                throw new InvalidDataException("선택한 폴더의 서버 또는 과제가 다릅니다. 이 폴더의 과제를 선택하거나 해당 과제의 새 수령 코드로 로그인하세요.");
         }
 
         static JToken Canonical(JToken value)

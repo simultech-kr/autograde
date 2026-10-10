@@ -9,6 +9,7 @@ import {
 import { shouldDiscardTokensAfterRefreshError } from "./authPolicy";
 import { parseAssignmentDocument } from "./assignmentDocument";
 import { parseSubmissionHistory, verifySubmissionSource, type SubmissionVersion } from "./submissionHistory";
+import { parseAcceptedAssignments, type AcceptedAssignmentEntry } from "./acceptedAssignmentCatalog";
 import type {
   Assignment,
   AssignmentClaim,
@@ -428,12 +429,14 @@ export async function clearLegacyPersistedTokens(secrets: LegacySecretStore): Pr
 }
 
 export class TokenManager {
-  public getSessionGeneration(): number { return this.sessionGeneration; }
+  /** Identity boundary for UI work; routine token rotation preserves the session. */
+  public getSessionGeneration(): number { return this.identityGeneration; }
   private accessToken: string | undefined;
   private refreshToken: string | undefined;
   private accessExpiresAt = 0;
   private tokenAudience: string | undefined;
   private sessionGeneration = 0;
+  private identityGeneration = 0;
   private refreshOperation: { readonly generation: number; readonly promise: Promise<string> } | undefined;
 
   public constructor(private readonly transport: ApiTransport) {}
@@ -456,6 +459,7 @@ export class TokenManager {
     // The comparison and replacement are synchronous, so a configuration
     // event cannot interleave and bind credentials from one origin to another.
     this.replaceSession(tokens, expectedBaseUrl);
+    this.identityGeneration += 1;
   }
 
   public async getAccessToken(forceRefresh = false): Promise<string> {
@@ -515,6 +519,7 @@ export class TokenManager {
     } catch (error) {
       if (
         error instanceof ApiError &&
+        generation === this.sessionGeneration &&
         shouldDiscardTokensAfterRefreshError(error.status, error.code)
       ) {
         this.clearMemory();
@@ -543,6 +548,7 @@ export class TokenManager {
 
   private clearMemory(): void {
     this.sessionGeneration += 1;
+    this.identityGeneration += 1;
     this.accessToken = undefined;
     this.refreshToken = undefined;
     this.accessExpiresAt = 0;
@@ -674,6 +680,17 @@ export class AutogradeClient {
 
   public getBaseUrl(): string { return this.transport.getBaseUrl(); }
 
+  public async getAcceptedAssignmentCatalog(): Promise<AcceptedAssignmentEntry[]> {
+    try {
+      return parseAcceptedAssignments(await this.authorizedRequest<unknown>("/v1/accepted-assignments/catalog", { method: "GET" }));
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 404) {
+        throw new ApiError("서버가 수락 이력을 지원하지 않습니다. 서버 업데이트가 필요합니다. 현재 과제의 열기·다운로드·제출은 계속 사용할 수 있습니다.", 404, "server_upgrade_required");
+      }
+      throw error;
+    }
+  }
+
   public async getAssignmentDocument(assignmentId: string) {
     try {
       return parseAssignmentDocument(await this.authorizedRequest<unknown>(
@@ -730,6 +747,7 @@ export class AutogradeClient {
     idempotencyKey: string,
     pullRequestNumber?: number,
   ): Promise<SubmissionSummary> {
+    const checkSession = this.sessionGuard();
     const requestBody: Record<string, unknown> = {
       assignment_id: assignmentId,
       github_repository_id: githubRepositoryId,
@@ -739,6 +757,7 @@ export class AutogradeClient {
       requestBody.pull_request_number = pullRequestNumber;
     }
     for (let attempt = 0; attempt < SUBMISSION_MAX_ATTEMPTS; attempt += 1) {
+      checkSession();
       try {
         const payload = await this.authorizedRequest<unknown>("/v1/submissions", {
           method: "POST",
@@ -751,6 +770,7 @@ export class AutogradeClient {
         }
         return submission;
       } catch (error) {
+        checkSession();
         if (!isRetryableApiError(error) || attempt + 1 >= SUBMISSION_MAX_ATTEMPTS) {
           throw error;
         }
@@ -765,9 +785,11 @@ export class AutogradeClient {
     archive: Uint8Array,
     idempotencyKey: string,
   ): Promise<SubmissionSummary> {
+    const checkSession = this.sessionGuard();
     const endpoint = `/v1/assignments/${encodeURIComponent(assignmentId)}/submissions`;
     const body = ownedArrayBuffer(archive);
     for (let attempt = 0; attempt < SUBMISSION_MAX_ATTEMPTS; attempt += 1) {
+      checkSession();
       try {
         const payload = await this.authorizedRequest<unknown>(endpoint, {
           method: "POST",
@@ -784,6 +806,7 @@ export class AutogradeClient {
         }
         return submission;
       } catch (error) {
+        checkSession();
         if (!isRetryableApiError(error) || attempt + 1 >= SUBMISSION_MAX_ATTEMPTS) {
           throw error;
         }
@@ -820,8 +843,20 @@ export class AutogradeClient {
   }
 
   public async revokeCurrentSession(): Promise<void> {
+    const checkSession = this.sessionGuard();
     await this.authorizedRequest<unknown>("/v1/sessions/current", { method: "DELETE" });
+    checkSession();
     await this.tokens.clear();
+  }
+
+  private sessionGuard(): () => void {
+    const origin = this.transport.getBaseUrl();
+    const identity = this.tokens.getSessionGeneration?.();
+    return () => {
+      if (origin !== this.transport.getBaseUrl() || identity !== this.tokens.getSessionGeneration?.()) {
+        throw new ApiError("Autograde 로그인 또는 서버가 변경되었습니다. 현재 과제에서 작업을 다시 실행하세요.", 401, "login_required");
+      }
+    };
   }
 
   private async authorizedRequest<T>(
@@ -830,13 +865,18 @@ export class AutogradeClient {
     options?: RequestOptions,
   ): Promise<T> {
     const expectedBaseUrl = this.transport.getBaseUrl();
+    const checkSession = this.sessionGuard();
     let accessToken = await this.tokens.getAccessToken();
+    checkSession();
     try {
-      return await this.transport.request<T>(endpoint, init, accessToken, {
+      const response = await this.transport.request<T>(endpoint, init, accessToken, {
         ...options,
         expectedBaseUrl,
       });
+      checkSession();
+      return response;
     } catch (error) {
+      checkSession();
       if (!(error instanceof ApiError) || error.status !== 401) {
         throw error;
       }
@@ -844,10 +884,13 @@ export class AutogradeClient {
         throw new ApiError("Autograde 서비스 주소가 변경되었습니다. 다시 로그인하세요.", 401, "login_required");
       }
       accessToken = await this.tokens.getAccessToken(true);
-      return this.transport.request<T>(endpoint, init, accessToken, {
+      checkSession();
+      const response = await this.transport.request<T>(endpoint, init, accessToken, {
         ...options,
         expectedBaseUrl,
       });
+      checkSession();
+      return response;
     }
   }
 
@@ -857,13 +900,18 @@ export class AutogradeClient {
     options?: RequestOptions,
   ): Promise<Uint8Array> {
     const expectedBaseUrl = this.transport.getBaseUrl();
+    const checkSession = this.sessionGuard();
     let accessToken = await this.tokens.getAccessToken();
+    checkSession();
     try {
-      return await this.transport.requestBytes(endpoint, init, accessToken, {
+      const response = await this.transport.requestBytes(endpoint, init, accessToken, {
         ...options,
         expectedBaseUrl,
       });
+      checkSession();
+      return response;
     } catch (error) {
+      checkSession();
       if (!(error instanceof ApiError) || error.status !== 401) {
         throw error;
       }
@@ -871,10 +919,13 @@ export class AutogradeClient {
         throw new ApiError("Autograde 서비스 주소가 변경되었습니다. 다시 로그인하세요.", 401, "login_required");
       }
       accessToken = await this.tokens.getAccessToken(true);
-      return this.transport.requestBytes(endpoint, init, accessToken, {
+      checkSession();
+      const response = await this.transport.requestBytes(endpoint, init, accessToken, {
         ...options,
         expectedBaseUrl,
       });
+      checkSession();
+      return response;
     }
   }
 }

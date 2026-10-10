@@ -2,7 +2,7 @@
   "name": "autograde-vscode",
   "displayName": "Autograde",
   "description": "C/C++ 실습 과제 수령·다운로드·제출·채점 피드백을 VS Code에서. Linux, macOS, Windows WSL2 수업용 Autograde 확장.",
-  "version": "0.5.6",
+  "version": "0.5.7",
   "private": true,
   "publisher": "autograde",
   "repository": {
@@ -43,12 +43,36 @@
     "onCommand:autograde.redeemAssignmentClaim",
     "onCommand:autograde.refreshAssignments",
     "onCommand:autograde.cloneAssignment",
+    "onCommand:autograde.openAssignment",
+    "onCommand:autograde.openCourseWorkspace",
+    "onCommand:autograde.acceptedAssignmentHistory",
     "onCommand:autograde.submitCurrentCommit",
     "onCommand:autograde.viewLatestResult",
     "onCommand:autograde.viewAssignmentDocument"
   ],
   "contributes": {
     "commands": [
+      {
+        "command": "autograde.openCourseWorkspace",
+        "title": "Autograde: Open Course Workspace",
+        "shortTitle": "수업 폴더로 전환 (재연결 필요)",
+        "enablement": "autograde.authenticated && isWorkspaceTrusted",
+        "icon": "$(window)"
+      },
+      {
+        "command": "autograde.openAssignment",
+        "title": "Autograde: Open Existing Assignment",
+        "shortTitle": "기존 과제 이어서 열기",
+        "enablement": "autograde.authenticated && isWorkspaceTrusted",
+        "icon": "$(folder-opened)"
+      },
+      {
+        "command": "autograde.acceptedAssignmentHistory",
+        "title": "Autograde: Accepted Assignments and Switch",
+        "shortTitle": "수락 이력 / 과제 전환",
+        "enablement": "autograde.authenticated",
+        "icon": "$(list-selection)"
+      },
       {
         "command": "autograde.viewAssignmentDocument",
         "title": "Autograde: View Assignment Description",
@@ -170,16 +194,31 @@
       {
         "view": "autograde.assignments",
         "when": "!autograde.authenticated",
-        "contents": "학생 웹(20010번)에서 학번과 전용 비밀번호로 수령 코드를 받으세요. VS Code 서버 주소는 20000번입니다.\n[서버 주소 설정](command:autograde.configureServiceAddress)\n[서버 연결 확인](command:autograde.checkServerConnection)\n[수령 코드 입력 및 다운로드](command:autograde.redeemAssignmentClaim)"
+        "contents": "학생 웹(20010번)에서 새 수령 코드를 받아 연결하세요. VS Code 서버 주소는 20000번입니다. IDE 재시작 후에도 기존 과제 파일은 그대로 이어서 사용할 수 있습니다.\n[서버 주소 설정](command:autograde.configureServiceAddress)\n[서버 연결 확인](command:autograde.checkServerConnection)\n[수령 코드 입력 및 다운로드](command:autograde.redeemAssignmentClaim)"
       },
       {
         "view": "autograde.assignments",
         "when": "autograde.authenticated",
-        "contents": "현재 인증에서 표시할 수락 과제가 없습니다. 학생 웹에서 수령 코드를 발급받아 입력하세요. 다른 과제는 새 수령 코드로 전환합니다.\n[서버 주소 설정](command:autograde.configureServiceAddress)\n[서버 연결 확인](command:autograde.checkServerConnection)\n[수령 코드 입력 및 다운로드](command:autograde.redeemAssignmentClaim)\n[과제 새로고침](command:autograde.refreshAssignments)"
+        "contents": "현재 인증에서 표시할 수락 과제가 없습니다. 수락 이력에서 과제를 확인하고 해당 과제의 새 수령 코드로 연결하세요.\n[수락 이력 / 과제 전환](command:autograde.acceptedAssignmentHistory)\n[서버 주소 설정](command:autograde.configureServiceAddress)\n[서버 연결 확인](command:autograde.checkServerConnection)\n[수령 코드 입력 및 다운로드](command:autograde.redeemAssignmentClaim)\n[과제 새로고침](command:autograde.refreshAssignments)"
       }
     ],
     "menus": {
       "view/title": [
+        {
+          "command": "autograde.openCourseWorkspace",
+          "when": "view == autograde.assignments && autograde.authenticated && isWorkspaceTrusted",
+          "group": "2_settings@3"
+        },
+        {
+          "command": "autograde.openAssignment",
+          "when": "view == autograde.assignments && autograde.authenticated && isWorkspaceTrusted",
+          "group": "1_assignment@3"
+        },
+        {
+          "command": "autograde.acceptedAssignmentHistory",
+          "when": "view == autograde.assignments && autograde.authenticated",
+          "group": "1_assignment@4"
+        },
         {
           "command": "autograde.configureServiceAddress",
           "when": "view == autograde.assignments",
@@ -222,6 +261,11 @@
         }
       ],
       "view/item/context": [
+        {
+          "command": "autograde.openAssignment",
+          "when": "view == autograde.assignments && autograde.authenticated && (viewItem == autograde.assignment || viewItem == autograde.assignmentWithSubmission) && isWorkspaceTrusted",
+          "group": "1_assignment@1"
+        },
         {
           "command": "autograde.viewAssignmentDocument",
           "when": "view == autograde.assignments && autograde.authenticated && (viewItem == autograde.assignment || viewItem == autograde.assignmentWithSubmission)",

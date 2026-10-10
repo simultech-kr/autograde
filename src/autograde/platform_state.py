@@ -2987,6 +2987,98 @@ class PlatformStateStore:
             return None
         return str(row["delivery_mode"]), str(row["assignment_id"])
 
+    def list_accepted_assignment_catalog(
+        self, *, access_token_hash: str, course_key: str,
+        at: Optional[DatetimeValue] = None,
+    ) -> List[Mapping[str, Any]]:
+        """Read accepted-release metadata, never grant cross-assignment access."""
+        now = utc_iso(at)
+        session, student = self.authorize_access_token(
+            access_token_hash=access_token_hash, course_key=course_key, at=now, touch=False,
+        )
+        with self._connection() as connection:
+            # One read snapshot keeps the session, acceptance and release state
+            # consistent without modifying sessions or the immutable audit log.
+            connection.execute("BEGIN")
+            if self._active_bundle_session_row(connection, session_id=session.session_id,
+                    student_id=student.id, access_token_hash=access_token_hash,
+                    course_key=course_key, now=now) is None:
+                raise PlatformAccessDenied("session is no longer active")
+            scope = connection.execute(
+                "SELECT delivery_mode, assignment_id FROM platform_assignment_acceptances "
+                "WHERE device_authorization_id = ?", (session.device_authorization_id,),
+            ).fetchone()
+            if scope is None:
+                raise PlatformAccessDenied("an accepted-assignment session is required")
+            # API-only deployments have this table after normal migration; a
+            # historical-schema maintenance reader may not have it yet.
+            has_deletions = connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' "
+                "AND name='instructor_assignment_deletions'",
+            ).fetchone() is not None
+            deletion_join = (
+                "LEFT JOIN instructor_assignment_deletions AS d "
+                "ON a.delivery_mode = 'bundle' AND d.assignment_id = a.assignment_id"
+                if has_deletions else ""
+            )
+            deletion_select = "d.assignment_id IS NOT NULL" if has_deletions else "0"
+            rows = connection.execute(
+                f"""
+                SELECT a.delivery_mode, a.assignment_id, e.id AS enrollment_id,
+                       MAX(a.accepted_at) AS accepted_at,
+                       COALESCE(b.assignment_key, g.assignment_key) AS assignment_key,
+                       COALESCE(b.release_id, g.release_id) AS release_id,
+                       COALESCE(b.title, g.assignment_key) AS title,
+                       COALESCE(b.active, g.active, 0) AS active,
+                       COALESCE(b.ready, g.ready, 0) AS ready,
+                       COALESCE(b.opens_at, g.opens_at) AS opens_at,
+                       COALESCE(b.due_at, g.due_at) AS due_at,
+                       {deletion_select} AS deleted
+                FROM platform_assignment_acceptances AS a
+                JOIN platform_enrollments AS e ON e.id = a.enrollment_id
+                LEFT JOIN bundle_assignment_releases AS b
+                  ON a.delivery_mode = 'bundle' AND b.assignment_id = a.assignment_id
+                 AND b.course_key = e.course_key
+                LEFT JOIN platform_assignments AS g
+                  ON a.delivery_mode = 'git' AND g.assignment_id = a.assignment_id
+                 AND g.enrollment_id = e.id AND g.student_id = e.student_id
+                 AND g.course_key = e.course_key
+                {deletion_join}
+                WHERE e.student_id = ? AND e.course_key = ? AND e.active = 1
+                GROUP BY a.delivery_mode, a.assignment_id, e.id
+                ORDER BY accepted_at DESC, a.delivery_mode, a.assignment_id
+                """, (student.id, course_key),
+            ).fetchall()
+            catalog = []
+            for row in rows:
+                status = "unavailable"
+                if (row["active"] and row["ready"] and not row["deleted"]
+                        and (row["opens_at"] is None or row["opens_at"] <= now)):
+                    status = "closed" if row["due_at"] is not None and row["due_at"] <= now else "available"
+                    if status == "available":
+                        try:
+                            mode = self._available_assignment_delivery_mode(connection,
+                                enrollment_id=row["enrollment_id"], student_id=student.id,
+                                course_key=course_key, assignment_id=row["assignment_id"], now=now)
+                        except PlatformAccessDenied:
+                            mode = None
+                        if mode != row["delivery_mode"]:
+                            status = "unavailable"
+                authorized = (scope["delivery_mode"], scope["assignment_id"]) == (
+                    row["delivery_mode"], row["assignment_id"])
+                catalog.append({
+                    "assignment_id": row["assignment_id"],
+                    "assignment_key": row["assignment_key"] or row["assignment_id"],
+                    "release_id": row["release_id"] or "",
+                    "title": row["title"] or row["assignment_id"],
+                    "delivery_mode": row["delivery_mode"], "course_key": course_key,
+                    "accepted_at": row["accepted_at"],
+                    "current_session_authorized": authorized,
+                    "can_reconnect": status == "available",
+                    "can_submit": authorized and status == "available", "status": status,
+                })
+        return catalog
+
     def list_course_summaries(self, *, limit: int = 1_000) -> List[Mapping[str, Any]]:
         """Return credential-free operational counts for every known course."""
 

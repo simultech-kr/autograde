@@ -250,7 +250,8 @@ test("bundle download wiring cannot replace the current VS Code workspace", asyn
   const openStart = extensionSource.indexOf("async function revealDownloadedBundle(");
   const openEnd = extensionSource.indexOf("async function pathExists(", openStart);
   assert.ok(openStart >= 0 && openEnd > openStart);
-  const openFunction = extensionSource.slice(openStart, openEnd);
+  assert.match(extensionSource.slice(openStart, openEnd), /revealAssignmentFolder\(targetUri, targetPath\)/);
+  const openFunction = await readFile(path.resolve(__dirname, "../../src/assignmentFolderView.ts"), "utf8");
   assert.match(openFunction, /executeCommand\("workbench.view.explorer"\)/);
   assert.match(openFunction, /executeCommand\("revealInExplorer", previewUri\)/);
   assert.match(openFunction, /vscode.Uri.joinPath\(targetUri, path.basename\(preview\)\)/);

@@ -1,5 +1,9 @@
 # Documentation
 
+- [Next.js 단계별 전환 계획](architecture/nextjs-migration-plan.md): Python 인증·채점·SQLite와 IDE API 유지, 교수자 결과 화면 우선, JSON 계약·SES UI 모듈·시험·롤백 기준. 설계 단계.
+
+- [과제 이어하기·전환·재제출](operations/assignment-workspace-lifecycle.md): 수락 이력·현재 인증·로컬 작업 폴더 구분, IDE 재시작과 기존 코드 보존, 과제 전환·마감·공용 PC 시나리오.
+
 - [강의자 과제 보관·삭제·복원](operations/assignment-archive-delete.md): 보관 후 삭제, 별도 삭제 목록, 학생 이력 보존과 보관 상태 복원.
 
 - [학생용 상세 채점 결과·수정 가이드](operations/student-grading-feedback.md): 실패 단계·미검사 구분, 교수자 테스트별 안내, VS Code/Visual Studio 표시와 기존 공개본 적용 범위.
