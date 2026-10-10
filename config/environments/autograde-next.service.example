@@ -1,0 +1,26 @@
+[Unit]
+Description=Autograde Next.js read-only instructor pilot
+After=network.target
+
+[Service]
+Type=simple
+# Dedicated unprivileged account; grant no access to Python data_root/secrets.
+User=autograde-web
+Group=autograde-web
+WorkingDirectory=/opt/autograde/web
+# Build beforehand with npm ci && npm run build. Adjust the Node path locally.
+ExecStart=/usr/bin/node /opt/autograde/web/node_modules/next/dist/bin/next start --hostname 127.0.0.1 --port 18082
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+UMask=0077
+# Pilot examples, tune from measured usage; the grading service remains separate.
+MemoryMax=768M
+TasksMax=128
+
+[Install]
+WantedBy=multi-user.target

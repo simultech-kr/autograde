@@ -485,6 +485,8 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
                 getattr(facade, "instructor", None) is not None
                 and (path == "/instructor" or path.startswith("/instructor/"))
             ):
+                if path == '/instructor/api/v1' or path.startswith('/instructor/api/v1/'):
+                    return "portal", {"path": path}, frozenset({"GET"})
                 return "portal", {"path": path}, frozenset({"GET", "POST"})
             return None, {}, frozenset()
         if (
@@ -719,7 +721,10 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
             raise PlatformHTTPError(400, "invalid_request", "Unexpected query parameter")
         if route == "portal":
             path = parameters['path']
-            query_fields = (participation_fields if participation_page else
+            next_api = path == '/instructor/api/v1' or path.startswith('/instructor/api/v1/')
+            query_fields = ({'screen', 'course_key', 'assignment_id', 'student', 'status',
+                             'sort', 'page', 'page_size', 'version'} if next_api else
+                            participation_fields if participation_page else
                             {'course_key'} if path == '/instructor/switch' else
                             {'q', 'visibility', 'page'} if re.fullmatch(r'/courses/[a-z0-9_-]{1,96}/instructor/assignments', path) else set())
             if query and (self.command != 'GET' or

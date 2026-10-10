@@ -31,7 +31,8 @@ _REQUIRED_KEYS = frozenset(
 )
 _OPTIONAL_KEYS = frozenset(
     {"grading_runtime", "bundle_worker_count", "external_access_mode", "web_public_base_url", "web_port",
-     "instructor_assignment_web_enabled", "instructor_rubric_web_enabled", "instructor_auth_mode", "roster_bootstrap_mode"}
+     "instructor_assignment_web_enabled", "instructor_rubric_web_enabled", "instructor_auth_mode", "roster_bootstrap_mode",
+     "instructor_next_results_enabled", "instructor_next_course_keys"}
 )
 _ALLOWED_KEYS = _REQUIRED_KEYS | _OPTIONAL_KEYS
 _SECRET_KEY_PARTS = frozenset(
@@ -113,6 +114,19 @@ def load_pilot_config(path: str | Path) -> PilotConfig:
     if enabled not in {"true", "false"}:
         raise PilotConfigError("instructor_assignment_web_enabled must be true or false")
     values["instructor_assignment_web_enabled"] = enabled == "true"
+    next_enabled = raw_values.get("instructor_next_results_enabled", "false")
+    if next_enabled not in {"true", "false"}:
+        raise PilotConfigError("instructor_next_results_enabled must be true or false")
+    next_courses = raw_values.get("instructor_next_course_keys", "").split(";")
+    next_courses = tuple(next_courses) if next_courses != [""] else ()
+    if (len(next_courses) > 100 or len(set(next_courses)) != len(next_courses)
+            or any(not re.fullmatch(r"[a-z0-9_-]{1,96}", key) for key in next_courses)):
+        raise PilotConfigError("instructor_next_course_keys must be unique course keys separated by semicolons")
+    if next_enabled == "true" and (not values["instructor_assignment_web_enabled"]
+            or not {"web_port", "web_public_base_url"} <= raw_values.keys() or not next_courses):
+        raise PilotConfigError("Next results requires instructor web, web origin/port and explicit course keys")
+    values["instructor_next_results_enabled"] = next_enabled == "true"
+    values["instructor_next_course_keys"] = next_courses
     instructor_mode = raw_values.get('instructor_auth_mode', 'shared')
     if instructor_mode not in {'shared', 'personal'}:
         raise PilotConfigError('instructor_auth_mode must be shared or personal')
@@ -145,6 +159,32 @@ def load_pilot_config(path: str | Path) -> PilotConfig:
             raise PilotConfigError("web and API must use the same transport scheme")
     _validate_local_http_binding(values)
     return PilotConfig(source=source, values=MappingProxyType(values))
+
+
+class NextResultsPolicy:
+    """Hot-read only the reviewed Next opt-in; invalid/missing CSV fails closed.
+
+    This does not hot-reconfigure listeners, identities, workers or data paths.
+    Read each time (no stale mtime cache) so existing browser tabs lose access on
+    the next API request when the operator disables the feature.
+    """
+
+    def __init__(self, config: PilotConfig):
+        self.source = config.source
+        self._identity = {key: config.values.get(key) for key in (
+            "data_root", "web_public_base_url", "web_port", "public_base_url",
+            "port", "listen", "instructor_auth_mode", "instructor_assignment_web_enabled",
+        )}
+
+    def __call__(self) -> frozenset[str]:
+        try:
+            values = load_pilot_config(self.source).values
+        except (ValueError, OSError):
+            return frozenset()
+        if (not values["instructor_next_results_enabled"]
+                or any(values.get(key) != value for key, value in self._identity.items())):
+            return frozenset()
+        return frozenset(values["instructor_next_course_keys"])
 
 
 def apply_pilot_config(

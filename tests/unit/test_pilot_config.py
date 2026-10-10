@@ -56,6 +56,8 @@ def test_loads_typed_config_and_anchors_relative_data_root_at_csv_parent(
         "bundle_worker_count": 7,
         "external_access_mode": "disabled",
         "instructor_assignment_web_enabled": False,
+        "instructor_next_results_enabled": False,
+        "instructor_next_course_keys": (),
         "instructor_auth_mode": "shared",
         "instructor_rubric_web_enabled": False,
         "roster_bootstrap_mode": "csv",

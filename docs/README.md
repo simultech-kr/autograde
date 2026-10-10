@@ -1,6 +1,8 @@
 # Documentation
 
-- [Next.js 단계별 전환 계획](architecture/nextjs-migration-plan.md): Python 인증·채점·SQLite와 IDE API 유지, 교수자 결과 화면 우선, JSON 계약·SES UI 모듈·시험·롤백 기준. 설계 단계.
+- [Next.js 단계별 전환 계획](architecture/nextjs-migration-plan.md): Python 인증·채점·SQLite와 IDE API 유지, 교수자 결과 화면 우선, JSON 계약·SES UI 모듈·시험·롤백 기준.
+- [Next.js 조회 파일럿 실행](operations/nextjs-pilot.md): 0~2단계 웹 빌드·CSV 수업 제한·20010 프록시·열린 화면 차단·기존 UI 복귀.
+- [Next.js 조회 파일럿 검증](testing/nextjs-pilot.md): 합성 데이터와 로컬 HTTP·브라우저 시험, 운영 HTTPS 인수 구분.
 
 - [과제 이어하기·전환·재제출](operations/assignment-workspace-lifecycle.md): 수락 이력·현재 인증·로컬 작업 폴더 구분, IDE 재시작과 기존 코드 보존, 과제 전환·마감·공용 PC 시나리오.
 

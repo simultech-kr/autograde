@@ -134,7 +134,8 @@ class InstructorWeb:
     """Small MVC adapter. Authentication always precedes service reads/writes."""
 
     def __init__(self, course_admin, enrollment_admin, assignment_admin, *, authorize,
-                 secret, web_url, submissions=None, submission_review=None, submission_updates=None, rubrics=None, identities=None):
+                 secret, web_url, submissions=None, submission_review=None, submission_updates=None, rubrics=None, identities=None,
+                 next_ui_policy=None):
         self.courses = course_admin
         self.students = enrollment_admin
         self.assignments = assignment_admin
@@ -147,6 +148,7 @@ class InstructorWeb:
         self.rubrics = rubrics
         self.identities = identities
         self.principal = None
+        self.next_ui_policy = next_ui_policy if next_ui_policy is not None else lambda: frozenset()
         self.catalog = InstructorAssignmentCatalog(assignment_admin.state) if assignment_admin else None
 
     @staticmethod
@@ -203,6 +205,9 @@ class InstructorWeb:
     def request(self, method, path, form, cookies, origin=None, authorization=None):
         if not self.matches(path):
             return None
+        from . import instructor_web_api
+        if instructor_web_api.matches(path):
+            return instructor_web_api.request(self, method, path, form, cookies, authorization)
         return self._scoped(authorization)._authenticated_request(method, path, form, cookies, origin, authorization)
 
     def _authenticated_request(self, method, path, form, cookies, origin, authorization):

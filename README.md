@@ -16,6 +16,11 @@ VS Code 0.4.0 / Visual Studio 0.2.0 소스에는 [제출 기록·이전 코드 �
 
 ## 현재 권장 실행 흐름
 
+관리자 조회 화면은 선택적으로 **Next.js `/app`**에서 이용할 수 있습니다. 교과목·분반 선택,
+제출 현황과 이번 점수·이전 최고점 조회를 제공하며 과제·학생 변경은 기존 관리 화면을 유지합니다.
+기본 비활성화 상태이고 `git pull` 외에 별도 웹 빌드와 서버 설정이 필요합니다.
+[관리자 파일럿 Git 업데이트·활성화·복귀 안내](docs/operations/nextjs-pilot.md)를 따릅니다.
+
 학생 웹·교수자 관리 화면을 구분하고, VS Code **0.4.1**부터 `내가 수락한 실습`에는 현재 수령
 코드로 수락한 과제만 표시합니다. [화면별 범위와 업데이트 안내](docs/operations/student-instructor-views.md).
 
@@ -96,7 +101,8 @@ VS Code에는 서비스 주소만 유지하고 access/refresh token은 Extension
 
 ## 설치
 
-Python 3.10 이상이 필요합니다. Extension을 직접 빌드할 때만 Node.js 22 이상이 필요합니다.
+Python 3.10 이상이 필요합니다. Extension을 직접 빌드할 때는 Node.js 22 이상,
+선택적 Next.js 관리자 웹을 빌드·실행할 때는 Node.js 24 LTS가 필요합니다.
 파일럿 실행에 Docker/Podman은 설치하지 않아도 됩니다.
 
 ```bash

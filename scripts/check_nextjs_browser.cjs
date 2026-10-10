@@ -1,0 +1,294 @@
+// Production Next.js + the check_nextjs_pilot.py --serve synthetic Python fixture.
+// node scripts/check_nextjs_browser.cjs NEXT_ORIGIN PYTHON_ORIGIN OUTPUT_DIR [PLAYWRIGHT_MODULE] [CHROME_BINARY]
+// This local GET-only proxy models same-origin routing, not an HTTPS/Nginx deployment.
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const http = require('node:http');
+const [nextInput, pythonInput, output, modulePath = 'playwright', executablePath] = process.argv.slice(2);
+function localOrigin(input) {
+  const url = new URL(input);
+  assert.equal(url.protocol, 'http:');
+  assert.equal(url.hostname, '127.0.0.1', 'QA must only target explicit loopback listeners');
+  assert.equal(url.pathname, '/');
+  assert.ok(!url.username && !url.password && !url.search && !url.hash);
+  return url;
+}
+const nextOrigin = localOrigin(nextInput), pythonOrigin = localOrigin(pythonInput);
+assert.ok(output, 'OUTPUT_DIR is required');
+fs.mkdirSync(output, {recursive: true});
+const {chromium} = require(modulePath);
+const credentials = {username: 'reviewer', password: 'synthetic-next-pilot-password'};
+const resultPath = '/instructor/api/v1/courses/come2201/results';
+const checks = [], errors = [], cspErrors = [];
+const check = name => checks.push(name);
+
+async function main() {
+  const proxy = http.createServer((request, response) => {
+    if (!['GET', 'HEAD'].includes(request.method)) { response.writeHead(405); response.end(); return; }
+    const upstream = request.url === '/app' || request.url.startsWith('/app/') || request.url.startsWith('/app?') ? nextOrigin : pythonOrigin;
+    const forwarded = http.request({hostname: '127.0.0.1', port: upstream.port,
+      method: request.method, path: request.url,
+      headers: {...request.headers, host: upstream.host}}, incoming => {
+      response.writeHead(incoming.statusCode, incoming.headers); incoming.pipe(response);
+    });
+    forwarded.on('error', error => { if (!response.headersSent) response.writeHead(502); response.end(String(error)); });
+    request.pipe(forwarded);
+  });
+  await new Promise(resolve => proxy.listen(0, '127.0.0.1', resolve));
+  const origin = `http://127.0.0.1:${proxy.address().port}`;
+  const browser = await chromium.launch({headless: true, ...(executablePath ? {executablePath} : {})});
+  try {
+    const publicShell = await fetch(origin + '/app');
+    assert.equal(publicShell.status, 200);
+    const html = await publicShell.text();
+    assert.ok(!html.includes('20260001') && !html.includes(credentials.password));
+    const csp = publicShell.headers.get('content-security-policy');
+    assert.match(csp, /script-src[^;]*'nonce-/);
+    assert.ok(!csp.includes('unsafe-eval') && !csp.includes('unsafe-inline'));
+    assert.match(publicShell.headers.get('cache-control'), /no-store/);
+    check('Production shell has no student/password data, uses a nonce CSP and no-store');
+
+    const anonymous = await browser.newContext();
+    const anonymousPage = await anonymous.newPage();
+    const anonymousErrors = [];
+    anonymousPage.on('pageerror', error => anonymousErrors.push(String(error)));
+    anonymousPage.on('console', message => { if (message.type() === 'error') anonymousErrors.push(message.text()); });
+    await anonymousPage.goto(origin + '/app');
+    try {
+      await anonymousPage.getByTestId('auth-entry').waitFor({state: 'visible'});
+    } catch (error) {
+      console.error('Anonymous rendered page:', await anonymousPage.locator('body').innerText());
+      console.error('Anonymous console:', anonymousErrors);
+      await anonymousPage.screenshot({path: path.join(output, 'anonymous-failure.png'), fullPage: true});
+      throw error;
+    }
+    assert.equal(await anonymousPage.getByTestId('result-row').count(), 0);
+    await anonymous.close();
+    check('Fresh unauthenticated context shows explicit authentication entry and no results');
+
+    const context = await browser.newContext({httpCredentials: credentials, viewport: {width: 1440, height: 1050}, reducedMotion: 'reduce'});
+    await context.route('**/*', async route => {
+      if (new URL(route.request().url()).origin !== origin || !['GET', 'HEAD'].includes(route.request().method())) {
+        await route.abort('blockedbyclient');
+        throw new Error('QA attempted a nonlocal or mutating browser request');
+      }
+      await route.continue();
+    });
+    const page = await context.newPage();
+    const responses = [], requests = [];
+    page.on('pageerror', error => errors.push(String(error)));
+    page.on('console', message => { if (/Content Security Policy|Refused to/.test(message.text())) cspErrors.push(message.text()); });
+    page.on('response', response => {
+      if (response.url().includes('/instructor/api/v1/')) responses.push({url: response.url(), status: response.status()});
+    });
+    page.on('request', request => { if (request.url().includes('/instructor/api/v1/')) requests.push(request.url()); });
+    await page.goto(origin + '/instructor/api/v1/entry?screen=results&course_key=come2201');
+    await page.getByTestId('result-row').first().waitFor();
+    assert.equal(await page.getByTestId('result-row').count(), 20);
+    assert.ok(responses.some(r => r.url.includes('/entry?') && r.status === 303));
+    assert.ok(responses.some(r => r.url.endsWith('/bootstrap') && r.status === 200));
+    assert.ok(responses.some(r => r.url.includes(resultPath) && r.status === 200));
+    assert.equal(new URL(page.url()).pathname, '/app');
+    check('Fresh credential context follows real Python Basic entry 303 → bootstrap → paginated results');
+
+    for (const row of await page.getByTestId('result-row').all()) {
+      assert.match(await row.getByTestId('current-score').innerText(), /^0\s*\/\s*100/);
+      assert.match(await row.getByTestId('previous-best').innerText(), /100\s*\/\s*100/);
+    }
+    check('Current zero remains distinct from previous best 100 in all 20 visible rows');
+    const firstKeys = await page.getByTestId('result-row').evaluateAll(rows => rows.map(row => row.dataset.rowKey || row.textContent));
+    const secondResponse = page.waitForResponse(r => r.url().includes(resultPath) && new URL(r.url()).searchParams.get('page') === '2');
+    await page.getByTestId('next-page').click();
+    await secondResponse;
+    await page.waitForFunction(first => [...document.querySelectorAll('[data-testid="result-row"]')].every(row => !first.includes(row.dataset.rowKey || row.textContent)), firstKeys);
+    assert.equal(await page.getByTestId('result-row').count(), 20);
+    check('Real server pagination replaces 20 rows without duplicates from the previous page');
+
+    await page.getByTestId('student-search').fill('20260001');
+    const filtered = page.waitForResponse(r => r.url().includes(resultPath) && new URL(r.url()).searchParams.get('student') === '20260001');
+    await page.getByTestId('apply-filters').click();
+    await filtered;
+    await page.waitForFunction(() => [...document.querySelectorAll('[data-testid="result-row"]')].every(row => row.textContent.includes('20260001')));
+    assert.equal(await page.getByTestId('result-row').count(), 20);
+    await page.getByTestId('status-select').selectOption('unsubmitted');
+    const empty = page.waitForResponse(r => r.url().includes(resultPath) && new URL(r.url()).searchParams.get('status') === 'unsubmitted');
+    await page.getByTestId('apply-filters').click();
+    await empty;
+    await page.waitForFunction(() => document.querySelectorAll('[data-testid="result-row"]').length === 0);
+    check('Real student and status filters yield the expected 20 rows and empty state');
+
+    await page.getByTestId('student-search').fill('');
+    await page.getByTestId('status-select').selectOption('all');
+    await page.getByTestId('apply-filters').click();
+    await page.getByTestId('result-row').first().waitFor();
+    const scoped = await context.request.get(origin + '/instructor/api/v1/courses/come3105/results');
+    assert.equal(scoped.status(), 200);
+    assert.equal((await scoped.json()).rows.length, 0);
+    await page.getByTestId('course-select').selectOption('come3105');
+    await page.waitForFunction(() => document.querySelectorAll('[data-testid="result-row"]').length === 0);
+    assert.equal(await page.getByTestId('student-search').inputValue(), '');
+    await page.getByTestId('course-select').selectOption('come2201');
+    await page.getByTestId('result-row').first().waitFor();
+    check('Real course switch clears the old roster and resets filter inputs');
+
+    await page.getByTestId('result-row').first().getByRole('link').focus();
+    const stable = await page.evaluate(() => {
+      window.__readingRow = document.querySelector('[data-testid="result-row"]');
+      window.__readingFocus = document.activeElement;
+      return window.scrollY;
+    });
+    const unchanged = page.waitForResponse(r => r.url().includes(resultPath) && new URL(r.url()).searchParams.has('version'));
+    await unchanged;
+    await page.waitForTimeout(100);
+    assert.equal(await page.evaluate(() => window.__readingRow === document.querySelector('[data-testid="result-row"]')), true);
+    assert.equal(await page.evaluate(() => document.activeElement === window.__readingFocus), true);
+    assert.equal(await page.evaluate(() => window.scrollY), stable);
+    check('Unchanged real polling preserves row identity, keyboard focus and scroll');
+
+    await context.setOffline(true);
+    const beforeOffline = requests.filter(url => url.includes('/results')).length;
+    await page.waitForTimeout(6200);
+    assert.equal(requests.filter(url => url.includes('/results')).length, beforeOffline);
+    const resumed = page.waitForResponse(r => r.url().includes(resultPath));
+    await context.setOffline(false);
+    await resumed;
+    check('Offline state suspends results requests and online event resumes them');
+
+    // A delayed real fixture reply tests whether a changed course can receive old data.
+    let releaseDelayed, startedDelayed;
+    const delayedGate = new Promise(resolve => { releaseDelayed = resolve; });
+    const delayedStarted = new Promise(resolve => { startedDelayed = resolve; });
+    const delayedPattern = '**/instructor/api/v1/courses/come2201/results*';
+    await page.route(delayedPattern, async route => {
+      if (new URL(route.request().url()).searchParams.get('student') !== '20260002') return route.continue();
+      const realReply = await route.fetch();
+      startedDelayed();
+      await delayedGate;
+      await route.fulfill({response: realReply});
+    });
+    await page.getByTestId('student-search').fill('20260002');
+    await page.getByTestId('apply-filters').click();
+    await delayedStarted;
+    const otherResponse = page.waitForResponse(r => r.url().includes('/courses/come3105/results'));
+    await page.getByTestId('course-select').selectOption('come3105');
+    const otherResults = await otherResponse;
+    assert.equal(otherResults.status(), 200);
+    releaseDelayed();
+    await page.waitForTimeout(200);
+    assert.equal(await page.getByTestId('course-select').inputValue(), 'come3105');
+    assert.equal(await page.getByTestId('result-row').count(), 0);
+    await page.unroute(delayedPattern);
+    await page.getByTestId('course-select').selectOption('come2201');
+    await page.getByTestId('result-row').first().waitFor();
+    check('A delayed previous-course response cannot restore the previous roster');
+
+    await page.evaluate(() => { window.__toggleRow = document.querySelector('[data-testid="result-row"]'); });
+    await page.getByTestId('poll-toggle').uncheck();
+    assert.equal(await page.evaluate(() => window.__toggleRow === document.querySelector('[data-testid="result-row"]')), true);
+    await page.getByTestId('poll-toggle').check();
+    assert.equal(await page.getByTestId('result-row').count(), 20);
+    check('Changing automatic polling does not discard the displayed rows');
+
+    // A version conflict must preserve the list being read until explicit refresh.
+    const conflictPattern = '**/instructor/api/v1/courses/*/results*';
+    await page.route(conflictPattern, async route => {
+      await route.fulfill({status: 409, contentType: 'application/json', body: JSON.stringify({
+        contract_version: '1', request_id: 'synthetic-conflict', server_time: new Date().toISOString(),
+        error: {code: 'result_set_changed', message: 'Synthetic changed result set'}})});
+    });
+    await page.getByTestId('update-notice').waitFor();
+    assert.equal(await page.getByTestId('result-row').count(), 20);
+    assert.equal(await page.getByTestId('next-page').isDisabled(), true);
+    await page.getByTestId('poll-toggle').uncheck();
+    assert.equal(await page.getByTestId('result-row').count(), 20);
+    assert.equal(await page.getByTestId('update-notice').isVisible(), true);
+    await page.unroute(conflictPattern);
+    await page.getByRole('button', {name: '최신 결과 반영', exact: true}).click();
+    await page.getByTestId('result-row').first().waitFor();
+    await page.getByTestId('poll-toggle').check();
+    check('Intercepted 409 preserves the list and notice through polling changes until explicit refresh');
+
+    const noStorage = await page.evaluate(() => ({local: Object.keys(localStorage), session: Object.keys(sessionStorage)}));
+    assert.deepEqual(noStorage, {local: [], session: []});
+    for (const mode of ['light', 'dark']) {
+      await page.emulateMedia({colorScheme: mode});
+      for (const width of [320, 375, 768, 1024, 1440]) {
+        await page.setViewportSize({width, height: width > 1000 ? 1050 : 900});
+        const overflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
+        assert.equal(overflow, false, `document overflows at ${width}px in ${mode}`);
+        assert.equal(await page.getByTestId('result-row').count(), 20);
+        await page.screenshot({path: path.join(output, `next-results-${mode}-${width}.png`), fullPage: true});
+        if ((mode === 'light' && width === 1440) || (mode === 'dark' && width === 375)) {
+          await page.evaluate(() => window.scrollTo(0, 0));
+          await page.screenshot({path: path.join(output, `next-results-${mode}-${width}-viewport.png`), fullPage: false});
+          if (mode === 'dark' && width === 375) {
+            await page.getByTestId('result-row').first().scrollIntoViewIfNeeded();
+            await page.screenshot({path: path.join(output, 'next-results-dark-375-results-viewport.png'), fullPage: false});
+          }
+        }
+      }
+    }
+    check('320/375/768/1024/1440px light and dark captures have no page-level horizontal overflow');
+    await page.emulateMedia({forcedColors: 'active'});
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await page.screenshot({path: path.join(output, 'next-results-forced-colors-1440-viewport.png'), fullPage: false});
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false);
+    check('Forced-colors desktop view retains content without horizontal overflow');
+    await page.emulateMedia({forcedColors: 'none'});
+    await page.setViewportSize({width: 1440, height: 1050});
+    assert.equal(cspErrors.length, 0, 'production scripts/styles must load without CSP violations');
+    // strict-dynamic trusts script creation by an already trusted script. Inject
+    // into the raw HTML instead, so this probe is parser-inserted without a nonce.
+    const cspProbe = await context.newPage();
+    const blockedScripts = [];
+    cspProbe.on('console', message => { if (/Content Security Policy/i.test(message.text())) blockedScripts.push(message.text()); });
+    await cspProbe.route('**/app?csp_probe=1', async route => {
+      const actual = await route.fetch();
+      assert.match(actual.headers()['content-security-policy'], /script-src[^;]*'nonce-/);
+      const injected = (await actual.text()).replace('<head>', '<head><script>window.__untrustedParserScript = true</script>');
+      assert.ok(injected.includes('<script>window.__untrustedParserScript = true</script>'));
+      await route.fulfill({response: actual, body: injected});
+    });
+    await cspProbe.goto(origin + '/app?csp_probe=1');
+    assert.equal(await cspProbe.evaluate(() => window.__untrustedParserScript), undefined);
+    assert.ok(blockedScripts.length > 0, 'the parser-inserted script must generate an actual CSP refusal');
+    await cspProbe.close();
+    check('Actual production CSP blocks a nonce-free parser-inserted script in intercepted HTML');
+
+    // These responses are deliberately intercepted; live ACL/challenge checks above are not mocked.
+    for (const status of [401, 403]) {
+      let errorCalls = 0;
+      const routePattern = '**/instructor/api/v1/courses/*/results*';
+      await page.route(routePattern, async route => {
+        errorCalls++;
+        await route.fulfill({status, contentType: 'application/json', body: JSON.stringify({
+          contract_version: '1', request_id: `synthetic-${status}`, server_time: new Date().toISOString(),
+          error: {code: status === 401 ? 'instructor_auth_required' : 'access_denied', message: `Synthetic ${status} boundary`}})});
+      });
+      await page.getByTestId('refresh-results').click();
+      await page.getByTestId('api-error').waitFor({state: 'visible'});
+      assert.equal(await page.getByTestId('result-row').count(), 0);
+      const afterError = errorCalls;
+      await page.waitForTimeout(6200);
+      assert.equal(errorCalls, afterError, `${status} must halt automatic polling`);
+      await page.unroute(routePattern);
+      await page.goto(origin + '/instructor/api/v1/entry?screen=results&course_key=come2201');
+      await page.getByTestId('result-row').first().waitFor();
+    }
+    check('Intercepted 401 and 403 both clear stale data and halt automatic polling');
+    assert.deepEqual(errors, []);
+    await context.close();
+    const report = {checks, screenshots: path.resolve(output), node: process.version, browser: browser.version(),
+      limitations: ['Chrome automation with supplied test credentials does not validate native password-prompt UX.',
+        'Loopback HTTP proxy is not the deployment Nginx/TLS configuration.',
+        'Safari and Edge fresh-profile Basic reuse remain unverified.',
+        '401/403/409 checks use explicitly intercepted synthetic failures.']};
+    fs.writeFileSync(path.join(output, 'browser-report.json'), JSON.stringify(report, null, 2) + '\n');
+    console.log(JSON.stringify(report, null, 2));
+  } finally {
+    await browser.close();
+    await new Promise(resolve => proxy.close(resolve));
+  }
+}
+main().catch(error => { console.error(error); process.exitCode = 1; });

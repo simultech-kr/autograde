@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from autograde.assignment_admin import AssignmentAdminService
 from autograde.instructor_identity import InstructorPrincipal
 from autograde.instructor_web import InstructorWeb
 from autograde.platform_service import PlatformAPIError, StudentPlatformService
@@ -38,6 +39,7 @@ class Courses:
 class AssignmentDocuments:
     """The service seam is replaced; persistent snapshot invariants are service tests."""
     state = None
+    missing_materials = staticmethod(AssignmentAdminService.missing_materials)
 
     def __init__(self):
         self.reads, self.writes = [], []
@@ -76,7 +78,7 @@ class Catalog:
     def get_release(self, course, assignment_id):
         if course != 'come2201' or assignment_id not in {'basn_one', 'basn_cli'}:
             raise PlatformNotFound()
-        return dict(assignment_id=assignment_id, title='Synthetic lab', visibility='open',
+        return dict(assignment_id=assignment_id, title='Synthetic lab', visibility='open', active=True, ready=True,
                     origin='cli' if assignment_id == 'basn_cli' else 'web', due_at=None,
                     accepted_students=5, submitted_students=4, submission_count=7,
                     draft_id=None if assignment_id == 'basn_cli' else 'draft_one')

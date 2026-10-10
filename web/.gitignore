@@ -1,0 +1,6 @@
+node_modules/
+.next/
+*.tsbuildinfo
+coverage/
+test-results/
+.env*

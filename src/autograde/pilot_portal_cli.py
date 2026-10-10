@@ -8,7 +8,7 @@ import signal
 import threading
 from urllib.parse import urlsplit
 
-from .pilot_config import load_pilot_config
+from .pilot_config import load_pilot_config, NextResultsPolicy
 from .pilot_roster import initialize_student_roster, initialize_web_roster, RosterBootstrapError
 from .platform_auth import create_or_load_auth_secret, create_or_load_instructor_token
 from .platform_bundle_worker import BundleSubmissionProcessor, BundleSubmissionWorker
@@ -144,6 +144,7 @@ def run(config, *, isolated=False):
             controller = InstructorWeb(courses, EnrollmentAdminService(state, secret), assignments,
                 authorize=services[values["course_key"]]._authorize_instructor,
                 secret=secret, web_url=values["web_public_base_url"], rubrics=rubrics, identities=identities,
+                next_ui_policy=NextResultsPolicy(config),
                 submissions=lambda key, auth: services[key].instructor_dashboard_page(auth, portal=True),
                 submission_updates=lambda key, auth: services[key].instructor_dashboard_updates(auth, portal=True),
                 submission_review=lambda key, auth, sid, index, **options: services[key].instructor_submission_page(auth, sid, index, **options))

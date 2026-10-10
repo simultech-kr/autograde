@@ -1,5 +1,12 @@
 # Configuration
 
+- `nginx-autograde-next.locations.conf.example`: Next.js 0~2단계 조회 파일럿용 선택적 include.
+  기존 포털의 20010 `server` 안에서만 사용하며 학생 API·구 화면 경로는 유지합니다.
+  [설정·실행·즉시 복귀 안내](../docs/operations/nextjs-pilot.md)를 따릅니다.
+  `instructor_next_results_enabled`는 기본 `false`이고, 명시적으로 허용한
+  `instructor_next_course_keys`(세미콜론 구분)와 교수자 권한의 교집합만 조회합니다.
+  기능 해제·수업 제외는 각 신규 API 요청에서 CSV를 다시 읽어 반영합니다.
+
 - `nginx-autograde-pilot.conf.example`: 웹/password 외부 HTTPS 파일럿의 loopback reverse proxy,
   HSTS, 연결 제한과 25명 NAT burst를 고려한 인증 endpoint rate-limit 예제. Domain과 인증서
   경로를 바꾸고 `nginx -t`를 통과한 뒤에만 사용합니다. 처음에는 5분 HSTS로 실제 교실
