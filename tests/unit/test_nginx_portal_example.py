@@ -48,3 +48,18 @@ def test_exam_pdf_limit_is_scoped_to_authenticated_upload_only():
     assert 'proxy_request_buffering off;' in location
     assert 'proxy_pass http://127.0.0.1:18081;' in location
     assert 'exam-papers' not in api
+
+
+def test_individual_material_upload_limits_do_not_publish_private_storage():
+    config = (Path(__file__).resolve().parents[2]
+              / "config/nginx-autograde-portal.conf.example").read_text()
+    web, api = config.split("server {")[1:]
+    for suffix, limit in [('upload', '26m'), ('upload-batch', '101m')]:
+        location = web.split(f'location ~ ^/courses/[a-z0-9_-]+/instructor/materials/mat_[A-Za-z0-9_-]+/{suffix}$ {{')[1].split('}', 1)[0]
+        assert f'client_max_body_size {limit};' in location
+        assert 'proxy_request_buffering off;' in location
+        assert 'proxy_pass http://127.0.0.1:18081;' in location
+        assert 'access_log off;' in location
+    assert 'client_max_body_size 64k;' in web
+    assert '/materials/' not in api
+    assert 'alias ' not in config

@@ -50,7 +50,7 @@ def publish(service, **changes):
 def test_migration_initialization_restart_and_metadata(setup):
     state, service, _, _ = setup
     paper = draft(service, opens_at="2026-10-17T13:00:00+09:00", closes_at="2026-10-17T14:00:00+09:00")
-    assert state.schema_version() == 16
+    assert state.schema_version() == state.LATEST_SCHEMA_VERSION
     assert paper["status"] == "draft" and paper["revision"] == 1
     assert paper["opens_at"] == "2026-10-17T04:00:00.000000Z"
     assert paper["pdf_sha256"] is paper["published_at"] is paper["pdf_size_bytes"] is None
@@ -70,7 +70,7 @@ def test_migration_upgrades_existing_v15_preserving_student_and_course_data(tmp_
         previous.upsert_enrollment(student_id=student.id, course_key=COURSE)
         assert previous.schema_version() == 15
     current = PlatformStateStore(database)
-    assert current.schema_version() == 16
+    assert current.schema_version() == current.LATEST_SCHEMA_VERSION
     assert current.get_student_by_key(student.student_key) == student
     service = ExamPaperService(current, tmp_path / "papers", clock=lambda: NOW)
     paper = publish(service)

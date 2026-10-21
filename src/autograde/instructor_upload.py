@@ -15,7 +15,7 @@ class InstructorUploadUnavailable(RuntimeError):
     """Upload-only deployment failure; never fall back to unbounded parsing."""
 
 
-def parse_instructor_upload(content_type: str, body: bytes, *, file_limit: int) -> dict:
+def parse_instructor_upload(content_type: str, body: bytes, *, file_limit: int, capture_filename=False) -> dict:
     try:
         from python_multipart import MultipartParser
         from python_multipart.multipart import parse_options_header
@@ -68,6 +68,12 @@ def parse_instructor_upload(content_type: str, body: bytes, *, file_limit: int) 
         if (name == "file") != is_file:
             raise ValueError("파일과 입력 항목 형식이 올바르지 않습니다.")
         current.update(name=name, is_file=is_file)
+        if is_file and capture_filename:
+            filename = attrs[b"filename"].decode("utf-8", "strict")
+            if (not filename or len(filename) > 255 or any(ord(c) < 32 or ord(c) == 127 for c in filename)
+                    or "/" in filename or "\\" in filename):
+                raise ValueError("경로가 없는 올바른 파일명을 사용하세요.")
+            current["file_name"] = filename
 
     def part_data(chunk, start, end):
         limit = file_limit if current.get("is_file") else 1024
@@ -77,6 +83,8 @@ def parse_instructor_upload(content_type: str, body: bytes, *, file_limit: int) 
 
     def part_end():
         result[current["name"]] = bytes(data) if current["is_file"] else data.decode("utf-8", "strict")
+        if current.get("file_name") is not None:
+            result["file_name"] = current["file_name"]
 
     def end():
         nonlocal ended

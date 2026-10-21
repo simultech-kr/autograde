@@ -135,7 +135,7 @@ class InstructorWeb:
 
     def __init__(self, course_admin, enrollment_admin, assignment_admin, *, authorize,
                  secret, web_url, submissions=None, submission_review=None, submission_updates=None, rubrics=None, identities=None,
-                 next_ui_policy=None, exam_papers=None):
+                 next_ui_policy=None, exam_papers=None, student_materials=None):
         self.courses = course_admin
         self.students = enrollment_admin
         self.assignments = assignment_admin
@@ -148,6 +148,7 @@ class InstructorWeb:
         self.rubrics = rubrics
         self.identities = identities
         self.exam_papers = exam_papers
+        self.student_materials = student_materials
         self.principal = None
         self.next_ui_policy = next_ui_policy if next_ui_policy is not None else lambda: frozenset()
         self.catalog = InstructorAssignmentCatalog(assignment_admin.state) if assignment_admin else None
@@ -279,6 +280,8 @@ class InstructorWeb:
                 links.insert(3, (base + '/rubrics', '루브릭 관리'))
             if self.exam_papers:
                 links.insert(3, (base + '/exam-papers', '시험지 배포'))
+            if self.student_materials:
+                links.insert(3, (base + '/materials', '학생별 자료 배포'))
             context = f'{course["code"]} · {course.get("name") or "정보 확인 필요"} · {course.get("year") or "학년도 미설정"} / {course.get("semester") or "학기 미설정"} · {course.get("section") or "분반 미설정"}'
         if self.principal:
             identity = f'{self.principal.display_name} ({self.principal.username}) · ' + ('관리자' if self.principal.role == 'admin' else '담당 교수자')
@@ -321,6 +324,7 @@ class InstructorWeb:
         guarded = bool(re.search(r'/instructor/(?:drafts(?:/[a-zA-Z0-9_-]+(?:/(?:uploads/(?:starter|solution|negative)|starter-template|grading-template))?)?|assignments/[a-zA-Z0-9_-]+/(?:extend|document)|rubrics/preview)$', action))
         guarded = guarded or bool(re.search(r'/rubrics/versions/[^/]+/[0-9]+/submissions/bsub_[A-Za-z0-9_-]+$', action))
         guarded = guarded or bool(re.search(r'/instructor/exam-papers(?:/[A-Za-z0-9_-]+(?:/upload)?)?$', action))
+        guarded = guarded or bool(re.search(r'/instructor/materials(?:/mat_[A-Za-z0-9_-]+(?:/upload(?:-batch)?)?)?$', action))
         guard = 'data-dirty-guard' if guarded else ''
         notice = '<p data-save-status role="status" aria-live="polite">각 영역의 저장 버튼을 눌러야 보존됩니다.</p>' if guarded else ''
         identity = f'data-form-kind="{_e(form_kind)}"' if form_kind else ''
@@ -362,7 +366,11 @@ class InstructorWeb:
                     self.rubrics._writable(course)
                     title, body = editor(self, course, session, _value(form, 'document'))
                     return title, FormRecovery.restore(body, base + '/rubrics/preview', form)
-                if route == 'exam-papers' and self.exam_papers:
+                if route == 'materials' and self.student_materials:
+                    target = route
+                elif self.student_materials and re.fullmatch(r'materials/mat_[A-Za-z0-9_-]+(?:/(?:upload|upload-batch|publish|archive|remove/[0-9]+))?', route):
+                    target = '/'.join(route.split('/')[:2])
+                elif route == 'exam-papers' and self.exam_papers:
                     target = route
                 elif self.exam_papers and re.fullmatch(r'exam-papers/[A-Za-z0-9_-]+(?:/(?:upload|publish|archive))?', route):
                     target = '/'.join(route.split('/')[:2])
@@ -477,6 +485,9 @@ class InstructorWeb:
     def _course_request(self, method, course, route, form, session, authorization):
         base = self._base(course)
         key = course['course_key']
+        if route == 'materials' or route.startswith('materials/'):
+            from .instructor_student_materials import request
+            return request(self, method, course, route, form, session)
         if route == 'exam-papers' or route.startswith('exam-papers/'):
             from .instructor_exam_papers import request
             return request(self, method, course, route, form, session)

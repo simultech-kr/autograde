@@ -124,6 +124,7 @@ def run(config, *, isolated=False):
         courses.before_activate = lambda course: services[course]
         controller = None
         exam_papers = None
+        student_materials = None
         web_module_checks = {}
         if identities is not None:
             web_module_checks['instructor_identity'] = identities.check_ready
@@ -131,7 +132,9 @@ def run(config, *, isolated=False):
             from .assignment_admin import AssignmentAdminService
             from .instructor_web import InstructorWeb
             from .exam_papers import ExamPaperService
+            from .student_materials import StudentMaterialService
             exam_papers = ExamPaperService(state, paths.root / 'exam-papers')
+            student_materials = StudentMaterialService(state, paths.root / 'student-materials')
             assignments = AssignmentAdminService(state, paths, course_status=lambda key: courses.get_course(key)["status"])
             workers.append(assignments)
             rubrics = None
@@ -148,13 +151,14 @@ def run(config, *, isolated=False):
                 authorize=services[values["course_key"]]._authorize_instructor,
                 secret=secret, web_url=values["web_public_base_url"], rubrics=rubrics, identities=identities,
                 exam_papers=exam_papers,
+                student_materials=student_materials,
                 next_ui_policy=NextResultsPolicy(config),
                 submissions=lambda key, auth: services[key].instructor_dashboard_page(auth, portal=True),
                 submission_updates=lambda key, auth: services[key].instructor_dashboard_updates(auth, portal=True),
                 submission_review=lambda key, auth, sid, index, **options: services[key].instructor_submission_page(auth, sid, index, **options))
         api = CourseAPI(services, secret, courses=courses)
         web = CoursePortal(services, secret, values["web_public_base_url"], values["public_base_url"],
-                           courses=courses, instructor=controller, exam_papers=exam_papers)
+                           courses=courses, instructor=controller, exam_papers=exam_papers, student_materials=student_materials)
         servers = []
         readiness = PortalReadiness(paths, workers, stop)
         web_readiness = PortalReadiness(paths, workers, stop, module_checks=web_module_checks)

@@ -2,13 +2,15 @@
 
 실습 과제와 별도로 학생용 PDF 시험지를 배포한다. 학생은 기존 학번·전용 비밀번호로 웹에서 받으며, 확장 설치나 과제 수령 코드는 필요 없다. 시험 답안 수집·채점은 이 배포 기능에 포함하지 않는다.
 
+학생마다 다른 PDF·ZIP을 배포하려면 [학생별 자료 배포](student-material-distribution.md)를 사용한다. 학번별 파일 등록과 본인 파일만 수령하는 기능은 별도 메뉴로 제공한다.
+
 ## 서버 반영
 
 1. 서버를 정상 종료하고 사용 중인 데이터 폴더 전체와 설정 CSV를 백업한다. SQLite DB와 `exam-papers` 폴더를 함께 보관한다.
 2. 변경된 코드를 반영하고 기존 가상환경에서 `python -m pip install -e '.[dev]'`를 실행한다.
 3. 사용 중인 CSV에 기존 `instructor_assignment_web_enabled,true`가 설정되어 있는지 확인한다. 새 비밀번호·환경변수는 필요 없다.
 4. [Nginx 예시](../../config/nginx-autograde-portal.conf.example)의 `/instructor/exam-papers/ep_.../upload` 전용 경로를 추가하고 운영자가 설정 검사 후 다시 읽힌다. 이 경로만 11 MiB 요청을 허용한다. 앱의 PDF 파일 제한은 10 MiB다. 일반 경로의 업로드 한도를 전부 늘리지 않는다.
-5. 기존 `python -m autograde.pilot_portal_cli --config 사용중인설정.csv` 명령으로 다시 시작한다. DB는 v16으로 자동 갱신되므로 갱신된 DB에 구버전 프로그램을 실행하지 않는다.
+5. 기존 `python -m autograde.pilot_portal_cli --config 사용중인설정.csv` 명령으로 다시 시작한다. DB는 최신 스키마로 자동 갱신되므로 갱신된 DB에 구버전 프로그램을 실행하지 않는다.
 
 시험지는 `{data_root}/exam-papers`에 비공개로 저장된다. 이 디렉터리를 Nginx의 정적 파일 경로로 공개하지 않는다. 웹 포트는 기존 20010, 확장 API 포트는 기존 20000을 유지하며 시험지 전용 포트는 추가하지 않는다. 이번 기능에 Next.js 재빌드는 필요하지 않다.
 

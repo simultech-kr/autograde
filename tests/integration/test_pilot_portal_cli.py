@@ -82,6 +82,16 @@ def test_launcher_lifecycle(tmp_path, blocked_web, admin_enabled):
                     response = connection.getresponse()
                     assert response.status == 200
                     assert '새 시험지 초안' in response.read().decode()
+                connection.request('GET', '/courses/come2201/materials')
+                response = connection.getresponse()
+                assert response.status == (200 if admin_enabled else 404)
+                body = response.read().decode()
+                if admin_enabled:
+                    assert '내 자료 받기' in body and '/materials/login' in body
+                    connection.request('GET', '/courses/come2201/instructor/materials', headers={'Authorization': auth})
+                    response = connection.getresponse()
+                    assert response.status == 200
+                    assert '학생별 자료 배포' in response.read().decode()
             finally:
                 connection.close()
             # Verify initialization is actually usable through the new web listener.

@@ -86,11 +86,12 @@ class CoursePortal:
     """Web-only facade. A restart deliberately invalidates short web sessions."""
 
     def __init__(self, services, secret: bytes, web_url: str, api_url: str, *, clock=time.monotonic,
-                 courses=None, instructor=None, exam_papers=None):
+                 courses=None, instructor=None, exam_papers=None, student_materials=None):
         self.services = services
         self.courses = courses
         self.instructor = instructor
         self.exam_papers = exam_papers
+        self.student_materials = student_materials
         self.admin_upload_slots = threading.BoundedSemaphore(2)
         self.secret = secret
         self.web_url = web_url.rstrip("/")
@@ -135,7 +136,7 @@ class CoursePortal:
         return PlatformResponse(status, document, headers)
 
     def _entry(self, course, message="", status=200, *, destination=None):
-        if destination not in {None, 'exam-papers'}:
+        if destination not in {None, 'exam-papers', 'materials'}:
             raise ValueError('invalid portal destination')
         csrf = new_api_token()
         entry = {"course": course, "csrf": csrf}
@@ -143,7 +144,9 @@ class CoursePortal:
             entry['destination'] = destination
         signed = sign_browser_value(self.secret, "portal-entry", entry,
                                     lifetime_seconds=600)
-        login_path = f'/courses/{course}/' + ('exam-papers/login' if destination else 'login')
+        login_path = f'/courses/{course}/' + (destination + '/login' if destination else 'login')
+        title = {'exam-papers': '시험지 받기', 'materials': '내 자료 받기', None: '과제 받기'}[destination]
+        button = {'exam-papers': '시험지 확인', 'materials': '내 자료 확인', None: '과제 확인'}[destination]
         body = (f'<p>{html.escape(self._course_label(course))}</p>'
                 + (f'<p class="error" role="alert">{html.escape(message)}</p>' if message else '') +
                 f'<form method="post" action="{login_path}">'
@@ -152,11 +155,17 @@ class CoursePortal:
                 '<label>학생 전용 비밀번호<input name="password" type="password" inputmode="numeric" '
                 'pattern="[0-9]{6}" minlength="6" maxlength="6" autocomplete="off" required></label>'
                 '<p><small>교수자에게 받은 숫자 6자리 비밀번호를 입력하세요.</small></p>'
-                f'<button>{"시험지 확인" if destination else "과제 확인"}</button></form>')
-        if self.exam_papers is not None:
-            target = f'/courses/{course}' + ('' if destination else '/exam-papers')
-            body += f'<nav class="assignment-links"><a href="{target}">{"실습 과제 받기" if destination else "시험지 받기"}</a></nav>'
-        return self._page("시험지 받기" if destination else "과제 받기", body,
+                f'<button>{button}</button></form>')
+        links = []
+        if destination:
+            links.append(f'<a href="/courses/{course}">실습 과제 받기</a>')
+        if self.exam_papers is not None and destination != 'exam-papers':
+            links.append(f'<a href="/courses/{course}/exam-papers">시험지 받기</a>')
+        if self.student_materials is not None and destination != 'materials':
+            links.append(f'<a href="/courses/{course}/materials">내 자료 받기</a>')
+        if links:
+            body += '<nav class="assignment-links">' + ''.join(links) + '</nav>'
+        return self._page(title, body,
                           status=status, cookie=self._cookie(course, signed))
 
     def _login_session(self, course, form, cookies, *, destination=None):
@@ -253,6 +262,7 @@ class CoursePortal:
         body += (f'<nav class="assignment-links" aria-label="과제 목록 안내">'
                  f'<a href="/courses/{course}">과제 목록 새로고침</a>'
                  + (f'<a href="/courses/{course}/exam-papers">시험지 받기</a>' if self.exam_papers is not None else '') +
+                 (f'<a href="/courses/{course}/materials">내 자료 받기</a>' if self.student_materials is not None else '') +
                  '<a href="/">다른 교과목 선택</a></nav>')
         body += (f'<form method="post" action="/courses/{course}/logout">'
                  f'<input type="hidden" name="csrf" value="{session.csrf}"><button class="secondary">로그아웃</button></form>')
@@ -261,6 +271,11 @@ class CoursePortal:
     def portal_request(self, method, path, form, cookies, origin=None, authorization=None):
         if self.instructor is not None:
             response = self.instructor.request(method, path, form, cookies, origin, authorization)
+            if response is not None:
+                return response
+        if self.student_materials is not None:
+            from .student_material_portal import request as material_request
+            response = material_request(self, method, path, form, cookies, origin)
             if response is not None:
                 return response
         if self.exam_papers is not None:

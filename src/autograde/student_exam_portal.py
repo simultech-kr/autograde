@@ -37,7 +37,9 @@ def _listing(portal, course, session):
                      f'<button type="submit" aria-label="{escape(paper["title"], quote=True)} PDF 다운로드">시험지 PDF 다운로드</button></form>')
         body += '</article>'
     body += (f'<nav class="assignment-links" aria-label="시험지 목록 안내"><a href="{base}">목록 새로고침</a>'
-             f'<a href="/courses/{course}">실습 과제 받기</a><a href="/">다른 교과목 선택</a></nav>'
+             f'<a href="/courses/{course}">실습 과제 받기</a>' +
+             (f'<a href="/courses/{course}/materials">내 자료 받기</a>' if portal.student_materials is not None else '') +
+             '<a href="/">다른 교과목 선택</a></nav>'
              '<p class="progress-hint">로그인은 10분 후 만료됩니다. 다운로드가 안 되면 다시 인증한 뒤 재시도하세요. '
              '공용 PC에서는 로그아웃하고 내려받은 파일은 교수자의 시험 운영 지침에 따라 처리하세요.</p>'
              f'<form method="post" action="{base}/logout">'

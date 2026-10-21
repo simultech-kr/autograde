@@ -9,6 +9,7 @@ import pytest
 
 from autograde.course_reset import DOCUMENT_GUARD, GUARD, _digest, reset_course
 from autograde.exam_papers import ExamPaperService
+from autograde.student_materials import StudentMaterialService
 from autograde.pilot_roster import initialize_student_roster, initialize_web_roster
 from autograde.platform_cli import _exclusive_course_service_lock
 from autograde.platform_auth import verify_student_password
@@ -376,7 +377,7 @@ def test_migrated_v16_reset_preserves_exam_evidence_private_files_backup_and_oth
         initialize_student_roster(state, roster)
         assert state.schema_version() == 15
     state = PlatformStateStore(paths.database)
-    assert state.schema_version() == 16
+    assert state.schema_version() == state.LATEST_SCHEMA_VERSION
     service, papers, student_id = _exam_history(paths, state)
     preserved_tables = ("exam_papers", "exam_paper_audit", "exam_paper_requests")
     with state._connection() as db:
@@ -427,3 +428,33 @@ def test_reset_rolls_back_incidental_exam_request_evidence_deletion(records):
     assert fingerprint(paths) == plan["expected_state"]
     assert service.receipts("come2201", papers["come2201"]["paper_id"])[0]["request_count"] == 2
     assert service.receipts("come3105", papers["come3105"]["paper_id"])[0]["request_count"] == 1
+
+
+def test_reset_preserves_personal_material_assignments_requests_and_backups(records):
+    paths, state, _ = records
+    now = datetime(2026, 10, 21, tzinfo=timezone.utc)
+    service = StudentMaterialService(state, paths.root / 'student-materials', clock=lambda: now)
+    student_id = state.get_student_by_key('001').id
+    material = service.create('come2201', title='개별 피드백', opens_at=now,
+                              closes_at=now + timedelta(hours=1), actor='teacher')
+    material = service.upload('come2201', material['material_id'], revision=material['revision'],
+                              filename='001.pdf', data=b'%PDF-1.4\nprivate feedback\n%%EOF\n', actor='teacher')
+    material = service.publish('come2201', material['material_id'], revision=material['revision'], actor='teacher')
+    artifact = service.download('come2201', material['material_id'], student_id)
+    preserved_tables = ('student_materials', 'student_material_files', 'student_material_requests', 'student_material_audit')
+    with state._connection() as db:
+        original = {table: [tuple(row) for row in db.execute(f'SELECT * FROM {table} ORDER BY rowid')]
+                    for table in preserved_tables}
+    result = apply(paths, reset_course(paths, 'come2201'))
+    with state._connection() as db, sqlite3.connect(Path(result['backup_directory']) / 'state.sqlite3') as saved:
+        for table, rows in original.items():
+            assert [tuple(row) for row in db.execute(f'SELECT * FROM {table} ORDER BY rowid')] == rows
+            assert saved.execute(f'SELECT * FROM {table} ORDER BY rowid').fetchall() == rows
+        assert db.execute('PRAGMA foreign_key_check').fetchall() == []
+    assert (Path(result['backup_directory']) / artifact.relative_to(paths.root)).read_bytes() == artifact.read_bytes()
+    with pytest.raises(PlatformAccessDenied):
+        service.download('come2201', material['material_id'], student_id)
+    assert service.recipients('come2201', material['material_id'])[0]['request_count'] == 1
+    state.upsert_enrollment(student_id=student_id, course_key='come2201')
+    assert service.download('come2201', material['material_id'], student_id).read_bytes() == artifact.read_bytes()
+    assert service.recipients('come2201', material['material_id'])[0]['request_count'] == 2

@@ -34,6 +34,7 @@ from .domain import DatetimeValue, git_oid, utc_iso
 from .download_diagnostics import SCHEMA as _DOWNLOAD_DIAGNOSTICS_SCHEMA
 from .assignment_documents import SCHEMA as _ASSIGNMENT_DOCUMENT_SCHEMA
 from .exam_paper_schema import SCHEMA as _EXAM_PAPER_SCHEMA
+from .student_material_schema import SCHEMA as _STUDENT_MATERIAL_SCHEMA
 from .gitops import normalize_assignment_subpath
 from .platform_runner_image import (
     RunnerImageAvailabilityError,
@@ -1530,6 +1531,7 @@ _MIGRATIONS = {
     14: _ASSIGNMENT_DOCUMENT_SCHEMA,
     15: "",  # Recoverable assignment deletion, audit identities and mutation guards.
     16: _EXAM_PAPER_SCHEMA,
+    17: _STUDENT_MATERIAL_SCHEMA,
 }
 _LATEST_SCHEMA_VERSION = max(_MIGRATIONS)
 

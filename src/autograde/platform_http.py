@@ -744,21 +744,33 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
                     upload = re.fullmatch(r"/courses/[^/]+/instructor/drafts/[^/]+/(?:uploads/(starter|solution|negative)|grading-template)", path)
                     csv_upload = re.fullmatch(r"/courses/[^/]+/instructor/students/import/preview", path)
                     exam_upload = re.fullmatch(r"/courses/[a-z0-9_-]{1,96}/instructor/exam-papers/ep_[A-Za-z0-9_-]+/upload", path)
-                    if upload or csv_upload or exam_upload:
+                    material_upload = re.fullmatch(r"/courses/[a-z0-9_-]{1,96}/instructor/materials/mat_[A-Za-z0-9_-]+/(upload|upload-batch)", path)
+                    if upload or csv_upload or exam_upload or material_upload:
                         if not facade.admin_upload_slots.acquire(blocking=False):
                             raise PlatformHTTPError(503, "upload_busy", "파일 처리 중입니다. 잠시 후 다시 시도하세요.")
                         try:
                             from .instructor_upload import InstructorUploadUnavailable, parse_instructor_upload
                             from .exam_papers import MAX_PDF_BYTES
                             limit = MAX_PDF_BYTES if exam_upload else (5 if upload else 1) * 1024 * 1024
+                            if material_upload:
+                                from .student_materials import MAX_MATERIAL_BYTES, MAX_BATCH_BYTES
+                                limit = MAX_BATCH_BYTES if material_upload[1] == 'upload-batch' else MAX_MATERIAL_BYTES
                             body = self._read_body(expected_media_type="multipart/form-data", max_bytes=limit + 64 * 1024)
                             try:
-                                form = parse_instructor_upload(self.headers.get("Content-Type", ""), body, file_limit=limit)
+                                form = parse_instructor_upload(self.headers.get("Content-Type", ""), body, file_limit=limit,
+                                                               capture_filename=bool(material_upload))
                             except InstructorUploadUnavailable as exc:
                                 emit_operator_event("instructor_upload_unavailable", component="http", exception=exc.__cause__ or exc)
                                 raise PlatformHTTPError(503, "upload_unavailable", str(exc)) from exc
                             except ValueError as exc:
                                 raise PlatformHTTPError(400, "invalid_upload", str(exc)) from exc
+                            if material_upload:
+                                # Keep admission bounded through ZIP validation and storage,
+                                # not just parsing: each batch may retain up to 100 MiB.
+                                return facade.portal_request(
+                                    self.command, path, form, self._cookies(),
+                                    self.headers.get("Origin"), self.headers.get("Authorization"),
+                                ), 200
                         finally:
                             facade.admin_upload_slots.release()
                     else:
