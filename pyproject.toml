@@ -32,6 +32,9 @@ package-dir = {"" = "src"}
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+autograde = ["web_tokens.css"]
+
 [tool.pytest.ini_options]
 addopts = "-ra"
 testpaths = ["tests"]

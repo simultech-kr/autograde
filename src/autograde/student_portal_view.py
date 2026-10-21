@@ -36,15 +36,15 @@ h1{font-size:1.65rem;line-height:1.3}p{margin:12px 0}
 .assignment-choice{margin:10px 0;padding:12px;scroll-margin-bottom:180px}
 .assignment-choice input[type=radio]{scroll-margin-bottom:180px}
 .assignment-choice strong{font-size:1rem}.assignment-choice small{font-size:.85rem}
-.deadline-badge{width:fit-content;padding:2px 6px;border-radius:4px}
+.deadline-badge{width:fit-content;padding:2px 6px;border-radius:var(--radius-sm)}
 .claim-action{position:sticky;bottom:0;z-index:1;background:var(--surface);border-top:1px solid var(--border);
-padding:12px 0 max(12px,env(safe-area-inset-bottom));box-shadow:0 -6px 10px var(--surface)}
+padding:12px 0 max(12px,env(safe-area-inset-bottom));box-shadow:none}
 .claim-action p{margin:0 0 8px;font-size:.9rem;max-height:3.2em;overflow:auto}
 .claim-action button{margin:0}button{min-height:44px}
 .assignment-links a{display:inline-block;min-height:44px;padding:8px 0}
 summary{display:list-item;min-height:44px;padding:8px 0}
 .error:not(:empty){padding:12px;border-left:4px solid var(--error)}
-.code-box{background:var(--soft);border:1px solid var(--border);border-radius:10px;padding:16px;margin:16px 0}
+.code-box{background:var(--soft);border:0;border-inline-start:3px solid var(--accent);border-radius:var(--radius-sm);padding:16px;margin:16px 0}
 #claim-code{font:700 1.45rem/1.5 ui-monospace,monospace;letter-spacing:.03em}
 #claim-code code{font:inherit}#api-address{font-size:1rem}.code-box button{margin-top:12px}
 .claim-expiry{font-weight:600}.ide-help li{margin:8px 0}.ide-help{padding-left:22px}

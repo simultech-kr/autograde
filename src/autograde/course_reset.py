@@ -1,7 +1,8 @@
 """Offline, backed-up reset of one course's bundle student records.
 
-No source/artifact files or global student identities are removed. This is an
-operator maintenance tool, not the proposed online reset API.
+No source/artifact files, global student identities, or exam-paper distribution
+evidence are removed. This is an operator maintenance tool, not the proposed
+online reset API.
 """
 from __future__ import annotations
 
@@ -72,8 +73,8 @@ def _digest(connection, excluded=None):
 
 def _preflight(connection, course):
     version = connection.execute("SELECT MAX(version) FROM platform_schema_migrations").fetchone()[0]
-    if version not in (10, 11, 12, 13, 14, 15):
-        raise ValueError("reset supports schema 10/11/12/13/14/15 only; do not modify the database manually")
+    if version not in (10, 11, 12, 13, 14, 15, 16):
+        raise ValueError("reset supports schema 10/11/12/13/14/15/16 only; do not modify the database manually")
     if version >= 11:
         if not connection.execute("SELECT 1 FROM admin_courses WHERE course_key=?", (course,)).fetchone():
             raise ValueError("course must already be registered")
@@ -114,6 +115,12 @@ def _preflight(connection, course):
     # Submission-time explanation references belong to the student records being
     # reset. Public explanation revisions remain preserved with the assignments.
     documents = (("bundle_submission_documents", f"submission_id IN ({SUBMISSIONS})"),) if version >= 14 else ()
+    # v16 exam papers, immutable audit and download-request evidence deliberately
+    # remain outside TARGETS. Requests reference the preserved global student ID,
+    # not the deleted enrollment, so withdrawals retain their evidence and an
+    # explicitly re-registered student reconnects to that same history. The full
+    # tree backup includes private exam PDFs; the non-target digest protects all
+    # three exam tables against incidental changes during the reset.
     definitions = diagnostics + documents + TARGETS + ((('admin_roster_previews', 'course_key = ?'),) if version >= 11 else ())
     targets = {table: {row[0] for row in connection.execute(
         f"SELECT rowid FROM {_quote(table)} WHERE {where}", (course,)
@@ -203,8 +210,8 @@ def reset_course(paths, course, *, apply=False, expected_state=None, confirm_cou
             backup = _backup(paths, connection)
             # Lift only the two explicitly supported student-record delete
             # guards within this backed-up transaction. Public explanation and
-            # assignment deletion guards stay enabled, and assignment lifecycle
-            # rows remain protected by the non-target digest. Restore exact SQL;
+            # assignment/exam deletion guards stay enabled, and their lifecycle,
+            # audit and exam-request rows stay protected by the non-target digest. Restore exact SQL;
             # rollback also restores it.
             for name in guards:
                 connection.execute(f"DROP TRIGGER {_quote(name)}")

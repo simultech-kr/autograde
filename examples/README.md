@@ -1,5 +1,7 @@
 # Examples
 
+- [iterator-pattern/](iterator-pattern/README.md): C++17 Iterator 단독 과제. 점수 필터, 독립 순회, 스냅샷·종료·재순회 구현과 100점 평가 기준·수정 힌트.
+
 - [creational-patterns/](creational-patterns/README.md): C++17 Factory Method·Abstract Factory·Singleton 통합 과제. 학생용 문제·힌트·TODO 코드, 100점 채점 자료와 항목별 평가 요소.
 
 - [rubric/](rubric/README.md): 독립 루브릭 CLI의 실행 형식·혼합 평가 profile·82.5점 합성 근거. 실제 학생 평가가 아님.

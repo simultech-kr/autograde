@@ -86,10 +86,11 @@ class CoursePortal:
     """Web-only facade. A restart deliberately invalidates short web sessions."""
 
     def __init__(self, services, secret: bytes, web_url: str, api_url: str, *, clock=time.monotonic,
-                 courses=None, instructor=None):
+                 courses=None, instructor=None, exam_papers=None):
         self.services = services
         self.courses = courses
         self.instructor = instructor
+        self.exam_papers = exam_papers
         self.admin_upload_slots = threading.BoundedSemaphore(2)
         self.secret = secret
         self.web_url = web_url.rstrip("/")
@@ -109,7 +110,7 @@ class CoursePortal:
         if cookie:
             headers["Set-Cookie"] = cookie
         document = (
-            '<!doctype html><html lang="ko"><meta charset="utf-8">'
+            '<!doctype html><html lang="ko"><head><meta charset="utf-8">'
             '<meta name="viewport" content="width=device-width,initial-scale=1">'
             f'<title>{html.escape(title)} · Autograde</title><style>'
             'body{font:17px/1.6 system-ui;background:#f5f7fa;color:#172536;margin:0}'
@@ -127,25 +128,62 @@ class CoursePortal:
             '.assignment-choice:has(input:checked){border-color:#2155ba;background:#eff6ff}'
             '.assignment-links{display:flex;gap:16px;flex-wrap:wrap;margin:20px 0}'
             '.error{color:#aa2434}small{color:#536173}code{font-size:1.2em;overflow-wrap:anywhere}'
-            f'{THEME_CSS}{STYLE}</style><main data-audience="student"><a href="/">Autograde · 학생 실습실</a>'
-            f'<h1>{html.escape(title)}</h1>{body}</main>{SCRIPT_TAG if enhanced else ""}</html>'
+            f'{THEME_CSS}{STYLE}</style></head><body><a class="skip-link" href="#main-content">본문으로 건너뛰기</a>'
+            '<main id="main-content" tabindex="-1" data-audience="student"><a class="student-brand" href="/">Autograde · 학생 실습실</a>'
+            f'<h1>{html.escape(title)}</h1>{body}</main>{SCRIPT_TAG if enhanced else ""}</body></html>'
         )
         return PlatformResponse(status, document, headers)
 
-    def _entry(self, course, message="", status=200):
+    def _entry(self, course, message="", status=200, *, destination=None):
+        if destination not in {None, 'exam-papers'}:
+            raise ValueError('invalid portal destination')
         csrf = new_api_token()
-        signed = sign_browser_value(self.secret, "portal-entry", {"course": course, "csrf": csrf},
+        entry = {"course": course, "csrf": csrf}
+        if destination:
+            entry['destination'] = destination
+        signed = sign_browser_value(self.secret, "portal-entry", entry,
                                     lifetime_seconds=600)
+        login_path = f'/courses/{course}/' + ('exam-papers/login' if destination else 'login')
         body = (f'<p>{html.escape(self._course_label(course))}</p>'
                 + (f'<p class="error" role="alert">{html.escape(message)}</p>' if message else '') +
-                f'<form method="post" action="/courses/{course}/login">'
+                f'<form method="post" action="{login_path}">'
                 f'<input type="hidden" name="csrf" value="{csrf}">'
                 '<label>학번<input name="student_key" maxlength="255" autocomplete="off" required></label>'
                 '<label>학생 전용 비밀번호<input name="password" type="password" inputmode="numeric" '
                 'pattern="[0-9]{6}" minlength="6" maxlength="6" autocomplete="off" required></label>'
                 '<p><small>교수자에게 받은 숫자 6자리 비밀번호를 입력하세요.</small></p>'
-                '<button>과제 확인</button></form>')
-        return self._page("과제 받기", body, status=status, cookie=self._cookie(course, signed))
+                f'<button>{"시험지 확인" if destination else "과제 확인"}</button></form>')
+        if self.exam_papers is not None:
+            target = f'/courses/{course}' + ('' if destination else '/exam-papers')
+            body += f'<nav class="assignment-links"><a href="{target}">{"실습 과제 받기" if destination else "시험지 받기"}</a></nav>'
+        return self._page("시험지 받기" if destination else "과제 받기", body,
+                          status=status, cookie=self._cookie(course, signed))
+
+    def _login_session(self, course, form, cookies, *, destination=None):
+        """Share credential checks without accepting an arbitrary return URL."""
+        if set(form) != {"csrf", "student_key", "password"} or not all(isinstance(v, str) for v in form.values()):
+            raise ValueError("invalid form")
+        entry = verify_browser_value(self.secret, "portal-entry", cookies.get(f"autograde_portal_{course}", ""))
+        if (entry.get("course") != course or entry.get('destination') != destination
+                or not hmac.compare_digest(entry.get("csrf", "").encode(), form["csrf"].encode())):
+            raise ValueError("invalid CSRF")
+        student = form["student_key"].strip()
+        if not student or len(student) > 255:
+            raise ValueError("invalid student")
+        credential = self.services[course].authenticate_student_password(student, form["password"])
+        with self.lock:
+            for key in [k for k, v in self.sessions.items() if v.expires <= self.clock()]:
+                self.sessions.pop(key, None)
+            if len(self.sessions) >= 200:
+                raise PlatformAPIError(503, "busy", "잠시 후 다시 시도해 주세요.")
+            for key in [k for k, v in self.sessions.items()
+                        if v.credential.enrollment_id == credential.enrollment_id]:
+                self.sessions.pop(key, None)
+            raw = new_api_token()
+            session = WebSession(credential, new_api_token(), self.clock() + 600,
+                                 self.courses.get_course(course)["auth_revision"] if self.courses else None)
+            self.sessions[secret_digest(self.secret, "portal-session", raw)] = session
+        return raw, session
 
     def _course_label(self, course):
         if self.courses is None:
@@ -214,6 +252,7 @@ class CoursePortal:
                      '담당 교수자에게 과제 공개 여부와 시작·마감 시간을 확인해 주세요.</p></section>')
         body += (f'<nav class="assignment-links" aria-label="과제 목록 안내">'
                  f'<a href="/courses/{course}">과제 목록 새로고침</a>'
+                 + (f'<a href="/courses/{course}/exam-papers">시험지 받기</a>' if self.exam_papers is not None else '') +
                  '<a href="/">다른 교과목 선택</a></nav>')
         body += (f'<form method="post" action="/courses/{course}/logout">'
                  f'<input type="hidden" name="csrf" value="{session.csrf}"><button class="secondary">로그아웃</button></form>')
@@ -222,6 +261,11 @@ class CoursePortal:
     def portal_request(self, method, path, form, cookies, origin=None, authorization=None):
         if self.instructor is not None:
             response = self.instructor.request(method, path, form, cookies, origin, authorization)
+            if response is not None:
+                return response
+        if self.exam_papers is not None:
+            from .student_exam_portal import request as exam_request
+            response = exam_request(self, method, path, form, cookies, origin)
             if response is not None:
                 return response
         live = re.fullmatch(r'/courses/([A-Za-z0-9][A-Za-z0-9._~-]{0,127})/instructor/submissions/live', path)
@@ -278,28 +322,8 @@ class CoursePortal:
             return self._entry(course, "접속 주소를 확인하고 다시 시도하세요.", 403)
         try:
             if method == "POST" and action == "login":
-                if set(form) != {"csrf", "student_key", "password"}:
-                    raise ValueError("invalid form")
-                entry = verify_browser_value(self.secret, "portal-entry", cookies.get(f"autograde_portal_{course}", ""))
-                if entry.get("course") != course or not hmac.compare_digest(entry.get("csrf", "").encode(), form["csrf"].encode()):
-                    raise ValueError("invalid CSRF")
-                student = form["student_key"].strip()
-                if not student or len(student) > 255:
-                    raise ValueError("invalid student")
-                credential = service.authenticate_student_password(student, form["password"])
+                raw, session = self._login_session(course, form, cookies)
                 with self.lock:
-                    # Expire old entries even under repeated successful login requests.
-                    for key in [k for k, v in self.sessions.items() if v.expires <= self.clock()]:
-                        self.sessions.pop(key, None)
-                    if len(self.sessions) >= 200:
-                        raise PlatformAPIError(503, "busy", "잠시 후 다시 시도해 주세요.")
-                    for key in [k for k, v in self.sessions.items()
-                                if v.credential.enrollment_id == credential.enrollment_id]:
-                        self.sessions.pop(key, None)
-                    raw = new_api_token()
-                    session = WebSession(credential, new_api_token(), self.clock() + 600,
-                                         self.courses.get_course(course)["auth_revision"] if self.courses else None)
-                    self.sessions[secret_digest(self.secret, "portal-session", raw)] = session
                     page = self._assignments(course, session)
                 return PlatformResponse(page.status, page.body, {**page.headers, "Set-Cookie": self._cookie(course, raw)})
             with self.lock:

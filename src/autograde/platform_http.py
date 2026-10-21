@@ -743,12 +743,14 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
                                            self.headers.get("Authorization"))
                     upload = re.fullmatch(r"/courses/[^/]+/instructor/drafts/[^/]+/(?:uploads/(starter|solution|negative)|grading-template)", path)
                     csv_upload = re.fullmatch(r"/courses/[^/]+/instructor/students/import/preview", path)
-                    if upload or csv_upload:
+                    exam_upload = re.fullmatch(r"/courses/[a-z0-9_-]{1,96}/instructor/exam-papers/ep_[A-Za-z0-9_-]+/upload", path)
+                    if upload or csv_upload or exam_upload:
                         if not facade.admin_upload_slots.acquire(blocking=False):
                             raise PlatformHTTPError(503, "upload_busy", "파일 처리 중입니다. 잠시 후 다시 시도하세요.")
                         try:
                             from .instructor_upload import InstructorUploadUnavailable, parse_instructor_upload
-                            limit = (5 if upload else 1) * 1024 * 1024
+                            from .exam_papers import MAX_PDF_BYTES
+                            limit = MAX_PDF_BYTES if exam_upload else (5 if upload else 1) * 1024 * 1024
                             body = self._read_body(expected_media_type="multipart/form-data", max_bytes=limit + 64 * 1024)
                             try:
                                 form = parse_instructor_upload(self.headers.get("Content-Type", ""), body, file_limit=limit)

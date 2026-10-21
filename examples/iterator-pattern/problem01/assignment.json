@@ -1,0 +1,121 @@
+{
+  "title": "Iterator — 실습 제출 기록 순회",
+  "description": "컬렉션의 내부 저장 구조와 독립된 Iterator로 제출 기록을 순회합니다. 각 Iterator는 생성 시점의 사본, 점수 필터, 독립된 위치를 유지합니다. 기능 자동채점 100점과 별도 구조 점검을 구분합니다.",
+  "language": "cpp",
+  "mode": "direct",
+  "platform": "windows",
+  "opens_at": null,
+  "due_at": null,
+  "result_policy": "immediate",
+  "negative_score": 0,
+  "tests": [
+    {
+      "title": "I1 · 삽입 순서에 따른 전체 기록",
+      "evaluation": "I1 · 삽입 순서: 서로 다른 ID의 같은 점수도 모두 보존하고 전체 기록을 등록 순서대로 한 번씩 반환하는지 확인합니다. 배점 10점.",
+      "hint": "반환된 기록의 순서 또는 내용이 요구사항과 다릅니다. SubmissionLog가 저장한 순서와 ScoreIterator의 position_ 이동을 분리해서 확인하세요. 점수나 식별자로 정렬하지 말고 snapshot_의 앞쪽부터 읽어야 합니다. ID가 다르면 점수가 같아도 별도 기록입니다. ADD zeta 40, ADD alpha 40 뒤 OPEN A 0으로 읽으면 두 기록이 등록 순서대로 나와야 합니다. 반환 전에 위치를 증가시키면 첫 항목을 놓칩니다. HINTS.md의 I1을 참고하세요.",
+      "input": "11\nADD zeta 40\nADD alpha 90\nADD middle 40\nADD tail 90\nOPEN A 0\nNEXT A\nNEXT A\nNEXT A\nNEXT A\nNEXT A\nSIZE\n",
+      "output": "OK ADD\nOK ADD\nOK ADD\nOK ADD\nOK OPEN\nITEM zeta 40\nITEM alpha 90\nITEM middle 40\nITEM tail 90\nEND\nSIZE 4\n",
+      "weight": 10,
+      "public": true
+    },
+    {
+      "title": "I2 · 기준 이상인 기록 선택",
+      "evaluation": "I2 · 점수 필터: 기준 점수와 같은 기록을 포함하고 처음·중간·끝의 연속된 기준 미만 기록을 모두 건너뛰는지 확인합니다. 배점 10점.",
+      "hint": "필터를 통과한 기록이나 순서가 다릅니다. 조건은 score >= minScore_이므로 건너뛰는 조건은 score < minScore_입니다. advanceToMatch는 한 항목만 검사하는 if가 아니라 연속된 미달 항목을 건너뛰는 반복이 필요합니다. 생성 직후뿐 아니라 매 NEXT의 위치 증가 뒤에도 이 처리를 적용하세요. 점수 50, 10, 20, 70, 30, 40을 기준 50으로 읽으면 50과 70만 남고 다음은 END입니다. HINTS.md의 I2를 참고하세요.",
+      "input": "17\nADD low1 20\nADD low2 49\nADD exact 50\nADD low3 10\nADD low3b 15\nADD high 100\nADD low4 30\nADD low4b 25\nADD good 75\nADD tail 40\nADD tail2 5\nOPEN A 50\nNEXT A\nNEXT A\nNEXT A\nNEXT A\nHAS A\n",
+      "output": "OK ADD\nOK ADD\nOK ADD\nOK ADD\nOK ADD\nOK ADD\nOK ADD\nOK ADD\nOK ADD\nOK ADD\nOK ADD\nOK OPEN\nITEM exact 50\nITEM high 100\nITEM good 75\nEND\nHAS 0\n",
+      "weight": 10,
+      "public": true
+    },
+    {
+      "title": "I3 · 조회는 항목을 소비하지 않음",
+      "evaluation": "I3 · HAS의 비소비성: 같은 위치에서 HAS를 반복해도 결과와 다음 NEXT가 반환할 기록이 바뀌지 않는지 확인합니다. 배점 10점.",
+      "hint": "HAS를 여러 번 호출했을 때 항목이 사라지거나 다음 기록이 달라졌습니다. hasNext는 현재 위치가 snapshot_ 범위 안에 있는지만 읽는 const 함수입니다. hasNext 안에서 next를 호출하거나 position_를 증가시키지 마세요. HAS A를 세 번 한 뒤 NEXT A를 실행해도 첫 번째 대상 기록을 반환해야 합니다. 마지막 항목 뒤 HAS를 반복하면 계속 HAS 0입니다. HINTS.md의 I3을 참고하세요.",
+      "input": "13\nADD first 60\nADD second 80\nOPEN A 50\nHAS A\nHAS A\nHAS A\nNEXT A\nHAS A\nHAS A\nNEXT A\nHAS A\nHAS A\nNEXT A\n",
+      "output": "OK ADD\nOK ADD\nOK OPEN\nHAS 1\nHAS 1\nHAS 1\nITEM first 60\nHAS 1\nHAS 1\nITEM second 80\nHAS 0\nHAS 0\nEND\n",
+      "weight": 10,
+      "public": true
+    },
+    {
+      "title": "종료 뒤의 안정된 반복 호출",
+      "evaluation": "I4 · NEXT와 종료: 한 번의 NEXT가 대상 기록 한 건만 소비하고 마지막 이후에는 계속 END를 반환하는지 확인합니다. 배점 10점.",
+      "hint": "NEXT의 진행 속도 또는 마지막 이후 결과가 다릅니다. 반환할 항목을 먼저 값으로 보관하고 position_를 한 번 증가시킨 뒤 필터에 맞지 않는 항목만 건너뛰세요. 끝에서는 배열에 접근하기 전에 std::nullopt를 반환해야 합니다. 끝에 도달했다고 위치를 0으로 돌리면 반복 END 대신 이전 기록이 다시 나옵니다. NEXT를 대상 기록 수보다 여러 번 더 실행해 확인하세요. HINTS.md의 I4를 참고하세요.",
+      "input": "13\nADD one 10\nADD two 20\nADD three 30\nOPEN A 0\nNEXT A\nNEXT A\nNEXT A\nNEXT A\nNEXT A\nHAS A\nNEXT A\nNEXT A\nSIZE\n",
+      "output": "OK ADD\nOK ADD\nOK ADD\nOK OPEN\nITEM one 10\nITEM two 20\nITEM three 30\nEND\nEND\nHAS 0\nEND\nEND\nSIZE 3\n",
+      "weight": 10,
+      "public": false
+    },
+    {
+      "title": "서로 다른 두 순회 상태",
+      "evaluation": "I5 · Iterator 독립성: A와 B가 각자의 위치와 필터를 보유하고 한쪽 NEXT·RESET이 다른 쪽 순회에 영향을 주지 않는지 확인합니다. 배점 10점.",
+      "hint": "A와 B를 번갈아 사용할 때 위치나 필터가 섞였습니다. position_와 minScore_는 Iterator 객체별 멤버여야 하며 static 또는 SubmissionLog의 공용 위치로 두면 안 됩니다. createIterator를 호출할 때마다 새 객체를 만드세요. A는 기준 0, B는 기준 80으로 열어 번갈아 NEXT를 호출한 뒤 A만 RESET해 보세요. A는 처음부터, B는 기존에 읽던 다음 기록부터 진행해야 합니다. HINTS.md의 I5를 참고하세요.",
+      "input": "18\nADD low 20\nADD top 90\nADD mid 60\nADD peak 100\nOPEN A 0\nOPEN B 80\nNEXT A\nNEXT B\nNEXT A\nRESET A\nNEXT B\nNEXT A\nNEXT A\nNEXT A\nHAS B\nNEXT A\nNEXT B\nHAS A\n",
+      "output": "OK ADD\nOK ADD\nOK ADD\nOK ADD\nOK OPEN\nOK OPEN\nITEM low 20\nITEM top 90\nITEM top 90\nOK RESET\nITEM peak 100\nITEM low 20\nITEM top 90\nITEM mid 60\nHAS 0\nITEM peak 100\nEND\nHAS 0\n",
+      "weight": 10,
+      "public": false
+    },
+    {
+      "title": "추가 시점별 사본 관찰",
+      "evaluation": "I6 · ADD 후 스냅샷: 이미 열린 Iterator는 새 기록을 보지 않고 나중에 생성한 Iterator만 변경된 목록을 보는지 확인합니다. 배점 10점.",
+      "hint": "OPEN 이후 추가한 기록이 기존 순회에 나타나거나 새 순회에서 누락되었습니다. 이 실습의 Iterator는 생성 당시 vector의 사본을 소유합니다. 원본 vector에 대한 포인터·참조를 저장하지 마세요. ADD → OPEN A → ADD → OPEN B 순서에서 A와 B의 목록 크기는 달라야 합니다. 이 규칙은 이 과제의 스냅샷 정책이며 모든 Iterator의 필수 동작은 아닙니다. HINTS.md의 I6을 참고하세요.",
+      "input": "15\nADD old 40\nOPEN A 0\nADD new 80\nNEXT A\nNEXT A\nOPEN B 0\nNEXT B\nADD later 95\nNEXT B\nNEXT B\nOPEN A 70\nNEXT A\nNEXT A\nNEXT A\nSIZE\n",
+      "output": "OK ADD\nOK OPEN\nOK ADD\nITEM old 40\nEND\nOK OPEN\nITEM old 40\nOK ADD\nITEM new 80\nEND\nOK OPEN\nITEM new 80\nITEM later 95\nEND\nSIZE 3\n",
+      "weight": 10,
+      "public": false
+    },
+    {
+      "title": "원본 삭제 후 사본 수명",
+      "evaluation": "I7 · CLEAR 후 스냅샷: 원본을 비워도 기존 순회를 유지하며 같은 식별자로 새로 등록한 기록과 이전 사본을 구분하는지 확인합니다. 배점 10점.",
+      "hint": "CLEAR 이후 기존 Iterator의 데이터가 사라지거나 재등록한 점수로 바뀌었습니다. Iterator는 원본의 요소 주소가 아니라 독립된 Submission 값들의 사본을 소유해야 합니다. CLEAR는 SubmissionLog의 records_만 비웁니다. 같은 id를 다시 ADD할 수 있지만 이미 생성한 Iterator는 이전 점수를 보존합니다. 사본의 수명이 원본 vector의 재할당·삭제에 의존하지 않는지 확인하세요. HINTS.md의 I7을 참고하세요.",
+      "input": "16\nADD repeat 50\nADD remain 70\nOPEN A 0\nNEXT A\nCLEAR\nSIZE\nADD repeat 95\nOPEN B 0\nNEXT A\nNEXT A\nNEXT B\nNEXT B\nRESET A\nNEXT A\nNEXT A\nSIZE\n",
+      "output": "OK ADD\nOK ADD\nOK OPEN\nITEM repeat 50\nOK CLEAR\nSIZE 0\nOK ADD\nOK OPEN\nITEM remain 70\nEND\nITEM repeat 95\nEND\nOK RESET\nITEM repeat 50\nITEM remain 70\nSIZE 1\n",
+      "weight": 10,
+      "public": false
+    },
+    {
+      "title": "비어 있는 순회 대상",
+      "evaluation": "I8 · 빈 순회: 빈 목록 또는 필터에 맞는 기록이 없는 목록에서도 OPEN이 성공하고 HAS 0·END를 안전하게 반복하는지 확인합니다. 배점 10점.",
+      "hint": "빈 목록이나 조건을 만족하는 기록이 없는 목록에서 결과가 다릅니다. OPEN은 대상이 없어도 정상 성공입니다. 생성 시 advanceToMatch가 position_ == snapshot_.size()에서 멈추도록 하고 hasNext는 이때 false를 반환하세요. NEXT와 RESET에서도 빈 배열의 첫 원소를 읽으면 안 됩니다. 비어 있는 Iterator가 열린 상태와 아직 OPEN하지 않은 상태는 서로 다릅니다. HINTS.md의 I8을 참고하세요.",
+      "input": "16\nOPEN A 0\nHAS A\nNEXT A\nNEXT A\nRESET A\nHAS A\nADD low 20\nOPEN B 90\nHAS B\nNEXT B\nADD high 100\nNEXT B\nHAS B\nOPEN A 100\nNEXT A\nNEXT A\n",
+      "output": "OK OPEN\nHAS 0\nEND\nEND\nOK RESET\nHAS 0\nOK ADD\nOK OPEN\nHAS 0\nEND\nOK ADD\nEND\nHAS 0\nOK OPEN\nITEM high 100\nEND\n",
+      "weight": 10,
+      "public": false
+    },
+    {
+      "title": "I9 · 같은 사본에서 다시 순회",
+      "evaluation": "I9 · RESET: 원본 변경과 관계없이 같은 스냅샷·같은 필터의 첫 대상부터 다시 순회하는지 확인합니다. 배점 5점.",
+      "hint": "RESET 후 첫 항목이나 필터가 바뀌었습니다. RESET은 position_를 0으로 되돌리고 advanceToMatch를 실행하는 작업입니다. 새 Iterator를 만들거나 현재 SubmissionLog를 복사하는 작업이 아닙니다. 기준보다 낮은 첫 항목이 있는 목록으로 열고 NEXT → RESET → NEXT를 비교하세요. 원본에 추가하거나 CLEAR한 뒤 RESET해도 최초 OPEN 시점의 데이터와 기준을 그대로 사용합니다. HINTS.md의 I9를 참고하세요.",
+      "input": "17\nADD low 30\nADD first 60\nADD second 90\nOPEN A 50\nNEXT A\nRESET A\nNEXT A\nADD later 100\nCLEAR\nNEXT A\nNEXT A\nRESET A\nHAS A\nNEXT A\nNEXT A\nNEXT A\nSIZE\n",
+      "output": "OK ADD\nOK ADD\nOK ADD\nOK OPEN\nITEM first 60\nOK RESET\nITEM first 60\nOK ADD\nOK CLEAR\nITEM second 90\nEND\nOK RESET\nHAS 1\nITEM first 60\nITEM second 90\nEND\nSIZE 0\n",
+      "weight": 5,
+      "public": true
+    },
+    {
+      "title": "선택한 슬롯만 교체",
+      "evaluation": "I10 · 재OPEN: 선택한 슬롯만 현재 목록·새 기준·첫 위치로 교체하고 다른 슬롯의 위치와 사본을 유지하는지 확인합니다. 배점 5점.",
+      "hint": "같은 슬롯을 다시 OPEN한 뒤 위치가 이어지거나 다른 슬롯까지 초기화되었습니다. 유효한 OPEN은 선택된 unique_ptr만 새 Iterator로 교체합니다. 이전 객체의 position_와 필터를 복사하지 마세요. A와 B를 열어 각각 한 항목을 읽은 다음 A만 다른 기준으로 다시 열어 보세요. A는 새 기준의 첫 대상, B는 기존 기준의 다음 대상을 반환해야 합니다. HINTS.md의 I10을 참고하세요.",
+      "input": "17\nADD low 20\nADD mid 80\nADD high 100\nOPEN A 0\nOPEN B 0\nNEXT A\nNEXT B\nADD newer 95\nOPEN A 90\nNEXT A\nNEXT B\nNEXT A\nNEXT B\nNEXT B\nOPEN A 0\nNEXT A\nHAS B\n",
+      "output": "OK ADD\nOK ADD\nOK ADD\nOK OPEN\nOK OPEN\nITEM low 20\nITEM low 20\nOK ADD\nOK OPEN\nITEM high 100\nITEM mid 80\nITEM newer 95\nITEM high 100\nEND\nOK OPEN\nITEM low 20\nHAS 0\n",
+      "weight": 5,
+      "public": false
+    },
+    {
+      "title": "허용 범위 양 끝값",
+      "evaluation": "I11 · 경계 점수: 기록 점수와 기준 점수에서 0과 100을 모두 허용하고 두 극단의 필터 결과가 정확한지 확인합니다. 배점 5점.",
+      "hint": "점수 0 또는 100에서 입력 거절이나 필터 결과가 다릅니다. 유효 범위는 양 끝을 포함한 0 <= score <= 100이며 기준 점수도 같습니다. 점수 0을 false나 미입력으로 취급하지 마세요. 기준 0은 모든 기록을, 기준 100은 정확히 100점인 기록을 포함합니다. NEXT가 반환한 optional의 존재 여부와 반환된 점수 값 0도 구분해야 합니다. HINTS.md의 I11을 참고하세요.",
+      "input": "14\nADD zero 0\nADD maximum 100\nADD middle 50\nOPEN A 0\nOPEN B 100\nNEXT A\nNEXT A\nNEXT A\nNEXT A\nNEXT B\nNEXT B\nRESET B\nNEXT B\nSIZE\n",
+      "output": "OK ADD\nOK ADD\nOK ADD\nOK OPEN\nOK OPEN\nITEM zero 0\nITEM maximum 100\nITEM middle 50\nEND\nITEM maximum 100\nEND\nOK RESET\nITEM maximum 100\nSIZE 3\n",
+      "weight": 5,
+      "public": false
+    },
+    {
+      "title": "실패 요청 전후의 상태 유지",
+      "evaluation": "I12 · 입력 검증과 원자성: 슬롯·미개방·점수·중복 오류를 구분하고 검사 우선순위를 지키며 실패한 요청이 기존 상태를 바꾸지 않는지 확인합니다. 배점 5점.",
+      "hint": "오류 종류 또는 오류 직후 상태가 다릅니다. ADD는 점수 범위를 중복 id보다 먼저 검사하고 OPEN은 슬롯을 기준 점수보다 먼저 검사합니다. HAS/NEXT/RESET은 슬롯이 맞아도 아직 OPEN하지 않았다면 ERROR unopened입니다. 검증을 모두 마친 후에만 원본을 추가하거나 선택 슬롯을 교체하세요. 실패한 OPEN 뒤 NEXT가 기존 사본의 다음 기록을 반환하는지 확인하세요. HINTS.md의 I12를 참고하세요.",
+      "input": "36\nHAS A\nNEXT B\nRESET A\nHAS C\nNEXT a\nRESET unknown\nOPEN C -1\nOPEN a 50\nOPEN A -1\nHAS A\nADD same 60\nADD next 80\nADD same -1\nADD same 101\nADD same 90\nADD bad -1000\nADD bad 1000\nSIZE\nOPEN A 0\nNEXT A\nOPEN A 101\nOPEN A -1000\nOPEN A 1000\nOPEN C 101\nNEXT A\nHAS A\nNEXT A\nADD later 70\nSIZE\nOPEN B 70\nNEXT B\nNEXT B\nNEXT B\nRESET B\nNEXT B\nSIZE\n",
+      "output": "ERROR unopened\nERROR unopened\nERROR unopened\nERROR slot\nERROR slot\nERROR slot\nERROR slot\nERROR slot\nERROR score\nERROR unopened\nOK ADD\nOK ADD\nERROR score\nERROR score\nERROR duplicate\nERROR score\nERROR score\nSIZE 2\nOK OPEN\nITEM same 60\nERROR score\nERROR score\nERROR score\nERROR slot\nITEM next 80\nHAS 0\nEND\nOK ADD\nSIZE 3\nOK OPEN\nITEM next 80\nITEM later 70\nEND\nOK RESET\nITEM next 80\nSIZE 3\n",
+      "weight": 5,
+      "public": false
+    }
+  ]
+}

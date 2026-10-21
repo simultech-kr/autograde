@@ -95,6 +95,7 @@ async function main() {
     for (const row of await page.getByTestId('result-row').all()) {
       assert.match(await row.getByTestId('current-score').innerText(), /^0\s*\/\s*100/);
       assert.match(await row.getByTestId('previous-best').innerText(), /100\s*\/\s*100/);
+      assert.match(await row.innerText(), /확인 필요/, 'attention is text, not colour alone');
     }
     check('Current zero remains distinct from previous best 100 in all 20 visible rows');
     const firstKeys = await page.getByTestId('result-row').evaluateAll(rows => rows.map(row => row.dataset.rowKey || row.textContent));
@@ -218,6 +219,28 @@ async function main() {
         const overflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
         assert.equal(overflow, false, `document overflows at ${width}px in ${mode}`);
         assert.equal(await page.getByTestId('result-row').count(), 20);
+        const flat = await page.locator('section[aria-label="제출 요약"]').evaluate(section => {
+          const parent = getComputedStyle(section);
+          return {
+            gap: parent.gap,
+            items: [...section.children].map(node => {
+              const style = getComputedStyle(node);
+              return {shadow: style.boxShadow, radius: style.borderRadius,
+                background: style.backgroundImage, left: style.borderLeftWidth, top: style.borderTopWidth};
+            }),
+          };
+        });
+        assert.equal(flat.gap, '0px');
+        assert.equal(flat.items.length, 4);
+        for (const item of flat.items) {
+          assert.equal(item.shadow, 'none');
+          assert.equal(item.radius, '0px');
+          assert.equal(item.background, 'none');
+        }
+        assert.deepEqual(flat.items.map(item => item.left), width < 768
+          ? ['0px', '1px', '0px', '1px'] : ['0px', '1px', '1px', '1px']);
+        assert.deepEqual(flat.items.map(item => item.top), width < 768
+          ? ['0px', '0px', '1px', '1px'] : ['0px', '0px', '0px', '0px']);
         await page.screenshot({path: path.join(output, `next-results-${mode}-${width}.png`), fullPage: true});
         if ((mode === 'light' && width === 1440) || (mode === 'dark' && width === 375)) {
           await page.evaluate(() => window.scrollTo(0, 0));
@@ -230,7 +253,61 @@ async function main() {
       }
     }
     check('320/375/768/1024/1440px light and dark captures have no page-level horizontal overflow');
+    check('Flat summary uses no shadows or rounded cards, with correct desktop/mobile dividers in both themes');
+
+    // Layout stress uses the same authenticated synthetic fixture with only
+    // display strings replaced. It does not change server or user data.
+    const longName = 'LongCourseStudentAssignmentName'.repeat(8);
+    const bootstrapPattern = '**/instructor/api/v1/bootstrap';
+    const longResultsPattern = '**/instructor/api/v1/courses/come2201/results*';
+    await page.route(bootstrapPattern, async route => {
+      const actual = await route.fetch();
+      const data = await actual.json();
+      data.principal.display_name = longName;
+      data.courses = data.courses.map(course => ({...course, name: longName}));
+      await route.fulfill({response: actual, json: data});
+    });
+    await page.route(longResultsPattern, async route => {
+      const actual = await route.fetch();
+      const data = await actual.json();
+      if (actual.status() === 200) {
+        data.assignments = data.assignments.map(assignment => ({...assignment, title: longName}));
+        data.rows = data.rows.map(row => ({...row, student_name: longName, title: longName}));
+      }
+      await route.fulfill({response: actual, json: data});
+    });
+    await page.goto(origin + '/app?course_key=come2201');
+    await page.getByTestId('result-row').first().waitFor();
+    assert.ok((await page.getByTestId('result-row').first().innerText()).includes(longName));
+    for (const width of [320, 375, 768, 1440]) {
+      await page.setViewportSize({width, height: 900});
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false,
+        `long display strings overflow at ${width}px`);
+      assert.equal(await page.locator('table[role="table"] tbody[role="rowgroup"] tr[role="row"]').count(), 20);
+      assert.equal(await page.locator('th[scope="row"][role="rowheader"]').count(), 20);
+    }
+    // Text enlargement is deliberately separate from devicePixelRatio: the
+    // latter changes raster density, not layout or readable text size.
+    await page.setViewportSize({width: 768, height: 900});
+    const normalCellFont = await page.locator('td[data-label="실습 과제"]').first().evaluate(node => parseFloat(getComputedStyle(node).fontSize));
+    await page.evaluate(() => { document.documentElement.style.fontSize = '200%'; });
+    const enlargedCellFont = await page.locator('td[data-label="실습 과제"]').first().evaluate(node => parseFloat(getComputedStyle(node).fontSize));
+    assert.equal(enlargedCellFont, normalCellFont * 2, 'result text must follow the user font size');
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false,
+      '200% text enlargement overflows');
+    await page.evaluate(() => { document.documentElement.style.removeProperty('font-size'); });
+    await page.unroute(bootstrapPattern);
+    await page.unroute(longResultsPattern);
+    await page.goto(origin + '/app?course_key=come2201');
+    await page.getByTestId('result-row').first().waitFor();
+    await page.keyboard.press('Tab');
+    assert.equal(await page.locator('.skip-link').evaluate(node => node === document.activeElement), true);
+    await page.keyboard.press('Enter');
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'main');
+    check('Long display strings, 200% root-font enlargement, semantic mobile rows and keyboard skip navigation remain usable');
+
     await page.emulateMedia({forcedColors: 'active'});
+    await page.setViewportSize({width: 1440, height: 1050});
     await page.evaluate(() => window.scrollTo(0, 0));
     await page.screenshot({path: path.join(output, 'next-results-forced-colors-1440-viewport.png'), fullPage: false});
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false);
@@ -282,6 +359,7 @@ async function main() {
     const report = {checks, screenshots: path.resolve(output), node: process.version, browser: browser.version(),
       limitations: ['Chrome automation with supplied test credentials does not validate native password-prompt UX.',
         'Loopback HTTP proxy is not the deployment Nginx/TLS configuration.',
+        'Root-font enlargement is not the browser native zoom setting.',
         'Safari and Edge fresh-profile Basic reuse remain unverified.',
         '401/403/409 checks use explicitly intercepted synthetic failures.']};
     fs.writeFileSync(path.join(output, 'browser-report.json'), JSON.stringify(report, null, 2) + '\n');

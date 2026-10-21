@@ -1,5 +1,6 @@
 """Exercise real two-listener process startup, rollback and signal shutdown."""
 from contextlib import ExitStack
+import base64
 import http.client
 import json
 from pathlib import Path
@@ -14,7 +15,8 @@ import pytest
 
 
 @pytest.mark.parametrize("blocked_web", [False, True])
-def test_launcher_lifecycle(tmp_path, blocked_web):
+@pytest.mark.parametrize("admin_enabled", [False, True])
+def test_launcher_lifecycle(tmp_path, blocked_web, admin_enabled):
     with ExitStack() as stack:
         sockets = [stack.enter_context(socket.socket()) for _ in range(2)]
         for sock in sockets:
@@ -28,7 +30,8 @@ def test_launcher_lifecycle(tmp_path, blocked_web):
         config = tmp_path / "pilot.csv"
         config.write_text(f"key,value\ncourse_key,come3105\ndata_root,state\n"
             f"public_base_url,http://127.0.0.1:{api_port}\nlisten,127.0.0.1\nport,{api_port}\n"
-            f"web_public_base_url,http://127.0.0.1:{web_port}\nweb_port,{web_port}\n")
+            f"web_public_base_url,http://127.0.0.1:{web_port}\nweb_port,{web_port}\n"
+            f"instructor_assignment_web_enabled,{str(admin_enabled).lower()}\n")
         roster = tmp_path / "student_roster.csv"
         roster.write_text("course_key,student_key,active,password\ncome3105,001234,true,042731\ncome2201,001234,true,072731\n")
         roster.chmod(0o600)
@@ -64,6 +67,23 @@ def test_launcher_lifecycle(tmp_path, blocked_web):
                     assert json.loads(response.read()) == {"status": "ready"}
                 finally:
                     connection.close()
+            # Exercise the real launcher composition, not only hand-built facades.
+            connection = http.client.HTTPConnection('127.0.0.1', web_port, timeout=5)
+            try:
+                connection.request('GET', '/courses/come2201/exam-papers')
+                response = connection.getresponse()
+                assert response.status == (200 if admin_enabled else 404)
+                body = response.read().decode()
+                if admin_enabled:
+                    assert '시험지 받기' in body and '/exam-papers/login' in body
+                    token = (tmp_path / 'state/platform-instructor-token').read_text().strip()
+                    auth = 'Basic ' + base64.b64encode(('instructor:' + token).encode()).decode()
+                    connection.request('GET', '/courses/come2201/instructor/exam-papers', headers={'Authorization': auth})
+                    response = connection.getresponse()
+                    assert response.status == 200
+                    assert '새 시험지 초안' in response.read().decode()
+            finally:
+                connection.close()
             # Verify initialization is actually usable through the new web listener.
             for course, password in (("come3105", "042731"), ("come2201", "072731")):
                 connection = http.client.HTTPConnection("127.0.0.1", web_port, timeout=5)

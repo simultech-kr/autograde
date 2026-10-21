@@ -33,3 +33,18 @@ def test_document_form_has_scoped_unicode_body_limit():
     assert "proxy_set_header X-Forwarded-Proto https;" in editor
     assert "client_max_body_size" not in rest
     assert "/document" not in api
+
+
+def test_exam_pdf_limit_is_scoped_to_authenticated_upload_only():
+    config = (Path(__file__).resolve().parents[2]
+              / "config/nginx-autograde-portal.conf.example").read_text()
+    web, api = config.split("server {")[1:]
+    prefix, location = web.split(
+        "location ~ ^/courses/[a-z0-9_-]+/instructor/exam-papers/ep_[A-Za-z0-9_-]+/upload$ {"
+    )
+    location = location.split('}', 1)[0]
+    assert 'client_max_body_size 64k;' in prefix
+    assert 'client_max_body_size 11m;' in location
+    assert 'proxy_request_buffering off;' in location
+    assert 'proxy_pass http://127.0.0.1:18081;' in location
+    assert 'exam-papers' not in api

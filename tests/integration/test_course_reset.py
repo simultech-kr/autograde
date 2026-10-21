@@ -8,10 +8,11 @@ from uuid import uuid4
 import pytest
 
 from autograde.course_reset import DOCUMENT_GUARD, GUARD, _digest, reset_course
+from autograde.exam_papers import ExamPaperService
 from autograde.pilot_roster import initialize_student_roster, initialize_web_roster
 from autograde.platform_cli import _exclusive_course_service_lock
 from autograde.platform_auth import verify_student_password
-from autograde.platform_state import PlatformStateStore
+from autograde.platform_state import PlatformAccessDenied, PlatformStateStore
 from autograde.settings import AppPaths
 from test_course_portal import (portal, claim, connect, request, BundleSubmissionProcessor,
                                PilotLocalGrader, WorkspaceBuilder)
@@ -118,7 +119,7 @@ def test_unexpected_cross_course_change_rolls_back_and_restores_guard(records):
     assert fingerprint(paths) == plan["expected_state"]
 
 
-@pytest.mark.parametrize('version', [10, 11, 12, 13, 14])
+@pytest.mark.parametrize('version', [10, 11, 12, 13, 14, 15, 16])
 def test_legacy_schema_reset_remains_supported(tmp_path, monkeypatch, version):
     import autograde.platform_state as module
     monkeypatch.setattr(module, '_LATEST_SCHEMA_VERSION', version)
@@ -342,3 +343,87 @@ def test_reset_actual_claims_submissions_preserves_other_course(portal, tmp_path
     with pytest.raises(Exception):
         services["come2201"].refresh_tokens({"refresh_token": tokens["come2201"]["refresh_token"]})
     assert artifact.path.exists()  # No shared source/artifact cleanup.
+
+
+def _exam_history(paths, state):
+    now = datetime(2026, 10, 17, 4, tzinfo=timezone.utc)
+    service = ExamPaperService(state, paths.root / "exam-papers", clock=lambda: now)
+    student_id = state.get_student_by_key("001").id
+    papers = {}
+    for course in ("come2201", "come3105"):
+        paper = service.create(course, title="Synthetic " + course, opens_at=now,
+                               closes_at=now + timedelta(hours=1), actor="synthetic-teacher")
+        paper = service.upload(course, paper["paper_id"], revision=paper["revision"],
+                               data=b"%PDF-1.4\nsynthetic exam\n%%EOF\n", actor="synthetic-teacher")
+        paper = service.publish(course, paper["paper_id"], revision=paper["revision"], actor="synthetic-teacher")
+        service.download(course, paper["paper_id"], student_id)
+        papers[course] = paper
+    service.download("come2201", papers["come2201"]["paper_id"], student_id)
+    return service, papers, student_id
+
+
+def test_migrated_v16_reset_preserves_exam_evidence_private_files_backup_and_other_course(tmp_path, monkeypatch):
+    import autograde.platform_state as module
+    # Start with the actual pre-exam schema and migrate a populated database.
+    paths = AppPaths.from_value(tmp_path / "data").ensure()
+    with monkeypatch.context() as patch:
+        patch.setattr(module, "_LATEST_SCHEMA_VERSION", 15)
+        state = PlatformStateStore(paths.database)
+        roster = tmp_path / "student_roster.csv"
+        roster.write_text("course_key,student_key,active,password\n"
+                          "come3105,001,true,183927\ncome2201,001,true,729461\n")
+        roster.chmod(0o600)
+        initialize_student_roster(state, roster)
+        assert state.schema_version() == 15
+    state = PlatformStateStore(paths.database)
+    assert state.schema_version() == 16
+    service, papers, student_id = _exam_history(paths, state)
+    preserved_tables = ("exam_papers", "exam_paper_audit", "exam_paper_requests")
+    with state._connection() as db:
+        preserved = {table: [tuple(row) for row in db.execute(f"SELECT * FROM {table} ORDER BY rowid")]
+                     for table in preserved_tables}
+        guards = [tuple(row) for row in db.execute("SELECT name,sql FROM sqlite_master WHERE type='trigger' ORDER BY name")]
+    files = {path.relative_to(paths.root): path.read_bytes() for path in service.root.iterdir()}
+    other_receipts = service.receipts("come3105", papers["come3105"]["paper_id"])
+    plan = reset_course(paths, "come2201")
+    assert not (set(preserved_tables) & set(plan["counts"]))
+    result = apply(paths, plan)
+    backup = Path(result["backup_directory"])
+    assert result["mode"] == "reset_complete"
+    with state._connection() as db:
+        for table, expected in preserved.items():
+            assert [tuple(row) for row in db.execute(f"SELECT * FROM {table} ORDER BY rowid")] == expected
+        assert [tuple(row) for row in db.execute("SELECT name,sql FROM sqlite_master WHERE type='trigger' ORDER BY name")] == guards
+        assert db.execute("PRAGMA foreign_key_check").fetchall() == []
+    with sqlite3.connect(backup / "state.sqlite3") as saved:
+        for table, expected in preserved.items():
+            assert saved.execute(f"SELECT * FROM {table} ORDER BY rowid").fetchall() == expected
+    for relative, content in files.items():
+        assert (paths.root / relative).read_bytes() == content
+        assert (backup / relative).read_bytes() == content
+        assert (backup / relative).stat().st_mode & 0o777 == 0o600
+    assert service.receipts("come3105", papers["come3105"]["paper_id"]) == other_receipts
+    receipt = service.receipts("come2201", papers["come2201"]["paper_id"])[0]
+    assert receipt["request_count"] == 2 and not receipt["active"]
+    with pytest.raises(PlatformAccessDenied):
+        service.download("come2201", papers["come2201"]["paper_id"], student_id)
+    # Existing reset semantics delete the course enrollment, not global identity.
+    # Re-registration explicitly restores access without resetting exam evidence.
+    state.upsert_enrollment(student_id=student_id, course_key="come2201")
+    service.download("come2201", papers["come2201"]["paper_id"], student_id)
+    receipt = service.receipts("come2201", papers["come2201"]["paper_id"])[0]
+    assert receipt["request_count"] == 3 and receipt["active"]
+
+
+def test_reset_rolls_back_incidental_exam_request_evidence_deletion(records):
+    paths, state, _ = records
+    service, papers, _ = _exam_history(paths, state)
+    with state._write() as db:
+        db.execute("CREATE TRIGGER synthetic_bad_exam_cleanup AFTER DELETE ON platform_student_passwords "
+                   "BEGIN DELETE FROM exam_paper_requests; END")
+    plan = reset_course(paths, "come2201")
+    with pytest.raises(ValueError, match="preservation"):
+        apply(paths, plan)
+    assert fingerprint(paths) == plan["expected_state"]
+    assert service.receipts("come2201", papers["come2201"]["paper_id"])[0]["request_count"] == 2
+    assert service.receipts("come3105", papers["come3105"]["paper_id"])[0]["request_count"] == 1

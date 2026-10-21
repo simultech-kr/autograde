@@ -72,7 +72,7 @@ RESPONSIVE_CSS = """
  .result-table caption{display:block}
  .result-table thead{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
  .result-table tbody{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));gap:16px}
- .result-table tbody tr{display:block;min-width:0;border:1px solid var(--border);border-radius:10px;background:var(--surface);padding:8px 12px}
+ .result-table tbody tr{display:block;min-width:0;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);padding:8px 12px;box-shadow:none}
  .result-table th,.result-table td{display:grid;grid-template-columns:minmax(0,7rem) minmax(0,1fr);gap:12px;padding:10px 0;font-weight:400}
  .result-table tbody th{font-weight:600}
  .result-table .cell-label{display:block;color:var(--muted);font-size:.9rem}
