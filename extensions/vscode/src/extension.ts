@@ -13,6 +13,7 @@ import {
   TokenManager,
 } from "./api";
 import { AssignmentClaimController } from "./assignmentClaim";
+import { AssignmentOperationGate, confirmWorkspaceSwitch } from "./assignmentOperation";
 import { AssignmentDocumentState } from "./assignmentDocument";
 import { AssignmentDocumentView, ASSIGNMENT_DOCUMENT_SCHEME } from "./assignmentDocumentView";
 import { AuthenticationController } from "./auth";
@@ -226,15 +227,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
   });
   const assignmentClaims = new AssignmentClaimController(client, extensionVersion, async (assignmentId) => {
+    const origin = transport.getBaseUrl();
+    const generation = tokens.getSessionGeneration();
+    const current = () => origin === transport.getBaseUrl() && generation === tokens.getSessionGeneration();
+    clearResultPanel();
     diagnosticTargets.clear();
     clearWorkspaceSelection(true);
     documentView.clear();
     resultMonitor.cancel();
     clearDownloadDiagnostic();
-    clearResultPanel();
     studentState = clearStudentSessionResidue(studentState, treeProvider, output, diagnostics);
     await updateAuthenticationUI(true);
+    if (!current()) return;
     const assignments = await refreshAssignments(false);
+    if (!current()) return;
     const accepted = assignmentId
       ? assignments.find((assignment) => assignment.id === assignmentId)
       : undefined;
@@ -282,6 +288,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     () => auth.signOut(),
     clearSessionUiForAddressChange,
   );
+  const assignmentOperations = new AssignmentOperationGate();
+  const runAssignmentCommand = (action: () => Promise<unknown>): Promise<void> => runCommand(() =>
+    assignmentOperations.run(action, () => {
+      void vscode.window.showInformationMessage("수령 코드 입력 또는 과제 작업이 진행 중입니다. 열린 입력창이나 진행 알림에서 완료·취소한 뒤 다시 선택하세요.");
+    }),
+  );
+  const redeemAssignmentClaim = async (): Promise<void> => {
+    ensureSupportedWorkspacePlatform("수령 코드 입력 및 다운로드");
+    if (!await prepareClaimWorkspace(context.globalState)) return;
+    if (!vscode.workspace.isTrusted) {
+      throw new Error("수령 코드로 파일을 받으려면 현재 workspace를 신뢰해야 합니다.");
+    }
+    await assignmentClaims.redeem();
+  };
 
   context.subscriptions.push(
     learningHome,
@@ -290,7 +310,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     documentView,
     treeProvider.onDidChangeTreeData(() => documentView.reconcileAccepted()),
     vscode.workspace.registerTextDocumentContentProvider(ASSIGNMENT_DOCUMENT_SCHEME, documentView),
-    vscode.commands.registerCommand("autograde.viewAssignmentDocument", (item?: AssignmentTreeItem) => runCommand(async () => {
+    vscode.commands.registerCommand("autograde.viewAssignmentDocument", (item?: AssignmentTreeItem) => runAssignmentCommand(async () => {
       const candidates = treeProvider.getAssignments().filter(isBundleAssignment);
       const requested = item?.assignment ?? (candidates.length === 1 ? candidates[0] : await pickAssignment(candidates));
       const assignment = treeProvider.getAssignments().find(candidate => candidate.id === requested?.id && isBundleAssignment(candidate));
@@ -309,56 +329,57 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     diagnostics,
     vscode.commands.registerCommand(
       "autograde.configureServiceAddress",
-      () => runCommand(() => serviceAddresses.configure()),
+      () => runAssignmentCommand(() => serviceAddresses.configure()),
     ),
     vscode.commands.registerCommand(
       CHECK_SERVER_CONNECTION_COMMAND,
       () => runCommand(() => connectionMonitor.checkNow()),
     ),
-    vscode.commands.registerCommand("autograde.signIn", () => runCommand(() => auth.signIn())),
+    vscode.commands.registerCommand("autograde.signIn", () => runAssignmentCommand(() => auth.signIn())),
     vscode.commands.registerCommand("autograde.signOut", () => runCommand(() => auth.signOut())),
     vscode.commands.registerCommand(
       "autograde.redeemAssignmentClaim",
-      () => runCommand(async () => {
-        ensureSupportedWorkspacePlatform("수령 코드 입력 및 다운로드");
-        if (!await prepareClaimWorkspace(context.globalState)) return;
-        if (!vscode.workspace.isTrusted) {
-          throw new Error("수령 코드로 파일을 받으려면 현재 workspace를 신뢰해야 합니다.");
-        }
-        await assignmentClaims.redeem();
-      }),
+      () => runAssignmentCommand(redeemAssignmentClaim),
     ),
     vscode.commands.registerCommand("autograde.refreshAssignments", () => runCommand(() => refreshAssignments())),
-    vscode.commands.registerCommand("autograde.acceptedAssignmentHistory", () => runCommand(() => showAcceptedAssignments(client,
+    vscode.commands.registerCommand("autograde.acceptedAssignmentHistory", () => runAssignmentCommand(() => showAcceptedAssignments(client,
       async id => {
         const assignment = treeProvider.getAssignments().find(candidate => candidate.id === id);
         if (!assignment) throw new Error("현재 연결된 과제 목록을 새로고침한 뒤 다시 시도하세요.");
         await openExistingAssignment(client, treeProvider, assignmentWorkspaces, new AssignmentTreeItem(assignment));
       },
-      async () => { await vscode.commands.executeCommand("autograde.redeemAssignmentClaim"); },
+      async () => { await redeemAssignmentClaim(); },
     ))),
     vscode.commands.registerCommand(
       "autograde.cloneAssignment",
-      (item?: AssignmentTreeItem) => runCommand(() => cloneAssignment(client, treeProvider, refreshAssignments, item, assignmentWorkspaces)),
+      (item?: AssignmentTreeItem) => runAssignmentCommand(() => cloneAssignment(client, treeProvider, refreshAssignments, item, assignmentWorkspaces)),
     ),
     vscode.commands.registerCommand(
       "autograde.openAssignment",
-      (item?: AssignmentTreeItem) => runCommand(() => openExistingAssignment(client, treeProvider, assignmentWorkspaces, item)),
+      (item?: AssignmentTreeItem) => runAssignmentCommand(() => openExistingAssignment(client, treeProvider, assignmentWorkspaces, item)),
     ),
-    vscode.commands.registerCommand("autograde.openCourseWorkspace", () => runCommand(async () => {
+    vscode.commands.registerCommand("autograde.openCourseWorkspace", () => runAssignmentCommand(async () => {
       const target = assignmentWorkspaces.selected;
       if (!target) throw new Error("기존 과제 열기로 과제 폴더를 먼저 연결하세요.");
+      const origin = transport.getBaseUrl();
+      const generation = tokens.getSessionGeneration();
+      const current = () => origin === transport.getBaseUrl() && generation === tokens.getSessionGeneration();
       const uri = bundleRootUri(assignmentWorkspaces, target.rootPath);
       const course = await courseDirectory(target.rootPath);
+      if (!current()) return;
       const action = "수업 폴더로 전환";
-      if (await vscode.window.showInformationMessage("탐색기와 빌드의 작업 영역을 수업 폴더로 바꿉니다.", {
-        modal: true, detail: `${course}\n\n창이 다시 열리면서 메모리의 로그인은 종료됩니다. 새 수령 코드로 다시 연결한 뒤 기존 과제 이어서 열기를 선택하세요. 저장하지 않은 파일은 VS Code의 저장 안내를 따라 주세요.`,
-      }, action) !== action) return;
-      await vscode.commands.executeCommand("vscode.openFolder", vscode.Uri.joinPath(uri, path.relative(target.rootPath, course)), false);
+      await confirmWorkspaceSwitch({
+        isCurrent: current,
+        validate: () => validateExistingAssignment(target.rootPath, origin, target.assignment.id),
+        confirm: async () => await vscode.window.showInformationMessage("탐색기와 빌드의 작업 영역을 수업 폴더로 바꿉니다.", {
+          modal: true, detail: `${course}\n\n창이 다시 열리면서 메모리의 로그인은 종료됩니다. 새 수령 코드로 다시 연결한 뒤 기존 과제 이어서 열기를 선택하세요. 저장하지 않은 파일은 VS Code의 저장 안내를 따라 주세요.`,
+        }, action) === action,
+        open: async () => { await vscode.commands.executeCommand("vscode.openFolder", vscode.Uri.joinPath(uri, path.relative(target.rootPath, course)), false); },
+      });
     })),
     vscode.commands.registerCommand(
       "autograde.submitCurrentCommit",
-      (item?: AssignmentTreeItem) => runCommand(async () => {
+      (item?: AssignmentTreeItem) => runAssignmentCommand(async () => {
         if (submitting) {
           void vscode.window.showInformationMessage("앞선 제출의 접수를 확인하고 있습니다. 접수번호가 표시된 뒤 다시 제출하세요.");
           return;
@@ -370,11 +391,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     ),
     vscode.commands.registerCommand(
       "autograde.submissionHistory",
-      (item?: AssignmentTreeItem) => runCommand(() => viewSubmissionHistory(studentState, client, treeProvider, output, diagnostics, resultUi, assignmentWorkspaces, item)),
+      (item?: AssignmentTreeItem) => runAssignmentCommand(() => viewSubmissionHistory(studentState, client, treeProvider, output, diagnostics, resultUi, assignmentWorkspaces, item)),
     ),
     vscode.commands.registerCommand(
       "autograde.viewLatestResult",
-      (item?: AssignmentTreeItem) => runCommand(() => viewLatestResult(studentState, client, treeProvider, output, diagnostics, resultUi, item)),
+      (item?: AssignmentTreeItem) => runAssignmentCommand(() => viewLatestResult(studentState, client, treeProvider, output, diagnostics, resultUi, item)),
     ),
     treeView.onDidChangeSelection(event => {
       const selected = event.selection[0];
@@ -736,8 +757,10 @@ async function viewSubmissionHistory(
   diagnostics: vscode.DiagnosticCollection, resultUi: ResultUi, workspaces: AssignmentWorkspaces, item?: AssignmentTreeItem,
 ): Promise<void> {
   const origin = client.getBaseUrl();
+  const generation = client.tokens.getSessionGeneration?.();
+  const current = () => studentState.isActive() && client.getBaseUrl() === origin && client.tokens.getSessionGeneration?.() === generation;
   const checkSession = () => {
-    if (!studentState.isActive() || client.getBaseUrl() !== origin) {
+    if (!current()) {
       throw new Error("로그인 또는 서버가 변경되었습니다. 제출 기록을 다시 여세요.");
     }
   };
@@ -800,7 +823,8 @@ async function viewSubmissionHistory(
     throw error;
   }
   const restoredUri = vscode.Uri.joinPath(folders[0], path.relative(folders[0].fsPath, target));
-  await connectAssignmentFolder(workspaces, restoredUri, assignment);
+  await connectAssignmentFolder(workspaces, restoredUri, assignment, current);
+  if (!current()) return;
   void vscode.window.showInformationMessage(`복원 완료: ${target}. 이 폴더를 제출 대상으로 연결했습니다. 과제 제출에서 확인 후 다시 제출할 수 있습니다.`);
 }
 
@@ -815,11 +839,15 @@ async function cloneAssignment(
     throw new Error("과제를 다운로드하거나 clone하려면 현재 workspace를 신뢰해야 합니다.");
   }
   ensureSupportedWorkspacePlatform("과제 다운로드");
+  const origin = client.transport.getBaseUrl();
+  const generation = client.tokens.getSessionGeneration?.();
+  const current = () => origin === client.transport.getBaseUrl() && generation === client.tokens.getSessionGeneration?.();
 
   let assignments = treeProvider.getAssignments();
   if (assignments.length === 0) {
     assignments = await refreshAssignments(false);
   }
+  if (!current()) return;
   const readyAssignments = assignments.filter(isAssignmentDownloadable);
   let assignment = selectedItem?.assignment;
   if (assignment && !readyAssignments.some((candidate) => candidate.id === assignment?.id)) {
@@ -831,7 +859,7 @@ async function cloneAssignment(
     }
     assignment = readyAssignments.length === 1 ? readyAssignments[0] : await pickAssignment(readyAssignments);
   }
-  if (!assignment) {
+  if (!assignment || !current()) {
     return;
   }
 
@@ -860,7 +888,7 @@ async function cloneAssignment(
     title: `${assignment.title} clone 위치 선택`,
   });
   const parentUri = folders?.[0];
-  if (!parentUri) {
+  if (!parentUri || !current()) {
     return;
   }
   const targetUri = vscode.Uri.joinPath(parentUri, directoryName);
@@ -882,6 +910,7 @@ async function cloneAssignment(
       cancellable: true,
     },
     async (_progress, token) => {
+      if (!current()) return;
       const controller = new AbortController();
       const subscription = token.onCancellationRequested(() => controller.abort());
       try {
@@ -908,7 +937,7 @@ async function cloneAssignment(
       }
     },
   );
-  await vscode.commands.executeCommand("vscode.openFolder", targetUri, true);
+  if (current()) await vscode.commands.executeCommand("vscode.openFolder", targetUri, true);
 }
 
 async function downloadBundleAssignment(
@@ -945,7 +974,7 @@ async function downloadBundleAssignment(
       canSelectMany: false, openLabel: "이 과제 이어서 열기" }))?.[0],
     resume: async uri => {
       await validateExistingAssignment(uri.fsPath, origin, assignment.id);
-      if (current()) await connectAssignmentFolder(workspaces, uri, assignment);
+      if (current()) await connectAssignmentFolder(workspaces, uri, assignment, current);
     },
     download: () => downloadFreshBundleAssignment(client, assignment, workspaces),
   });
@@ -1059,7 +1088,8 @@ async function downloadFreshBundleAssignment(
   try {
     checkSession(); diagnostic.stage = "opening";
     rememberAssignmentFolder(workspaces, targetUri, assignment);
-    await revealDownloadedBundle(targetUri, targetPath);
+    await revealDownloadedBundle(targetUri, targetPath, current);
+    if (!current()) return;
     diagnostic.openOutcome = "opened";
   } catch (error) {
     if (!current()) return;
@@ -1129,6 +1159,8 @@ async function selectBundleSubmissionTarget(
 
   const preferred = preferredSubmissionRoot(matches, workspaces.selected?.rootPath);
   if (preferred) return preferred;
+  const lostSelection = workspaces.selected !== undefined &&
+    !matches.some(candidate => candidate.rootPath === workspaces.selected?.rootPath);
   const picked = await vscode.window.showQuickPick(
     matches.map((candidate) => ({
       label: candidate.assignment.title,
@@ -1136,7 +1168,9 @@ async function selectBundleSubmissionTarget(
       detail: candidate.rootPath,
       candidate,
     })),
-    { placeHolder: "제출할 과제 폴더를 선택하세요." },
+    { placeHolder: lostSelection
+      ? "이전에 연결한 폴더를 찾지 못했습니다. 다른 사본을 자동 제출하지 않습니다. 현재 답안 폴더를 확인해 선택하세요."
+      : "제출할 과제 폴더를 선택하세요." },
   );
   return picked?.candidate ?? null;
 }
@@ -1170,9 +1204,10 @@ function rememberAssignmentFolder(workspaces: AssignmentWorkspaces, uri: vscode.
   workspaces.status.show();
 }
 
-async function connectAssignmentFolder(workspaces: AssignmentWorkspaces, uri: vscode.Uri, assignment: Assignment): Promise<void> {
+async function connectAssignmentFolder(workspaces: AssignmentWorkspaces, uri: vscode.Uri, assignment: Assignment, isCurrent: () => boolean): Promise<void> {
+  if (!isCurrent()) return;
   rememberAssignmentFolder(workspaces, uri, assignment);
-  await revealDownloadedBundle(uri, uri.fsPath);
+  await revealDownloadedBundle(uri, uri.fsPath, isCurrent);
 }
 
 async function openExistingAssignment(
@@ -1182,28 +1217,33 @@ async function openExistingAssignment(
   if (!vscode.workspace.isTrusted) throw new Error("기존 과제를 열려면 현재 workspace를 신뢰해야 합니다.");
   const origin = client.transport.getBaseUrl();
   const generation = client.tokens.getSessionGeneration?.();
+  const current = () => origin === client.transport.getBaseUrl() && generation === client.tokens.getSessionGeneration?.();
   const assignments = tree.getAssignments().filter(isBundleAssignment);
+  if (!assignments.length) throw new Error("학생 웹에서 제출할 과제의 새 수령 코드를 받아 먼저 연결하세요. 기존 작업 파일은 다시 받지 않아도 됩니다.");
   const assignment = item ? assignments.find(candidate => candidate.id === item.assignment.id)
     : assignments.length === 1 ? assignments[0] : await pickAssignment(assignments);
-  if (!assignment) throw new Error("학생 웹에서 제출할 과제의 새 수령 코드를 받아 먼저 연결하세요. 기존 작업 파일은 다시 받지 않아도 됩니다.");
+  // Dismissing a valid assignment chooser is cancellation, not an authentication failure.
+  if (!assignment && !item) return;
+  if (!assignment) throw new Error("선택한 과제가 현재 연결된 목록에 없습니다. 과제 새로고침 후 다시 선택하세요.");
+  if (!current()) return;
   const candidates = await discoverAuthenticatedBundleRoots(await bundleResumeRoots(workspaces),
     vscode.window.activeTextEditor?.document.uri.fsPath, origin, new Set([assignment.id]));
+  if (!current()) return;
   const choice = await vscode.window.showQuickPick([
     ...candidates.map(candidate => ({ label: path.basename(candidate.rootPath), description: candidate.rootPath, rootPath: candidate.rootPath })),
     { label: "다른 위치에서 기존 과제 폴더 선택…", description: "다운로드한 과제 폴더를 직접 선택", rootPath: undefined },
   ], { title: `${assignment.title} 이어서 열기` });
-  if (!choice) return;
+  if (!choice || !current()) return;
   const uri = choice.rootPath ? bundleRootUri(workspaces, choice.rootPath) : (await vscode.window.showOpenDialog({
     canSelectFolders: true, canSelectFiles: false, canSelectMany: false, openLabel: "이 과제 이어서 열기",
   }))?.[0];
   if (!uri) return;
-  const current = () => origin === client.transport.getBaseUrl() && generation === client.tokens.getSessionGeneration?.();
   if (!current()) {
     throw new Error("연결된 과제가 변경되었습니다. 기존 과제 열기를 다시 실행하세요.");
   }
   await validateExistingAssignment(uri.fsPath, origin, assignment.id);
   if (!current()) return;
-  await connectAssignmentFolder(workspaces, uri, assignment);
+  await connectAssignmentFolder(workspaces, uri, assignment, current);
 }
 
 async function selectCourseWorkspaceFolder(
@@ -1227,8 +1267,8 @@ async function selectCourseWorkspaceFolder(
   return picked?.folder;
 }
 
-async function revealDownloadedBundle(targetUri: vscode.Uri, targetPath: string): Promise<void> {
-  await revealAssignmentFolder(targetUri, targetPath);
+async function revealDownloadedBundle(targetUri: vscode.Uri, targetPath: string, isCurrent: () => boolean): Promise<void> {
+  await revealAssignmentFolder(targetUri, targetPath, isCurrent);
 }
 
 async function pathExists(candidate: string): Promise<boolean> {

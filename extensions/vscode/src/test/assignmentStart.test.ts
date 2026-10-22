@@ -67,3 +67,31 @@ test("multiple copies require selection and moved external folder can resume wit
   await startAssignment({ ...base, existing: [], chooseAction: async () => "choose" });
   assert.deepEqual(selected, ["a-copy", "moved-a"]);
 });
+
+test("an already stale session never opens a selector and empty or unknown actions do nothing", async () => {
+  const unexpected = async (): Promise<never> => { throw new Error("unexpected selector or mutation"); };
+  const actions: AssignmentStartActions<string> = {
+    existing: [], chooseAction: unexpected, isCurrent: () => false,
+    chooseExisting: unexpected, selectFolder: unexpected, resume: unexpected, download: unexpected,
+  };
+  await startAssignment(actions);
+  await startAssignment({ ...actions, isCurrent: () => true, chooseAction: async () => "resume" });
+  await startAssignment({ ...actions, isCurrent: () => true, chooseAction: async () => "unexpected" as "resume" });
+});
+
+test("session changes during copy selection and rejected resume never fall back to a fresh download", async () => {
+  let current = true;
+  let resumed = 0;
+  let downloaded = 0;
+  const actions: AssignmentStartActions<string> = {
+    existing: ["old", "new"], chooseAction: async () => "resume", isCurrent: () => current,
+    chooseExisting: async folders => { current = false; return folders[1]; }, selectFolder: async () => undefined,
+    resume: async () => { resumed++; throw new Error("folder was moved"); }, download: async () => { downloaded++; },
+  };
+  await startAssignment(actions);
+  assert.equal(resumed, 0);
+  current = true;
+  await assert.rejects(startAssignment({ ...actions, chooseExisting: async folders => folders[1] }), /folder was moved/);
+  assert.equal(resumed, 1);
+  assert.equal(downloaded, 0);
+});

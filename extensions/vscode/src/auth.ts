@@ -153,9 +153,12 @@ export class AuthenticationController {
 
   public async signOut(): Promise<boolean> {
     if (!(await this.client.tokens.hasSession())) {
+      // Even a guest may have a claim exchange in flight. Advance its identity
+      // boundary so the late token response cannot sign the student back in.
+      await this.client.tokens.clear();
       this.onAuthenticationChanged(false);
       void vscode.window.showInformationMessage(
-        "현재 Autograde 로그인 세션이 없습니다. 남아 있던 채점 화면을 지웠습니다.",
+        "현재 Autograde 로그인 세션이 없습니다. 진행 중인 수령 연결을 중단하고 남아 있던 채점 화면을 지웠습니다.",
       );
       return true;
     }

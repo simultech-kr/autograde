@@ -5,6 +5,7 @@ import test from "node:test";
 
 import { ApiError, type ApiTransport, type AutogradeClient, RequestCancelledError, TokenManager } from "../api";
 import { OperationCancelledError } from "../deviceAuth";
+import { AssignmentWorkspaceError, assignmentWorkspaceErrorMessage, type AssignmentWorkspaceErrorCode } from "../assignmentWorkspace";
 import type { DeviceTokenPollOptions } from "../deviceAuth";
 import type { AssignmentClaim, DeviceAuthorization, TokenResponse } from "../types";
 
@@ -18,10 +19,15 @@ let inputResponses: Array<string | undefined> = [];
 let inputCalls: Array<Record<string, unknown>> = [];
 let progressCalls: Array<Record<string, unknown>> = [];
 let informationCalls: unknown[][] = [];
+let inputInterceptor: (() => Promise<string | undefined>) | undefined;
+const cancellationListeners = new Set<() => void>();
 
 const cancellationToken = {
   isCancellationRequested: false,
-  onCancellationRequested: (_listener: () => void) => ({ dispose: () => undefined }),
+  onCancellationRequested: (listener: () => void) => {
+    cancellationListeners.add(listener);
+    return { dispose: () => { cancellationListeners.delete(listener); } };
+  },
 };
 
 const vscodeStub = {
@@ -31,6 +37,7 @@ const vscodeStub = {
   window: {
     showInputBox: async (options: Record<string, unknown>) => {
       inputCalls.push(options);
+      if (inputInterceptor) return inputInterceptor();
       return inputResponses.shift();
     },
     showInformationMessage: async (...args: unknown[]) => {
@@ -181,12 +188,10 @@ test("claim flow cannot install returned tokens if the origin flips at the store
   inputResponses = ["AK1-2345-6789-ABCD"];
   const originalOrigin = "https://grade.example.edu";
   const changedOrigin = "https://other-grade.example.edu";
-  let originReads = 0;
+  let activeOrigin = originalOrigin;
+  let stores = 0;
   const transport = {
-    getBaseUrl: () => {
-      originReads += 1;
-      return originReads <= 3 ? originalOrigin : changedOrigin;
-    },
+    getBaseUrl: () => activeOrigin,
     request: async () => { throw new Error("unexpected request"); },
     requestBytes: async () => { throw new Error("unexpected request"); },
   } as unknown as ApiTransport;
@@ -194,7 +199,11 @@ test("claim flow cannot install returned tokens if the origin flips at the store
   let callbacks = 0;
   const client = {
     transport,
-    tokens,
+    tokens: { storeSession: async (response: TokenResponse, expectedBaseUrl: string) => {
+      stores += 1;
+      activeOrigin = changedOrigin;
+      await tokens.storeSession(response, expectedBaseUrl);
+    } },
     createDeviceAuthorization: async () => DEVICE,
     redeemAssignmentClaim: async () => CLAIM,
   } as unknown as AutogradeClient;
@@ -210,13 +219,13 @@ test("claim flow cannot install returned tokens if the origin flips at the store
     (error: unknown) => error instanceof ApiError && error.code === "login_required",
   );
 
-  assert.equal(originReads, 4);
+  assert.equal(stores, 1);
   assert.equal(await tokens.hasSession(), false);
   assert.equal(callbacks, 0);
 });
 
 test("closing or invalidating the prompt performs no device or redemption request", async () => {
-  for (const entered of [undefined, "short"] as const) {
+  for (const entered of [undefined, "", " \t\n ", "short"] as const) {
     resetUi();
     inputResponses = [entered];
     let requests = 0;
@@ -233,7 +242,7 @@ test("closing or invalidating the prompt performs no device or redemption reques
     if (entered === undefined) {
       await controller.redeem();
     } else {
-      await assert.rejects(controller.redeem(), /AK1-XXXX-XXXX-XXXX/);
+      await assert.rejects(controller.redeem(), entered.trim() ? /AK1-XXXX-XXXX-XXXX/ : /수령 코드를 입력하세요/);
     }
     assert.equal(requests, 0);
   }
@@ -494,8 +503,265 @@ test("malformed device authorization has a safe preparation-stage response error
   await assert.rejects(controller.redeem(), /기기 연결 준비[\s\S]*invalid_response/);
 });
 
+test("duplicate invocation cannot replace the active input or submit its code twice", async () => {
+  resetUi(); const input = deferred<string | undefined>(); inputInterceptor = () => input.promise;
+  let requests = 0; let redemptions = 0; let stores = 0;
+  const controller = new AssignmentClaimController(baseClient({
+    createDeviceAuthorization: async () => { requests += 1; return DEVICE; },
+    redeemAssignmentClaim: async () => { redemptions += 1; return CLAIM; },
+    storeSession: async () => { stores += 1; },
+  }), "0.5.7", async () => undefined, async () => TOKENS);
+  const first = controller.redeem();
+  await controller.redeem();
+  assert.equal(inputCalls.length, 1); assert.equal(requests, 0);
+  assert.match(String(informationCalls[0]?.[0]), /이미 진행/);
+  input.resolve("AK1-2345-6789-ABCD"); await first;
+  assert.equal(requests, 1); assert.equal(redemptions, 1); assert.equal(stores, 1);
+  inputInterceptor = undefined; inputResponses = ["AK1-2345-6789-ABCD"];
+  await controller.redeem();
+  assert.equal(inputCalls.length, 2); assert.equal(redemptions, 2);
+});
+
+test("duplicate invocation during a pending redemption cannot start another prompt or request", async () => {
+  resetUi(); inputResponses = ["AK1-2345-6789-ABCD"];
+  const response = deferred<AssignmentClaim>(); const started = deferred<void>(); let redemptions = 0;
+  const controller = new AssignmentClaimController(baseClient({
+    redeemAssignmentClaim: async () => { redemptions += 1; started.resolve(); return response.promise; },
+  }), "0.5.7", async () => undefined, async () => TOKENS);
+  const first = controller.redeem(); await started.promise;
+  await controller.redeem();
+  assert.equal(inputCalls.length, 1); assert.equal(redemptions, 1);
+  response.resolve(CLAIM); await first;
+});
+
+test("all prompt, error and cancellation exits release the claim guard for an explicit retry", async () => {
+  for (const scenario of ["empty", "closed", "server", "cancelled"] as const) {
+    resetUi(); inputResponses = [scenario === "empty" ? "" : scenario === "closed" ? undefined : "AK1-2345-6789-ABCD"];
+    let shouldFail = scenario === "server" || scenario === "cancelled"; let callbacks = 0;
+    const controller = new AssignmentClaimController(baseClient({ createDeviceAuthorization: async () => {
+      if (shouldFail) {
+        shouldFail = false;
+        throw scenario === "cancelled" ? new RequestCancelledError() : new ApiError("private", 500, "internal_error");
+      }
+      return DEVICE;
+    } }), "0.5.7", async () => { callbacks += 1; }, async () => TOKENS);
+    if (scenario === "closed") await controller.redeem();
+    else await assert.rejects(controller.redeem());
+    inputResponses = ["AK1-2345-6789-ABCD"];
+    await controller.redeem();
+    assert.equal(inputCalls.length, 2); assert.equal(callbacks, 1);
+  }
+});
+
+test("expired or already-used codes stop before polling and never reopen an empty prompt automatically", async () => {
+  for (const stage of ["device", "redeem"] as const) {
+    for (const [status, code] of [[401, "invalid_grant"], [400, "expired_token"], [403, "assignment_claim_denied"]] as const) {
+      resetUi(); inputResponses = ["AK1-2345-6789-ABCD"];
+      const fail = async (): Promise<never> => { throw new ApiError("private expired/used code", status, code); };
+      const controller = new AssignmentClaimController(baseClient({
+        ...(stage === "device" ? { createDeviceAuthorization: fail } : { redeemAssignmentClaim: fail }),
+        storeSession: async () => { assert.fail("must not store session"); },
+      }), "0.5.7", async () => { assert.fail("must not resume assignment"); },
+      async () => { assert.fail("must not poll denied device"); });
+      await assert.rejects(controller.redeem(), (error: unknown) => {
+        assert.ok(error instanceof ApiError); assert.equal(error.code, code);
+        assert.match(error.message, /새.*코드/); assert.doesNotMatch(error.message, /private/);
+        return true;
+      });
+      assert.equal(inputCalls.length, 1); assert.equal(progressCalls.length, 1);
+    }
+  }
+});
+
+test("a cancellation before, during or after preparation cannot advance into redeem or token storage", async () => {
+  for (const when of ["before", "device", "redeem", "lost-response", "token"] as const) {
+    resetUi(); inputResponses = ["AK1-2345-6789-ABCD"];
+    if (when === "before") cancellationToken.isCancellationRequested = true;
+    let creates = 0; let redeems = 0; let polls = 0;
+    const controller = new AssignmentClaimController(baseClient({
+      createDeviceAuthorization: async () => { creates += 1; if (when === "device") cancelProgress(); return DEVICE; },
+      redeemAssignmentClaim: async () => {
+        redeems += 1;
+        if (when === "redeem" || when === "lost-response") cancelProgress();
+        if (when === "lost-response") throw new ApiError("private lost response", 0, "network_error");
+        return CLAIM;
+      },
+      storeSession: async () => { assert.fail("cancelled work must not install tokens"); },
+    }), "0.5.7", async () => { assert.fail("cancelled work must not resume assignment"); }, async () => {
+      polls += 1; if (when === "token") cancelProgress(); return TOKENS;
+    });
+    await assert.rejects(controller.redeem(), (error: unknown) => error instanceof CancellationError);
+    assert.equal(creates, when === "before" ? 0 : 1);
+    assert.equal(redeems, when === "before" || when === "device" ? 0 : 1);
+    assert.equal(polls, when === "token" ? 1 : 0);
+    assert.equal(cancellationListeners.size, 0);
+  }
+});
+
+test("origin changes at input, preparation, redemption and polling stop all later stages", async () => {
+  for (const when of ["input", "device", "redeem", "token"] as const) {
+    resetUi(); let origin = "https://grade.example.edu";
+    const changeOrigin = () => { origin = "https://other-grade.example.edu"; };
+    inputInterceptor = async () => { if (when === "input") changeOrigin(); return "AK1-2345-6789-ABCD"; };
+    let creates = 0; let redeems = 0; let polls = 0;
+    const client = baseClient({
+      getBaseUrl: () => origin,
+      createDeviceAuthorization: async () => { creates += 1; if (when === "device") changeOrigin(); return DEVICE; },
+      redeemAssignmentClaim: async () => { redeems += 1; if (when === "redeem") changeOrigin(); return CLAIM; },
+      storeSession: async () => { assert.fail("must not install session for a changed origin"); },
+    });
+    const controller = new AssignmentClaimController(client, "0.5.7", async () => { assert.fail("must not open stale assignment"); },
+      async () => { polls += 1; if (when === "token") changeOrigin(); return TOKENS; });
+    await assert.rejects(controller.redeem(), (error: unknown) => error instanceof ApiError && error.code === "login_required");
+    assert.equal(creates, when === "input" ? 0 : 1);
+    assert.equal(redeems, when === "input" || when === "device" ? 0 : 1);
+    assert.equal(polls, when === "token" ? 1 : 0);
+  }
+});
+
+test("device preparation network failure does not try redeeming or recovering an uncreated authorization", async () => {
+  resetUi(); inputResponses = ["AK1-2345-6789-ABCD"];
+  const controller = new AssignmentClaimController(baseClient({
+    createDeviceAuthorization: async () => { throw new ApiError("private network payload", 0, "network_error"); },
+    redeemAssignmentClaim: async () => { assert.fail("device preparation failed"); },
+  }), "0.5.7", async () => { assert.fail("device preparation failed"); }, async () => { assert.fail("device preparation failed"); });
+  await assert.rejects(controller.redeem(), /기기 연결 준비[\s\S]*network_error/);
+  assert.equal(inputCalls.length, 1); assert.equal(progressCalls.length, 1);
+});
+
+test("typed local folder failures keep their fixed guidance without exposing mutable error details", async () => {
+  for (const code of ["folder_unavailable", "marker_invalid", "different_server", "different_assignment", "active_assignment_mismatch"] as const) {
+    resetUi(); inputResponses = ["AK1-2345-6789-ABCD"];
+    const failure = new AssignmentWorkspaceError(code);
+    failure.message = "private student identity AK1-2345-6789-ABCD /private/student-folder";
+    await assert.rejects(failingController("assignment", failure).redeem(), (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.match(error.message, /기존 과제 폴더 확인/);
+      assert.ok(error.message.includes(assignmentWorkspaceErrorMessage(code)));
+      assert.doesNotMatch(error.message, /private|AK1-2345-6789-ABCD|과제 새로고침/);
+      assert.equal(error.cause, undefined);
+      return true;
+    });
+  }
+});
+
+test("unknown typed workspace codes cannot smuggle secrets through claim guidance", async () => {
+  resetUi(); inputResponses = ["AK1-2345-6789-ABCD"];
+  const failure = new AssignmentWorkspaceError("AK1-2345-6789-ABCD" as AssignmentWorkspaceErrorCode);
+  await assert.rejects(failingController("assignment", failure).redeem(), (error: unknown) => {
+    assert.ok(error instanceof Error); assert.match(error.message, /기존 과제 폴더 확인/);
+    assert.doesNotMatch(error.message, /AK1-2345-6789-ABCD/);
+    return true;
+  });
+});
+
+test("same-origin logout or identity replacement cannot resurrect an in-flight claim session", async () => {
+  for (const change of ["logout", "replace"] as const) {
+    for (const when of ["input", "device", "redeem", "lost-response", "token"] as const) {
+      resetUi(); const baseUrl = "https://grade.example.edu";
+      const transport = { getBaseUrl: () => baseUrl } as ApiTransport;
+      const tokens = new TokenManager(transport);
+      await tokens.storeSession(TOKENS, baseUrl);
+      const otherTokens: TokenResponse = { ...TOKENS, access_token: "other-student-access", refresh_token: "other-student-refresh" };
+      const changeIdentity = async () => {
+        if (change === "logout") await tokens.clear();
+        else await tokens.storeSession(otherTokens, baseUrl);
+      };
+      inputInterceptor = async () => { if (when === "input") await changeIdentity(); return "AK1-2345-6789-ABCD"; };
+      let installs = 0; let callbacks = 0; let creates = 0; let redemptions = 0; let polls = 0;
+      const client = {
+        transport,
+        tokens: {
+          getSessionGeneration: () => tokens.getSessionGeneration(),
+          storeSession: async (response: TokenResponse, expectedBaseUrl: string) => {
+            installs += 1; await tokens.storeSession(response, expectedBaseUrl);
+          },
+        },
+        createDeviceAuthorization: async () => { creates += 1; if (when === "device") await changeIdentity(); return DEVICE; },
+        redeemAssignmentClaim: async () => {
+          redemptions += 1;
+          if (when === "redeem" || when === "lost-response") await changeIdentity();
+          if (when === "lost-response") throw new ApiError("private lost response", 0, "network_error");
+          return CLAIM;
+        },
+      } as unknown as AutogradeClient;
+      const controller = new AssignmentClaimController(client, "0.5.8", async () => { callbacks += 1; }, async () => {
+        polls += 1; if (when === "token") await changeIdentity(); return TOKENS;
+      });
+      await assert.rejects(controller.redeem(), (error: unknown) => error instanceof ApiError && error.code === "login_required");
+      assert.equal(installs, 0); assert.equal(callbacks, 0);
+      assert.equal(creates, when === "input" ? 0 : 1);
+      assert.equal(redemptions, when === "input" || when === "device" ? 0 : 1);
+      assert.equal(polls, when === "token" ? 1 : 0);
+      if (change === "logout") assert.equal(await tokens.hasSession(), false);
+      else assert.equal(await tokens.getAccessToken(), otherTokens.access_token);
+    }
+  }
+});
+
+test("a token poll checks the captured identity before sending another exchange request", async () => {
+  resetUi(); inputResponses = ["AK1-2345-6789-ABCD"];
+  const baseUrl = "https://grade.example.edu";
+  const transport = { getBaseUrl: () => baseUrl } as ApiTransport;
+  const tokens = new TokenManager(transport);
+  let exchanges = 0; let callbacks = 0;
+  const client = {
+    transport, tokens,
+    createDeviceAuthorization: async () => DEVICE, redeemAssignmentClaim: async () => CLAIM,
+    exchangeDeviceCode: async () => { exchanges += 1; return TOKENS; },
+  } as unknown as AutogradeClient;
+  const controller = new AssignmentClaimController(client, "0.5.8", async () => { callbacks += 1; }, async options => {
+    await tokens.clear();
+    return options.exchange(options.deviceCode, new AbortController().signal);
+  });
+  await assert.rejects(controller.redeem(), (error: unknown) => error instanceof ApiError && error.code === "login_required");
+  assert.equal(exchanges, 0); assert.equal(callbacks, 0); assert.equal(await tokens.hasSession(), false);
+});
+
+test("own synchronous session installation is allowed but a following logout or replacement blocks assignment UI", async () => {
+  for (const afterStore of ["unchanged", "logout", "replace"] as const) {
+    resetUi(); inputResponses = ["AK1-2345-6789-ABCD"];
+    const baseUrl = "https://grade.example.edu";
+    const transport = { getBaseUrl: () => baseUrl } as ApiTransport;
+    const tokens = new TokenManager(transport);
+    const otherTokens: TokenResponse = { ...TOKENS, access_token: "newer-student-access", refresh_token: "newer-student-refresh" };
+    let callbacks = 0;
+    const client = {
+      transport,
+      tokens: {
+        getSessionGeneration: () => tokens.getSessionGeneration(),
+        storeSession: (response: TokenResponse, expectedBaseUrl: string) => {
+          const installation = tokens.storeSession(response, expectedBaseUrl);
+          return installation.then(async () => {
+            if (afterStore === "logout") await tokens.clear();
+            if (afterStore === "replace") await tokens.storeSession(otherTokens, baseUrl);
+          });
+        },
+      },
+      createDeviceAuthorization: async () => DEVICE, redeemAssignmentClaim: async () => CLAIM,
+    } as unknown as AutogradeClient;
+    const controller = new AssignmentClaimController(client, "0.5.8", async () => { callbacks += 1; }, async () => TOKENS);
+    if (afterStore === "unchanged") {
+      await controller.redeem(); assert.equal(callbacks, 1);
+      assert.equal(await tokens.getAccessToken(), TOKENS.access_token);
+    } else {
+      await assert.rejects(controller.redeem(), (error: unknown) => error instanceof ApiError && error.code === "login_required");
+      assert.equal(callbacks, 0);
+      if (afterStore === "logout") assert.equal(await tokens.hasSession(), false);
+      else assert.equal(await tokens.getAccessToken(), otherTokens.access_token);
+    }
+  }
+});
+
+function deferred<T>(): { promise: Promise<T>; resolve(value: T): void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>(complete => { resolve = complete; });
+  return { promise, resolve };
+}
+
 interface ClientOverrides {
   readonly baseUrl?: string;
+  readonly getBaseUrl?: () => string;
   readonly storeSession?: (tokens: TokenResponse, expectedBaseUrl: string) => Promise<void>;
   readonly createDeviceAuthorization?: AutogradeClient["createDeviceAuthorization"];
   readonly redeemAssignmentClaim?: AutogradeClient["redeemAssignmentClaim"];
@@ -503,7 +769,7 @@ interface ClientOverrides {
 
 function baseClient(overrides: ClientOverrides = {}): AutogradeClient {
   return {
-    transport: { getBaseUrl: () => overrides.baseUrl ?? "https://grade.example.edu" },
+    transport: { getBaseUrl: overrides.getBaseUrl ?? (() => overrides.baseUrl ?? "https://grade.example.edu") },
     tokens: { storeSession: overrides.storeSession ?? (async () => undefined) },
     createDeviceAuthorization:
       overrides.createDeviceAuthorization ?? (async () => DEVICE),
@@ -518,4 +784,12 @@ function resetUi(): void {
   inputCalls = [];
   progressCalls = [];
   informationCalls = [];
+  inputInterceptor = undefined;
+  cancellationToken.isCancellationRequested = false;
+  cancellationListeners.clear();
+}
+
+function cancelProgress(): void {
+  cancellationToken.isCancellationRequested = true;
+  for (const listener of cancellationListeners) listener();
 }

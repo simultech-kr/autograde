@@ -35,6 +35,7 @@ const vscodeStub = {
   },
   Uri: { parse: (value: string) => value },
   window: {
+    showInputBox: async () => "AK1-2345-6789-ABCD",
     showWarningMessage: async (...args: unknown[]) => {
       warningCalls.push(args);
       return warningResponses.shift();
@@ -61,6 +62,7 @@ moduleLoader._load = function loadWithVscodeStub(
   return request === "vscode" ? vscodeStub : originalLoad.call(this, request, parent, isMain);
 };
 const { AuthenticationController } = require("../auth") as typeof import("../auth");
+const { AssignmentClaimController } = require("../assignmentClaim") as typeof import("../assignmentClaim");
 moduleLoader._load = originalLoad;
 
 test("offline sign-out can explicitly clear only local credentials", async () => {
@@ -93,9 +95,10 @@ test("explicit sign-out revokes the current server session", async () => {
   informationResponses = [];
   informationCalls = [];
   let revoked = 0;
+  let clearedBeforeRevoke = 0;
   const authenticationChanges: boolean[] = [];
   const client = {
-    tokens: { hasSession: async () => true },
+    tokens: { hasSession: async () => true, clear: async () => { clearedBeforeRevoke += 1; } },
     revokeCurrentSession: async () => { revoked += 1; },
   } as unknown as AutogradeClient;
   const controller = new AuthenticationController(
@@ -107,6 +110,7 @@ test("explicit sign-out revokes the current server session", async () => {
   await controller.signOut();
 
   assert.equal(revoked, 1);
+  assert.equal(clearedBeforeRevoke, 0);
   assert.deepEqual(authenticationChanges, [false]);
 });
 
@@ -115,9 +119,10 @@ test("sign-out clears student UI state even after the in-memory session was alre
   informationResponses = [];
   informationCalls = [];
   let revoked = 0;
+  let cleared = 0;
   const authenticationChanges: boolean[] = [];
   const client = {
-    tokens: { hasSession: async () => false },
+    tokens: { hasSession: async () => false, clear: async () => { cleared += 1; } },
     revokeCurrentSession: async () => { revoked += 1; },
   } as unknown as AutogradeClient;
   const controller = new AuthenticationController(
@@ -129,8 +134,42 @@ test("sign-out clears student UI state even after the in-memory session was alre
   await controller.signOut();
 
   assert.equal(revoked, 0);
+  assert.equal(cleared, 1);
   assert.deepEqual(authenticationChanges, [false]);
   assert.match(String(informationCalls[0]?.[0] ?? ""), /채점 화면을 지웠습니다/);
+});
+
+test("guest sign-out invalidates a pending first claim before its late token response arrives", async () => {
+  warningResponses = []; informationResponses = []; informationCalls = [];
+  const baseUrl = "https://grade.example.edu";
+  const transport = { getBaseUrl: () => baseUrl } as ApiTransport;
+  const tokens = new TokenManager(transport);
+  const initialGeneration = tokens.getSessionGeneration();
+  let revoked = 0; let accepted = 0;
+  const authenticationChanges: boolean[] = [];
+  const client = {
+    transport, tokens,
+    createDeviceAuthorization: async () => ({ device_code: "test-device", user_code: "TEST", expires_in: 60 }),
+    redeemAssignmentClaim: async () => ({ assignmentId: "test-assignment" }),
+    revokeCurrentSession: async () => { revoked += 1; },
+  } as unknown as AutogradeClient;
+  let started!: () => void;
+  const pollingStarted = new Promise<void>(resolve => { started = resolve; });
+  let respond!: (response: TokenResponse) => void;
+  const response = new Promise<TokenResponse>(resolve => { respond = resolve; });
+  const claim = new AssignmentClaimController(client, "0.5.8", async () => { accepted += 1; }, async () => {
+    started(); return response;
+  });
+  const pendingClaim = claim.redeem();
+  await pollingStarted;
+  assert.equal(await tokens.hasSession(), false);
+  const auth = new AuthenticationController(client, "0.5.8", value => { authenticationChanges.push(value); });
+  assert.equal(await auth.signOut(), true);
+  assert.notEqual(tokens.getSessionGeneration(), initialGeneration);
+  respond({ access_token: "late-test-access", refresh_token: "late-test-refresh", expires_in: 300 });
+  await assert.rejects(pendingClaim, (error: unknown) => error instanceof ApiError && error.code === "login_required");
+  assert.equal(await tokens.hasSession(), false); assert.equal(revoked, 0); assert.equal(accepted, 0);
+  assert.deepEqual(authenticationChanges, [false]);
 });
 
 test("repeated sign-in revokes the current session before creating a new authorization", async () => {

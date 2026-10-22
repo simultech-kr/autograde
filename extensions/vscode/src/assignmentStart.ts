@@ -12,9 +12,12 @@ export interface AssignmentStartActions<T> {
 
 /** The same post-claim route handles first use, restart, fresh copies, and cancellation. */
 export async function startAssignment<T>(actions: AssignmentStartActions<T>): Promise<void> {
+  if (!actions.isCurrent()) return;
   const action = await actions.chooseAction(actions.existing.length > 0);
   if (!action || !actions.isCurrent()) return;
   if (action === "download") { await actions.download(); return; }
+  if (action !== "choose" && action !== "resume") return;
+  if (action === "resume" && actions.existing.length === 0) return;
   const folder = action === "choose" ? await actions.selectFolder()
     : actions.existing.length === 1 ? actions.existing[0] : await actions.chooseExisting(actions.existing);
   if (folder === undefined || !actions.isCurrent()) return;

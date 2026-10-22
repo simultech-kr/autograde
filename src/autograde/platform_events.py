@@ -18,7 +18,8 @@ from typing import Optional
 _EVENT_NAME = re.compile(r"[a-z][a-z0-9_]{0,63}\Z")
 _COMPONENT_NAME = re.compile(r"[a-z][a-z0-9_]{0,31}\Z")
 _EXCEPTION_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,127}\Z")
-_SUBMISSION_ID = re.compile(r"sub_[A-Za-z0-9._:-]{1,123}\Z")
+# Git and bundle receipts share the existing 127-character upper bound.
+_SUBMISSION_ID = re.compile(r"(?:sub_[A-Za-z0-9._:-]{1,123}|bsub_[A-Za-z0-9._:-]{1,122})\Z")
 _WRITE_LOCK = threading.Lock()
 
 

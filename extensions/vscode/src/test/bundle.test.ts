@@ -23,6 +23,24 @@ import {
   readWorkspaceMarker,
   writeWorkspaceMarker,
 } from "../bundle";
+import { classifyDownloadError } from "../downloadDiagnostic";
+
+test("a pre-existing edited target is preserved and reported as a folder collision, not a corrupt archive", async () => {
+  const parent = await temporaryDirectory();
+  const target = path.join(parent, "existing-assignment");
+  try {
+    await mkdir(target);
+    await writeFile(path.join(target, "main.cpp"), "// student's edited answer\n");
+    const archive = await makeProtocolArchive([{ name: "main.cpp", content: "// starter" }], "starter");
+    await assert.rejects(extractStarterBundle(archive, target), error => {
+      assert.equal(classifyDownloadError(error, "installing"), "AG-DL-LOCAL-EXISTS");
+      return true;
+    });
+    assert.equal(await readFile(path.join(target, "main.cpp"), "utf8"), "// student's edited answer\n");
+  } finally {
+    await rm(parent, { recursive: true, force: true });
+  }
+});
 
 test("submission bundle is deterministic and excludes metadata and build trees", async () => {
   const root = await temporaryDirectory();

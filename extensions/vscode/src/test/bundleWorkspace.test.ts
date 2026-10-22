@@ -246,20 +246,23 @@ test("bundle download wiring cannot replace the current VS Code workspace", asyn
   const downloadFunction = extensionSource.slice(downloadStart, downloadEnd);
   assert.doesNotMatch(downloadFunction, /vscode\.openFolder/);
   assert.doesNotMatch(downloadFunction, /updateWorkspaceFolders/);
-  assert.match(downloadFunction, /revealDownloadedBundle\(targetUri, targetPath\)/);
+  assert.match(downloadFunction, /revealDownloadedBundle\(targetUri, targetPath, current\)/);
   const openStart = extensionSource.indexOf("async function revealDownloadedBundle(");
   const openEnd = extensionSource.indexOf("async function pathExists(", openStart);
   assert.ok(openStart >= 0 && openEnd > openStart);
-  assert.match(extensionSource.slice(openStart, openEnd), /revealAssignmentFolder\(targetUri, targetPath\)/);
+  assert.match(extensionSource.slice(openStart, openEnd), /revealAssignmentFolder\(targetUri, targetPath, isCurrent\)/);
   const openFunction = await readFile(path.resolve(__dirname, "../../src/assignmentFolderView.ts"), "utf8");
   assert.match(openFunction, /executeCommand\("workbench.view.explorer"\)/);
   assert.match(openFunction, /executeCommand\("revealInExplorer", previewUri\)/);
   assert.match(openFunction, /vscode.Uri.joinPath\(targetUri, path.basename\(preview\)\)/);
   assert.match(openFunction, /showTextDocument\(document, \{ preview: true \}\)/);
   assert.doesNotMatch(openFunction, /revealFileInOS|Uri.file|rm\(/);
-  const afterOpen = downloadFunction.slice(downloadFunction.indexOf("await revealDownloadedBundle(targetUri, targetPath)"));
+  const afterOpenIndex = downloadFunction.indexOf("await revealDownloadedBundle(targetUri, targetPath, current)");
+  assert.ok(afterOpenIndex >= 0);
+  const afterOpen = downloadFunction.slice(afterOpenIndex);
   assert.match(afterOpen, /파일은 보존됩니다/);
   assert.doesNotMatch(afterOpen, /rm\(/);
+  assert.match(afterOpen, /if \(!current\(\)\) return/);
 
   const submitStart = extensionSource.indexOf("async function submitCurrentBundle(");
   const submitEnd = extensionSource.indexOf("async function cloneAssignment(", submitStart);

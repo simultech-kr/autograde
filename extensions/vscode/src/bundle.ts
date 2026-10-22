@@ -176,7 +176,7 @@ async function extractBundle(
   }
   const target = path.resolve(targetDirectory);
   if (await exists(target)) {
-    throw new Error("과제 다운로드 대상 경로가 이미 존재합니다.");
+    throw Object.assign(new Error("과제 다운로드 대상 경로가 이미 존재합니다."), { code: "EEXIST" });
   }
 
   let tarBytes: Buffer;
@@ -227,7 +227,7 @@ async function extractBundle(
       await chmod(destination, entry.executable ? 0o700 : 0o600);
     }
     if (await exists(target)) {
-      throw new Error("과제 다운로드 중 대상 경로가 생성되어 설치를 중단했습니다.");
+      throw Object.assign(new Error("과제 다운로드 중 대상 경로가 생성되어 설치를 중단했습니다."), { code: "EEXIST" });
     }
     await rename(temp, target);
     installed = true;

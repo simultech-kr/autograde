@@ -43,8 +43,15 @@ test("result panel is read-only and clears at authentication and address boundar
   assert.match(panel, /localResourceRoots: \[\]/);
   assert.match(extension, /\{ dispose: clearResultPanel \}/);
   assert.match(extension, /if \(!authenticated\) \{ resultMonitor.cancel\(\); clearResultPanel\(\); clearDownloadDiagnostic\(\); documentView.clear\(\); \}/);
-  for (const start of ["new AuthenticationController", "new AssignmentClaimController", "const clearSessionUiForAddressChange"]) {
-    assert.match(extension.slice(extension.indexOf(start), extension.indexOf(start) + 280), /clearResultPanel\(\)/);
+  for (const [start, end] of [
+    ["new AuthenticationController", "const assignmentClaims"],
+    ["new AssignmentClaimController", "const clearSessionUiForAddressChange"],
+    ["const clearSessionUiForAddressChange", "const serviceAddresses"],
+  ] as const) {
+    const begin = extension.indexOf(start);
+    const finish = extension.indexOf(end, begin);
+    assert.ok(begin >= 0 && finish > begin);
+    assert.match(extension.slice(begin, finish), /clearResultPanel\(\)/);
   }
 });
 test("result refresh and pause controls use only fixed allowlisted commands and escaped notices", () => {

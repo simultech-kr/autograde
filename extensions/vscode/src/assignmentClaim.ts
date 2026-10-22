@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as vscode from "vscode";
 
 import { ApiError, AutogradeClient, RequestCancelledError } from "./api";
+import { AssignmentWorkspaceError, assignmentWorkspaceErrorMessage } from "./assignmentWorkspace";
 import {
   type DeviceTokenPollOptions,
   OperationCancelledError,
@@ -46,6 +47,8 @@ interface PreparedAssignmentClaim {
  * reference is cleared before the resulting session is installed.
  */
 export class AssignmentClaimController {
+  private redeemInProgress = false;
+
   public constructor(
     private readonly client: AutogradeClient,
     private readonly extensionVersion: string,
@@ -54,7 +57,27 @@ export class AssignmentClaimController {
   ) {}
 
   public async redeem(): Promise<void> {
+    if (this.redeemInProgress) {
+      void vscode.window.showInformationMessage("과제 수령을 이미 진행하고 있습니다. 현재 수령 코드 입력창 또는 진행 알림을 먼저 확인하세요.");
+      return;
+    }
+    this.redeemInProgress = true;
+    try {
+      await this.redeemOnce();
+    } finally {
+      this.redeemInProgress = false;
+    }
+  }
+
+  private async redeemOnce(): Promise<void> {
     const serviceBaseUrl = this.client.transport.getBaseUrl();
+    let sessionGeneration = this.client.tokens.getSessionGeneration?.();
+    const ensureCurrentSession = (): void => {
+      if (this.client.transport.getBaseUrl() !== serviceBaseUrl ||
+        this.client.tokens.getSessionGeneration?.() !== sessionGeneration) {
+        throw new ApiError("authentication context changed", 401, "login_required");
+      }
+    };
     if (isInsecureHttpPilotUrl(serviceBaseUrl)) {
       throw new Error(
         "과제 수령 코드는 암호화되지 않은 사설망 HTTP 서버로 보낼 수 없습니다. HTTPS 서버 주소를 설정한 뒤 다시 시도하세요.",
@@ -100,6 +123,8 @@ export class AssignmentClaimController {
             controller.abort();
           }
           try {
+            throwIfClaimCancelled(cancellationToken);
+            ensureCurrentSession();
             const authorization = await this.client.createDeviceAuthorization(
               deviceName,
               this.extensionVersion,
@@ -107,10 +132,9 @@ export class AssignmentClaimController {
               serviceBaseUrl,
               ephemeralClaimCode,
             );
+            throwIfClaimCancelled(cancellationToken);
+            ensureCurrentSession();
             validatePendingDeviceAuthorization(authorization);
-            if (this.client.transport.getBaseUrl() !== serviceBaseUrl) {
-              throw new ApiError("service address changed", 401, "login_required");
-            }
             stage = "redeem";
             try {
               const claim = await this.client.redeemAssignmentClaim(
@@ -119,8 +143,12 @@ export class AssignmentClaimController {
                 controller.signal,
                 serviceBaseUrl,
               );
+              throwIfClaimCancelled(cancellationToken);
+              ensureCurrentSession();
               return { authorization, claim, recoveringFromLostResponse: false };
             } catch (error) {
+              throwIfClaimCancelled(cancellationToken);
+              ensureCurrentSession();
               if (isUncertainRedemptionResponse(error)) {
                 return { authorization, recoveringFromLostResponse: true };
               }
@@ -139,6 +167,7 @@ export class AssignmentClaimController {
     }
 
     try {
+      ensureCurrentSession();
       const tokens = await vscode.window.withProgress(
         {
           location: vscode.ProgressLocation.Notification,
@@ -148,17 +177,17 @@ export class AssignmentClaimController {
           cancellable: true,
         },
         async (progress, cancellationToken) => {
-          return await this.tokenPoller({
+          throwIfClaimCancelled(cancellationToken);
+          const tokenResponse = await this.tokenPoller({
             deviceCode: prepared.authorization.device_code,
             expiresInSeconds: prepared.authorization.expires_in,
             initialIntervalSeconds:
               prepared.authorization.poll_interval ?? prepared.authorization.interval ?? 1,
             cancellationToken,
-            exchange: (deviceCode, signal) => this.client.exchangeDeviceCode(
-              deviceCode,
-              signal,
-              serviceBaseUrl,
-            ),
+            exchange: (deviceCode, signal) => {
+              ensureCurrentSession();
+              return this.client.exchangeDeviceCode(deviceCode, signal, serviceBaseUrl);
+            },
             onProgress: (remainingSeconds) => {
               progress.report({
                 message: prepared.recoveringFromLostResponse
@@ -167,13 +196,18 @@ export class AssignmentClaimController {
               });
             },
           });
+          throwIfClaimCancelled(cancellationToken);
+          return tokenResponse;
         },
       );
 
-      if (this.client.transport.getBaseUrl() !== serviceBaseUrl) {
-        throw new ApiError("service address changed", 401, "login_required");
-      }
-      await this.client.tokens.storeSession(tokens, serviceBaseUrl);
+      ensureCurrentSession();
+      // TokenManager replaces credentials and advances identity synchronously. Capture only
+      // that own transition before yielding, then reject logout/replacement during the await.
+      const installation = this.client.tokens.storeSession(tokens, serviceBaseUrl);
+      sessionGeneration = this.client.tokens.getSessionGeneration?.();
+      await installation;
+      ensureCurrentSession();
     } catch (error) {
       throw claimStageError("session", error, prepared.recoveringFromLostResponse);
     }
@@ -183,6 +217,7 @@ export class AssignmentClaimController {
       );
     }
     try {
+      ensureCurrentSession();
       await this.onRedeemed(prepared.claim?.assignmentId);
     } catch (error) {
       throw claimStageError("assignment", error);
@@ -231,9 +266,17 @@ function isUncertainRedemptionResponse(error: unknown): boolean {
   ]).has(error.code ?? "");
 }
 
+function throwIfClaimCancelled(token: { readonly isCancellationRequested: boolean }): void {
+  if (token.isCancellationRequested) throw new vscode.CancellationError();
+}
+
 function claimStageError(stage: ClaimStage, error: unknown, recovering = false): Error {
   if (error instanceof vscode.CancellationError || error instanceof RequestCancelledError || error instanceof OperationCancelledError) {
     return new vscode.CancellationError();
+  }
+  if (stage === "assignment" && error instanceof AssignmentWorkspaceError) {
+    // Typed local failures have a fixed code-to-guidance map; never trust their mutable message.
+    return new Error(`과제 연결 중단 · 기존 과제 폴더 확인\n${assignmentWorkspaceErrorMessage(error.code)}`);
   }
   const apiError = error instanceof ApiError;
   const status = apiError && Number.isInteger(error.status) && error.status >= 100 && error.status <= 599 ? error.status : 0;
@@ -242,7 +285,7 @@ function claimStageError(stage: ClaimStage, error: unknown, recovering = false):
     ? `\n${status ? `HTTP ${status}` : "HTTP 응답 없음/확인 불가"} · 오류 코드: ${code}`
     : "";
   const actions: Record<ClaimStage, string> = {
-    device: status === 401 || code === "invalid_grant" || code === "invalid_claim_code"
+    device: status === 401 || code === "invalid_grant" || code === "invalid_claim_code" || code === "expired_token" || code === "assignment_claim_denied"
       ? "이 수령 코드로 연결할 수 없습니다. 학생 웹에서 새 코드를 발급받아 다시 입력하세요. 반복되면 교수자에게 교과목·과제 공개 상태와 서버 로그 확인을 요청하세요."
       : "서버 연결 확인 후 다시 시도하세요. 반복되면 교수자에게 기기 연결 준비 단계의 서버 로그 확인을 요청하세요.",
     redeem: "학생 웹에서 해당 과제의 새 수령 코드를 받아 다시 시도하세요. 계속 실패하면 교수자에게 과제 공개·수강 상태를 확인해 달라고 요청하세요.",
