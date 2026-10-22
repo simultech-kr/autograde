@@ -178,7 +178,7 @@ def test_live_resubmission_promotes_latest_pending_without_previous_score(result
     assert current[0]['attrs']['data-pending'] == 'yes'
     assert '8 / 10' not in current[0]['text']
     assert 'accepted' not in current[0]['text'] and '제출 접수' in current[0]['text']
-    assert '채점 중' in current[0]['text']
+    assert '점수 대기' in current[0]['text']
     fresh = open_results(portal)[2]
     assert payload['html'] in fresh
     grade(service.state, newer, 10)
@@ -218,6 +218,57 @@ def test_live_ordering_ties_and_untrusted_text_are_identical_to_initial_page(por
     assert attack in rows[0]['text']
     assert all('onerror' not in row['attrs'] for row in rows)
     assert rows[-1]['attrs']['data-submitted'] == 'no'
+
+
+def test_result_summary_units_and_latest_score_states_are_unambiguous(portal, monkeypatch):
+    service = portal[2]['come3105']
+    dashboard = deepcopy(service.instructor_dashboard(AUTH))
+    template = dashboard['rows'][0]
+    base = dict(template, latest_submission_id='bsub_synthetic', latest_received_at='2026-10-23T05:00:00Z',
+                state='published', score=8, max_score=10, submission_count=2)
+    dashboard['rows'] = [
+        dict(base, student_key='A', latest_submission_id='bsub_partial'),
+        dict(base, student_key='A', assignment_id='assignment-other', assignment_key='other',
+             latest_submission_id='bsub_pending', state='accepted', score=9),
+        dict(base, student_key='B', latest_submission_id='bsub_full', score=10),
+        dict(base, student_key='C', latest_submission_id='bsub_zero', score=0),
+        dict(base, student_key='D', latest_submission_id=None, state=None, score=10, submission_count=0),
+        dict(base, student_key='E', latest_submission_id='bsub_error', state='infra_failed', score=None),
+        dict(base, student_key='F', latest_submission_id='bsub_invalid', max_score=0),
+    ]
+    monkeypatch.setattr(service, 'instructor_dashboard', lambda _: dashboard)
+    rendered = service.instructor_dashboard_updates(AUTH).body['html']
+    metrics = re.findall(r'data-result-metric="([^"]+)".*?<strong>(\d+)<span class="result-metric-unit">([^<]+)', rendered)
+    assert metrics == [('submitted_students', '5', '명'), ('unsubmitted', '1', '건'),
+                       ('pending', '1', '건'), ('complete', '3', '건'), ('attention', '4', '건')]
+    assert '학생 6명 · 과제 2개' in rendered
+    assert '1건은 학생 1명 × 과제 1개' in rendered and '재제출 횟수 합계가 아닙니다' in rendered
+    assert '최신 제출 점수' in rendered and '이전 최고점(현재 제출 제외)' in rendered
+    rows = ResultRows(rendered).rows
+    # Score rendering is scoped to the latest receipt, including a real zero score.
+    assert '9 / 10' not in rendered
+    assert 'class="result-score-value">0 / 10' in rendered
+    assert 'class="result-status partial">채점 완료 · 보완 필요' in rendered
+    assert 'class="result-status complete">채점 완료 · 만점' in rendered
+    assert '채점 결과 확인 필요' in rendered and '점수 미확정 · 0점이 아닙니다' in rendered
+    assert any('미제출' in row['text'] and '제출 기록 없음 · 0점이 아닙니다' in row['text'] for row in rows)
+    assert len(rows) == 7 and all(row['cells'] == 6 for row in rows)
+
+
+def test_five_hundred_result_rows_fit_existing_http_response_limit(portal, monkeypatch):
+    from autograde.platform_http import DEFAULT_MAX_RESPONSE_BYTES, _encode_body
+
+    service = portal[2]['come3105']
+    dashboard = deepcopy(service.instructor_dashboard(AUTH))
+    template = dashboard['rows'][0]
+    dashboard['rows'] = [dict(template, student_key=f'TEST-{student:03d}', assignment_id=f'assignment-{assignment:02d}',
+        assignment_key=f'week-{assignment:02d}', title=f'테스트 과제 {assignment:02d}', latest_submission_id=f'bsub_{student}_{assignment}',
+        latest_received_at='2026-10-23T05:00:00Z', state='published', score=8, max_score=10, submission_count=10)
+        for student in range(25) for assignment in range(20)]
+    monkeypatch.setattr(service, 'instructor_dashboard', lambda _: dashboard)
+    for response in (service.instructor_dashboard_page(AUTH, portal=True), service.instructor_dashboard_updates(AUTH)):
+        body, _ = _encode_body(response.body, 200)
+        assert len(body) < DEFAULT_MAX_RESPONSE_BYTES, len(body)
 
 
 def test_live_csp_allows_only_fixed_results_script_on_results_html(results_portal):

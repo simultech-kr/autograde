@@ -62,7 +62,10 @@ def test_responsive_pages(portal, setup, tmp_path, monkeypatch):
         assert '<body class="responsive-instructor">' in page
         tables = Tables(page)
         assert (tables.tables, tables.rowheaders, tables.labels) == (2, 4, 24)
-        assert page.count('<div class="cell-value">7 / 10<br>') == 1
+        assert page.count('class="result-score-value">7 / 10') == 1
+        assert '최신 제출 점수' in page and '이전 최고점(현재 제출 제외)' in page
+        assert 'class="result-status partial"' in page and '보완 필요' in page
+        assert 'class="results-live-bar"' in page and 'class="results-filter-fields"' in page
         (tmp_path / (name + '.html')).write_text(page)
 
     status, _, legacy = request(portal[0], '/courses/come3105/instructor', authorization=AUTH)

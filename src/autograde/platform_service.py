@@ -1526,7 +1526,7 @@ class StudentPlatformService:
             "<!doctype html><html lang=\"ko\"><head><meta charset=\"utf-8\">"
             "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
             f"<title>{html.escape(self.course_key)} 교수자 관리</title>"
-            "<style>body{margin:0;background:#f3f5f8;color:#18283a;font:15px/1.6 system-ui}"
+            "<style>body{margin:0;background:#f3f5f8;color:#18283a;font:1rem/1.65 system-ui}"
             "body>nav{padding:14px 24px;background:#16384c;color:white}body>nav a{color:white;margin-right:18px}"
             "main{max-width:1180px;margin:24px auto;padding:24px;background:white;border-radius:12px}"
             ".audience{color:#17615b;font-weight:600}h1{margin:6px 0 12px}h2{margin-top:28px;font-size:18px}"
@@ -1534,27 +1534,33 @@ class StudentPlatformService:
             "th,td{text-align:left;padding:10px 14px;border-bottom:1px solid #dce4ec;white-space:nowrap}"
             "th{background:#eef3f7;font-weight:500}"
             "@media(max-width:600px){main{padding:16px;margin:12px}body>nav{padding:12px}}"
-            + THEME_CSS + RESPONSIVE_CSS + STYLE + "</style></head><body class=\"responsive-instructor\"><main data-audience=\"instructor\">"
-            "<div class=\"audience\">교수자 관리 · 교과목 전체 현황</div>"
-            f"<h1>{html.escape(self.course_key)} 채점 현황</h1>"
+            + THEME_CSS + RESPONSIVE_CSS + STYLE + "</style></head><body class=\"responsive-instructor\">"
+            '<a class="skip-link" href="#main-content">본문으로 건너뛰기</a>'
+            '<main id="main-content" tabindex="-1" data-audience="instructor">'
+            '<header class="results-page-header"><div>'
+            f'<p class="audience">교수자 · {html.escape(self.course_key)}</p>'
+            '<h1>제출·채점 현황</h1>'
+            '<p class="result-hint">학생별 최신 제출을 확인하고, 수정이 필요한 코드와 제출 이력을 검토합니다.</p>'
+            '</div>'
+            f'<nav class="page-actions" aria-label="결과 화면 이동"><a href="{management_url}">수업 관리</a>'
+            '<a href="#student-results">학생별 결과</a><a href="#student-management">수강·접속 정보</a></nav></header>'
+            f'<p class="results-page-context">수업 <strong>{html.escape(self.course_key)}</strong> · '
+            f"활성 학생 {int(course['active_students'])}명 / 등록 학생 {int(course['enrolled_students'])}명 · 모든 시각 KST</p>"
             f'<section data-live-results="{updates_url}" data-course-key="{html.escape(self.course_key, quote=True)}">'
-            '<div class="results-toolbar"><label>과제 선택 <select data-results-assignment disabled><option value="">전체 과제</option></select></label>'
+            '<div class="results-toolbar"><div class="results-filter-fields"><label>실습 과제 <select data-results-assignment disabled><option value="">전체 과제</option></select></label>'
             '<label>결과 보기 <select data-results-filter disabled>'
             '<option value="all">전체 · 제출 우선</option><option value="submitted">제출한 학생</option>'
             '<option value="pending">채점 대기·진행</option><option value="attention">확인 필요</option>'
-            '<option value="unsubmitted">미제출</option></select></label>'
+            '<option value="unsubmitted">미제출</option></select></label></div>'
+            '<div class="results-refresh-actions">'
             f'<a data-results-refresh href="{dashboard_url}">결과 새로 고침</a>'
-            '<button type="button" data-results-toggle hidden>자동 갱신 일시 중지</button></div>'
+            '<button type="button" data-results-toggle hidden>자동 갱신 일시 중지</button></div></div>'
+            '<div class="results-live-bar">'
             '<p data-results-message role="status" aria-live="polite">자동 갱신 준비 중 · 동작하지 않으면 결과 새로 고침을 눌러 주세요.</p>'
-            f'<p><time data-results-time>{html.escape(checked_time(dashboard["generated_at"]))}</time></p>'
+            f'<p><time data-results-time>{html.escape(checked_time(dashboard["generated_at"]))}</time></p></div>'
             '<div data-results-content>' + self._instructor_results_fragment(dashboard, portal=portal) + '</div></section>'
-            + '<h2>교과목 요약</h2>'
-            f"<p>등록 학생 {int(course['enrolled_students'])}명 · "
-            f"활성 학생 {int(course['active_students'])}명 · 수강 정보는 화면을 연 시점 기준입니다.</p>"
-            f'<nav class="page-actions" aria-label="결과 화면 이동"><a href="{dashboard_url}">새로 고침</a>'
-            f'<a href="#student-results">학생별 결과</a><a href="#student-management">학생 관리</a>'
-            f'<a href="#assignment-links">과제 수령 링크</a><a href="{management_url}">수업 관리</a></nav>'
-            + '<h2 id="student-management">학생 관리 · 수강/접속 정보</h2><p>아래 정보는 화면 조회 시점 기준입니다.</p>'
+            + '<section class="results-management" aria-labelledby="student-management">'
+            '<h2 id="student-management">학생 관리 · 수강·접속 정보</h2><p class="result-hint">수강 인원과 아래 접속 정보는 화면을 연 시점 기준입니다. 최신 정보는 화면을 새로 고쳐 확인하세요.</p>'
             + result_table(('학생', '상태', '전용 비밀번호', '수락', '서버 응답 준비', '제출'),
                            student_management_rows, '학생별 수강·접속 현황')
             + (
@@ -1562,7 +1568,7 @@ class StudentPlatformService:
                 if not student_management_rows
                 else ""
             )
-            + '<!-- assignment-links:start --><h2 id="assignment-links">과제 수령 링크</h2>'
+            + '</section><!-- assignment-links:start --><h2 id="assignment-links">과제 수령 링크</h2>'
             + ('<ul>' + "".join(assignment_links) + '</ul>' if assignment_links else "<p>공개된 bundle 과제가 없습니다.</p>")
             + '<!-- assignment-links:end -->'
             + "</main>" + SCRIPT_TAG + "</body></html>"

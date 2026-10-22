@@ -6,7 +6,7 @@ import { ApiError, bootstrap, entryURL, results, terminalError } from "../../lib
 import { ContractError, type Bootstrap, type Results } from "../../lib/contracts/instructor";
 import { availableModules } from "../registry";
 import { defaultQuery, filterKey, formatTime, pageURL, parseQuery, pollDelay, statusNames, statuses, type ResultsQuery, type Sort, type Status } from "./query";
-import { ResultsTable, SummaryCards } from "./ResultsView";
+import { refreshPresentation, ResultsTable, SummaryCards } from "./ResultsView";
 import styles from "./dashboard.module.css";
 
 type Failure = { message: string; requestId: string; code: string; terminal: boolean };
@@ -122,16 +122,18 @@ export function InstructorDashboard() {
   function changeFilters(patch: Partial<ResultsQuery>) { setQuery(q => ({ ...q, ...patch, page: 1 })); }
   function refresh() { version.current = null; setData(null); setChanged(false); setQuery(q => ({ ...q, page: 1 })); setRefreshEpoch(n => n + 1); }
   function search(event: FormEvent<HTMLFormElement>) { event.preventDefault(); changeFilters({ student: studentInput.trim() }); }
-  const selectedCourse = identity?.courses.find(c => c.course_key === course);
   const assignments = visibleData?.assignments || [];
   const unknownAssignment = query.assignment && !assignments.some(a => a.assignment_id === query.assignment);
+  const selectedAssignment = assignments.find(a => a.assignment_id === query.assignment);
+  const assignmentLabel = query.assignment ? selectedAssignment?.title || selectedAssignment?.assignment_key || "선택한 과제" : "전체 과제";
+  const refreshState = refreshPresentation({ changed, paused, automatic, failed: Boolean(error), loading, lastSuccess });
 
   return (
     <AppShell testId="dashboard">
       <PageHeading
         eyebrow="수업 운영 / 제출 현황"
         title="제출·채점 현황"
-        description="최신 제출의 상태와 점수를 확인하고, 필요한 학생의 제출 이력을 검토합니다."
+        description="최신 제출 점수와 이력을 수업·분반별로 확인합니다."
         label="조회 전용 · 파일럿"
       />
 
@@ -196,7 +198,7 @@ export function InstructorDashboard() {
               ))}
             </select>
             <span className={styles.identity}>
-              {identity.principal.display_name || "교수자"} · {identity.principal.mode === "shared" ? "공유 인증" : "개인 인증"}
+              {identity.principal.display_name || "교수자"} · {identity.principal.mode === "shared" ? "공유 인증" : "개인 인증"} · 시각 KST
             </span>
           </section>
 
@@ -208,29 +210,25 @@ export function InstructorDashboard() {
 
           {course && (
             <>
-              <div className={styles.courseHeading}>
-                <h2>{selectedCourse?.name || selectedCourse?.code || course}</h2>
-                <span className={styles.muted}>
-                  {selectedCourse?.section ? `${selectedCourse.section} · ` : ""}모든 시간 KST
-                </span>
-              </div>
               {visibleData && (
-                <>
+                <section className={styles.summary} aria-labelledby="summary-heading">
+                  <div className={styles.summaryHeading}>
+                    <h2 id="summary-heading">제출 현황 요약</h2>
+                    <p>집계 범위: <strong>{visibleData.summary.scope === "course" ? "선택 수업·분반 전체" : assignmentLabel}</strong></p>
+                  </div>
                   <SummaryCards summary={visibleData.summary} />
                   <p className={styles.summaryNote}>
-                    요약 범위: {visibleData.summary.scope === "course" ? "선택 수업 전체" : "선택한 과제"}.
-                    {" "}아래 상태·학생 검색과 관계없이 집계합니다.
-                    {" "}누적 제출 {visibleData.summary.submission_attempts}회.
+                    명: 중복 제외 학생 · 건: 학생 × 과제 최신 상태 · 상태·학생 검색은 집계 제외 · 누적 제출 {visibleData.summary.submission_attempts.toLocaleString("ko-KR")}회
                   </p>
-                </>
+                </section>
               )}
 
               <section className={styles.results} aria-label="학생 결과">
                 <div className={styles.sectionHeading}>
                   <h2>학생별 제출 결과</h2>
-                  <p>이번 점수와 이전 최고점을 구분해 확인하세요.</p>
+                  <p>이전 최고점은 현재 제출 제외 · 평가 항목·코드는 이력에서 확인</p>
                 </div>
-                <form data-testid="filter-form" className={styles.filters} onSubmit={search}>
+                <form data-testid="filter-form" aria-label="학생 결과 필터" className={styles.filters} onSubmit={search}>
                   <label>
                     실습 과제
                     <select
@@ -287,10 +285,16 @@ export function InstructorDashboard() {
                   </button>
                 </form>
 
+                <p className={styles.filterScope} data-testid="filter-scope">
+                  <strong>목록 조건</strong> {assignmentLabel} · {statusNames[query.status]}
+                  {query.student && <> · 학생 검색: <strong>{query.student}</strong></>}
+                  {visibleData && <span>조건에 맞는 결과 <strong>{visibleData.total.toLocaleString("ko-KR")}건</strong></span>}
+                </p>
+
                 <div className={styles.liveBar}>
-                  <p data-testid="last-success" role="status">
+                  <p data-testid="last-success" role="status" aria-atomic="true" data-tone={refreshState.tone}>
                     <span className={styles.connectionDot} aria-hidden="true" />
-                    {changed ? "새 결과 대기" : paused ? "자동 확인 일시 정지" : !automatic ? "수동 확인" : error ? "재연결 대기" : "자동 확인 중"}
+                    <strong>{refreshState.label}</strong>
                     <span className={styles.lastTime}>
                       {lastSuccess ? `마지막 확인 ${formatTime(lastSuccess)}` : "아직 확인되지 않음"}
                     </span>
@@ -342,7 +346,7 @@ export function InstructorDashboard() {
                 <footer className={styles.pagination}>
                   <span>
                     {visibleData
-                      ? `조건에 맞는 ${visibleData.total}건 · ${visibleData.page} / ${Math.max(1, Math.ceil(visibleData.total / visibleData.page_size))}페이지`
+                      ? `학생 × 과제 ${visibleData.total.toLocaleString("ko-KR")}건 · ${visibleData.page.toLocaleString("ko-KR")} / ${Math.max(1, Math.ceil(visibleData.total / visibleData.page_size)).toLocaleString("ko-KR")}페이지`
                       : "목록 확인 대기"}
                   </span>
                   <div>

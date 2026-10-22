@@ -1,6 +1,7 @@
 """Intentional resubmission, score history and read-only comparisons on synthetic data."""
 import io
 import json
+import re
 from dataclasses import replace
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor
@@ -136,7 +137,13 @@ def test_history_pagination_and_boundary_delta(portal, tmp_path):
     assert [h['version'] for h in history] == [2, 1]
     assert history[0]['previous_score'] == 0
     status, _, html = request(portal[0], BASE + '/' + ids[-1] + '/history/100', authorization=AUTH)
-    assert status == 200 and b'#2' in html and b'#102' not in html
+    assert status == 200
+    # Inspect the history rows, not unrelated CSS colors such as #102339.
+    history_table = html.split('<caption>학생별 점수·코드 변경 이력</caption>'.encode(), 1)[1].split(b'</table>', 1)[0]
+    history_rows = re.findall(rb'<th\b[^>]*scope="row"[^>]*>(.*?)</th>', history_table, re.DOTALL)
+    assert len(history_rows) == 2
+    for content, version, sid in zip(history_rows, (2, 1), (ids[1], ids[0])):
+        assert f'<a href="{BASE}/{sid}">#{version} 제출</a>'.encode() in content
     assert request(portal[0], BASE + '/' + ids[-1] + '/history/100001', authorization=AUTH)[0] == 404
 
 

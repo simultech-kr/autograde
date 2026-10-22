@@ -14,18 +14,25 @@ export default function Preview() {
       <PageHeading
         eyebrow="COME2201 · 소프트웨어 설계 · 01분반"
         title="제출·채점 현황"
-        description="최근 제출부터 확인하고, 이번 점수와 이전 최고점을 구분합니다."
+        description="최근 제출부터 확인하고, 최신 제출 점수와 이전 최고점을 구분합니다."
         label="화면 시안"
       />
       <SummaryCards summary={sampleResults.summary} />
-      <p className={styles.summaryNote}>수업 전체 요약 · 가상 학생 4명 · 모든 시각 KST</p>
+      <p className={styles.summaryNote}>수업 전체 요약 · 가상 학생 4명 · 미제출·채점 상태는 학생 × 과제별 건수 · 모든 시각 KST</p>
       <section className={styles.results} aria-label="학생 결과 시안">
         <div className={styles.sectionHeading}>
           <h2>학생별 제출 결과</h2>
-          <p>이번 점수와 이전 최고점을 구분해 확인하세요.</p>
+          <p>최신 제출 점수와 이전 최고점을 구분해 확인하세요.</p>
+        </div>
+        <div className={styles.filters} aria-label="조회 조건 시안 · 조작 불가">
+          <label>실습 과제<select disabled defaultValue="all"><option value="all">전체 과제</option></select></label>
+          <label>제출 상태<select disabled defaultValue="all"><option value="all">전체 상태</option></select></label>
+          <label>정렬<select disabled defaultValue="latest"><option value="latest">제출 학생 우선</option></select></label>
+          <label>학생 검색<input disabled placeholder="학번 또는 이름" /></label>
+          <button disabled>조회</button>
         </div>
         <div className={styles.previewNotice}>
-          시안: 목록이 변경되면 위치를 유지하고 새 결과 반영을 안내합니다.
+          조회 조건은 화면 구성 예시입니다. 실제 화면은 자동 확인 중에도 읽던 위치를 유지하고 새 결과 반영을 안내합니다.
         </div>
         <ResultsTable rows={sampleResults.rows} />
       </section>

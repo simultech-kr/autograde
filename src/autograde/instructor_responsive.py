@@ -43,10 +43,12 @@ RESPONSIVE_CSS = """
 .responsive-instructor .page-actions a,.result-table a{display:inline-block;padding:8px 0;min-height:44px}
 .results-region{width:100%;min-width:0;margin:16px 0}
 .result-table{display:table;width:100%;max-width:100%;table-layout:fixed;border-collapse:collapse;overflow:visible}
-.result-table caption{text-align:left;font-weight:600;padding:8px 0;color:var(--text)}
+.result-table caption{text-align:left;font-weight:400;font-size:.9rem;padding:8px 0 12px;color:var(--muted)}
 .result-table th,.result-table td{padding:10px;vertical-align:top;text-align:left;white-space:normal;overflow-wrap:anywhere;border-bottom:1px solid var(--border)}
+.result-table thead th{background:var(--surface-raised);font-size:.85rem;font-weight:600;color:var(--muted);border-top:1px solid var(--border)}
 .result-table tbody th{background:var(--surface);font-weight:600}
 .result-table .cell-value{min-width:0;max-width:100%}
+.result-table a:focus-visible,.responsive-instructor summary:focus-visible{outline:2px solid var(--focus,var(--link));outline-offset:3px}
 .result-table .cell-label{display:none}
 .result-table details{margin:8px 0}
 .result-table ol{padding-left:20px}
@@ -66,7 +68,6 @@ RESPONSIVE_CSS = """
  #student-results+.results-region th:nth-child(9){width:18%}
  #student-results+.results-region th:nth-child(10){width:6%}
 }
-#student-results+.results-region td:nth-child(3) .cell-value{font-weight:700}
 @media(max-width:1100px){
  .result-table,.result-table tbody{display:block}
  .result-table caption{display:block}

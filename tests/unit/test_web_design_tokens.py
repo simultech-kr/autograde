@@ -71,3 +71,25 @@ def test_flat_design_has_no_elevation_in_either_theme():
         assert 'gradient(' not in source, str(stylesheet)
         shadows = re.findall(r'box-shadow\s*:\s*([^;]+);', source)
         assert all(shadow.strip() in {'none', 'var(--shadow-sm)'} for shadow in shadows)
+
+
+def _contrast(first, second):
+    def luminance(colour):
+        channels = [int(colour[offset:offset + 2], 16) / 255 for offset in (1, 3, 5)]
+        linear = [value / 12.92 if value <= .04045 else ((value + .055) / 1.055) ** 2.4
+                  for value in channels]
+        return sum(weight * value for weight, value in zip((.2126, .7152, .0722), linear))
+    light, dark = sorted((luminance(first), luminance(second)), reverse=True)
+    return (light + .05) / (dark + .05)
+
+
+@pytest.mark.parametrize(('foreground', 'background'), [
+    ('--text', '--surface'), ('--muted', '--surface'),
+    ('--muted', '--surface-raised'), ('--link', '--surface'), ('--link', '--soft'),
+    ('--on-accent', '--accent'), ('--success', '--success-bg'),
+    ('--warning', '--warning-bg'), ('--error', '--error-bg'),
+])
+def test_dashboard_text_colours_remain_readable_in_both_themes(foreground, background):
+    for palette in re.findall(r':root\s*\{([^}]+)\}', TOKENS.read_text(encoding='utf-8')):
+        colours = dict(re.findall(r'(--[a-z-]+)\s*:\s*(#[0-9a-f]{6})\s*;', palette))
+        assert _contrast(colours[foreground], colours[background]) >= 4.5

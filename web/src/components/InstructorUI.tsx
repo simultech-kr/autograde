@@ -55,19 +55,21 @@ export function MetricCard({
     <div className={styles.metric}>
       <span className={styles.metricLabel}>{label}</span>
       <strong className={styles.metricValue}>
-        {value}<small>{unit}</small>
+        {value.toLocaleString("ko-KR")}<small>{unit}</small>
       </strong>
       <span className={styles.metricDescription}>{description}</span>
     </div>
   );
 }
 
+export type StatusTone = "neutral" | "info" | "success" | "warning" | "error";
+
 export function StatusBadge({
   children,
   tone = "neutral",
 }: {
   children: ReactNode;
-  tone?: "neutral" | "success" | "warning";
+  tone?: StatusTone;
 }) {
-  return <span className={`${styles.badge} ${styles[tone]}`}>{children}</span>;
+  return <span className={`${styles.badge} ${styles[tone]}`} data-tone={tone}>{children}</span>;
 }

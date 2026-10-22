@@ -10,7 +10,8 @@ body {
   margin: 0;
   background: var(--page);
   color: var(--text);
-  font: 0.9375rem / 1.65 var(--font-sans);
+  font: 1rem / 1.65 var(--font-sans);
+  -webkit-text-size-adjust: 100%;
 }
 
 a {
@@ -24,6 +25,7 @@ input,
 select,
 textarea {
   font: inherit;
+  font-size: 1rem;
 }
 
 button,
@@ -110,6 +112,14 @@ p {
 :focus-visible {
   outline: 3px solid var(--focus);
   outline-offset: 3px;
+}
+
+@media (hover: hover) {
+  button:not(:disabled):hover,
+  select:not(:disabled):hover,
+  input:not(:disabled):hover {
+    border-color: var(--accent);
+  }
 }
 
 .sr-only {

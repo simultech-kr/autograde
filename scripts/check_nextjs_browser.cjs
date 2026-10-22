@@ -95,7 +95,7 @@ async function main() {
     for (const row of await page.getByTestId('result-row').all()) {
       assert.match(await row.getByTestId('current-score').innerText(), /^0\s*\/\s*100/);
       assert.match(await row.getByTestId('previous-best').innerText(), /100\s*\/\s*100/);
-      assert.match(await row.innerText(), /확인 필요/, 'attention is text, not colour alone');
+      assert.match(await row.innerText(), /보완 필요/, 'partial credit is text, not colour alone');
     }
     check('Current zero remains distinct from previous best 100 in all 20 visible rows');
     const firstKeys = await page.getByTestId('result-row').evaluateAll(rows => rows.map(row => row.dataset.rowKey || row.textContent));
@@ -223,6 +223,7 @@ async function main() {
           const parent = getComputedStyle(section);
           return {
             gap: parent.gap,
+            columns: parent.gridTemplateColumns.split(/\s+/).length,
             items: [...section.children].map(node => {
               const style = getComputedStyle(node);
               return {shadow: style.boxShadow, radius: style.borderRadius,
@@ -231,16 +232,17 @@ async function main() {
           };
         });
         assert.equal(flat.gap, '0px');
-        assert.equal(flat.items.length, 4);
+        assert.equal(flat.items.length, 5);
         for (const item of flat.items) {
           assert.equal(item.shadow, 'none');
           assert.equal(item.radius, '0px');
           assert.equal(item.background, 'none');
         }
-        assert.deepEqual(flat.items.map(item => item.left), width < 768
-          ? ['0px', '1px', '0px', '1px'] : ['0px', '1px', '1px', '1px']);
-        assert.deepEqual(flat.items.map(item => item.top), width < 768
-          ? ['0px', '0px', '1px', '1px'] : ['0px', '0px', '0px', '0px']);
+        assert.ok(flat.columns >= 1 && flat.columns <= 5);
+        assert.deepEqual(flat.items.map(item => item.left), flat.items.map((_, i) =>
+          i % flat.columns === 0 ? '0px' : '1px'));
+        assert.deepEqual(flat.items.map(item => item.top), flat.items.map((_, i) =>
+          i >= flat.columns ? '1px' : '0px'));
         await page.screenshot({path: path.join(output, `next-results-${mode}-${width}.png`), fullPage: true});
         if ((mode === 'light' && width === 1440) || (mode === 'dark' && width === 375)) {
           await page.evaluate(() => window.scrollTo(0, 0));
@@ -254,6 +256,15 @@ async function main() {
     }
     check('320/375/768/1024/1440px light and dark captures have no page-level horizontal overflow');
     check('Flat summary uses no shadows or rounded cards, with correct desktop/mobile dividers in both themes');
+
+    await page.emulateMedia({colorScheme: 'light'});
+    await page.setViewportSize({width: 1440, height: 900});
+    await page.evaluate(() => window.scrollTo(0, 0));
+    const firstScore = await page.getByTestId('current-score').first().locator('strong').boundingBox();
+    assert.ok(firstScore && firstScore.y >= 0 && firstScore.y + firstScore.height <= 900,
+      'the first current score must be readable without scrolling on a 1440×900 desktop');
+    await page.screenshot({path: path.join(output, 'next-results-light-1440x900-viewport.png'), fullPage: false});
+    check('A 1440×900 desktop shows the first latest score without scrolling');
 
     // Layout stress uses the same authenticated synthetic fixture with only
     // display strings replaced. It does not change server or user data.

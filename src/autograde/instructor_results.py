@@ -55,6 +55,24 @@ def _valid_score(row):
             and 0 <= score <= maximum)
 
 
+def _score_cell(row, *, has_submission, waiting, valid):
+    """Only the latest receipt has a score here; history is never a fallback."""
+    if valid:
+        value = f"{row['score']:g} / {row['max_score']:g}"
+        primary = f'<strong class="result-score-value">{_e(value)}<span class="result-score-unit">점</span></strong>'
+        note = ''
+    elif waiting:
+        primary = '<strong class="result-score-value is-pending">점수 대기</strong>'
+        note = '최신 제출 채점 결과가 아직 없습니다'
+    elif has_submission:
+        primary = '<strong class="result-score-value is-unavailable">확인 필요</strong>'
+        note = '최신 제출 점수 미확정 · 0점이 아닙니다'
+    else:
+        primary = '<span class="result-score-value is-unavailable">—</span>'
+        note = '제출 기록 없음 · 0점이 아닙니다'
+    return primary + (f'<small class="result-score-note">{note}</small>' if note else '')
+
+
 def assignment_summaries(rows, course_base):
     """Count current-enrolment rows per release, before any browser view filter."""
     assignments = {}
@@ -81,11 +99,12 @@ def assignment_summaries(rows, course_base):
         links = ''.join(
             f'<a data-results-choice href="{_e(base + "?" + urlencode(dict(assignment_id=assignment_id, result_view=view)))}">{text}</a>'
             for view, text in views)
-        note = '<p class="result-hint">숨김 과제는 제출 이력만 표시하며 미제출은 집계하지 않습니다.</p>' if history_only else ''
+        note = ('<p class="result-hint">숨김 과제 · 제출 이력만 표시하며 미제출은 집계하지 않습니다.</p>'
+                if history_only else '<p class="result-hint">이 과제의 현재 수강 인원 기준 · 재제출은 한 명으로 집계</p>')
         sections.append(f'<section class="assignment-participation" data-result-assignment-summary '
             f'data-assignment-id="{_e(assignment_id)}" data-assignment-label="{_e(label)}" '
             f'data-total="{total}" data-submitted="{submitted}" data-unsubmitted="{missing}">'
-            f'<h3>{_e(row["title"])}</h3><p class="result-hint">{_e(row["assignment_key"])} · {_e(row["release_id"])}</p>'
+            f'<h3>{_e(row["title"])}</h3><p class="result-assignment-meta">{_e(row["assignment_key"])} · {_e(row["release_id"])}</p>'
             f'<div class="participation-links">{links}</div>{note}</section>')
     return '<div class="assignment-participation-list">' + ''.join(sections) + '</div>'
 
@@ -109,11 +128,14 @@ def fragment(dashboard, *, portal, diagnostics):
             state not in LABELS)
         attention += needs_attention
         label = LABELS.get(state, '상태 확인 필요') if has_submission else '미제출'
-        tone = 'waiting' if waiting else 'attention' if needs_attention else 'complete' if valid else 'neutral'
-        score = f"{row['score']:g} / {row['max_score']:g}" if valid else '—'
-        score_hint = '이번 제출 채점 중' if waiting else '현재 제출 기준'
+        partial = valid and row['score'] < row['max_score']
+        tone = 'waiting' if waiting else 'partial' if partial else 'attention' if needs_attention else 'complete' if valid else 'neutral'
         if valid and row['score'] < row['max_score']:
-            label += ' · 수정 필요'
+            label += ' · 보완 필요'
+        elif valid:
+            label += ' · 만점'
+        elif has_submission and state in {'graded', 'published'}:
+            label = '채점 결과 확인 필요'
         review = '아직 제출하지 않았습니다.'
         if has_submission:
             review_url = course_base + '/submissions/' + quote(row['latest_submission_id'], safe='')
@@ -127,8 +149,8 @@ def fragment(dashboard, *, portal, diagnostics):
         stamp = row.get('latest_received_at') if has_submission else None
         formatted = _time(stamp).astimezone(timezone(timedelta(hours=9))).strftime('%m-%d %H:%M:%S') if stamp else '—'
         cells.append((_e(row['student_key']),
-            _e(row['title']) + '<br><small>' + _e(row['assignment_key']) + '</small>',
-            _e(score) + '<br><small>' + _e(score_hint if has_submission else '제출 전') + '</small>',
+            _e(row['title']) + '<small class="result-assignment-meta">' + _e(row['assignment_key']) + '</small>',
+            _score_cell(row, has_submission=has_submission, waiting=waiting, valid=valid),
             f'<span class="result-status {tone}">{_e(label)}</span>',
             f'<time datetime="{_e(stamp or "")}" title="{_e(stamp or "")}">{_e(formatted)}</time>',
             review + detail))
@@ -139,20 +161,28 @@ def fragment(dashboard, *, portal, diagnostics):
             'data-submitted': 'yes' if has_submission else 'no', 'data-pending': 'yes' if waiting else 'no',
             'data-attention': 'yes' if needs_attention else 'no',
             'data-version': hashlib.sha256(signature.encode()).hexdigest()[:16]})
-    cards = [('제출 학생', len({row['student_key'] for row in submitted}), '명'),
-             ('채점 대기·진행', pending, '건'), ('채점 완료', complete, '건'), ('확인 필요', attention, '건')]
-    summary = '<div data-results-course-summary><div class="result-metrics">' + ''.join(
-        f'<div><span>{label}</span><strong>{number}<small>{unit}</small></strong></div>'
-        for label, number, unit in cards) + '</div>'
+    cards = [('submitted_students', '제출 학생', len({row['student_key'] for row in submitted}), '명', '과제 간 학생 중복 제외'),
+             ('unsubmitted', '미제출', len(rows) - len(submitted), '건', '수락·다운로드만 한 경우 포함'),
+             ('pending', '접수·채점 중', pending, '건', '학생·과제별 최신 제출'),
+             ('complete', '채점 완료', complete, '건', '부분 점수·공개 대기 포함'),
+             ('attention', '확인 필요', attention, '건', '부분 점수·처리 오류 등')]
+    summary = ('<div data-results-course-summary><h2 class="results-summary-title">전체 과제 요약</h2>'
+        f'<p class="result-scope-note">조회 범위: 학생 {len({row["student_key"] for row in rows})}명 · '
+        f'과제 {len({row["assignment_id"] for row in rows})}개. 아래 요약은 결과 보기 필터와 무관한 전체 조회 범위입니다.</p>'
+        '<div class="result-metrics">' + ''.join(
+        f'<div data-result-metric="{key}"><span class="result-metric-label">{label}</span><strong>{number}<span class="result-metric-unit">{unit}</span></strong>'
+        f'<small class="result-metric-note">{note}</small></div>'
+        for key, label, number, unit, note in cards) + '</div>')
     limited = ('<p role="alert">조회 한도에 도달했습니다. 아래 인원은 조회된 행의 부분 집계이며 수업 전체 인원이 아닐 수 있습니다.</p>'
                if dashboard.get('rows_truncated') else '')
     return (limited + summary + f'<p class="result-hint">제출 {len(submitted)}건 · 미제출 {len(rows) - len(submitted)}건 '
-            '· 학생·과제별 최신 제출 기준. 여러 과제를 선택한 전체 집계는 같은 학생을 과제별로 계산합니다.</p></div>'
+            '· 1건은 학생 1명 × 과제 1개입니다. 재제출 횟수 합계가 아닙니다.</p></div>'
+            + ('<h2 class="results-participation-title">과제별 제출 현황</h2>' if rows else '')
             + assignment_summaries(rows, course_base)
             + '<p data-results-selection role="status" aria-live="polite">과제를 선택하면 제출·미제출 명단을 따로 확인할 수 있습니다.</p>'
             '<h2 id="student-results">학생별 제출·채점 결과</h2>'
-            + result_table(('학생', '과제', '현재 점수', '상태', '제출 시각 (KST)', '확인'), cells,
-                           '제출 학생 우선 · 최근 제출순', row_attributes=attributes)
+            + result_table(('학생', '과제', '최신 제출 점수', '채점 상태', '최근 제출 (KST)', '제출 확인'), cells,
+                           '최신 제출 점수 표시 · 이전 최고점(현재 제출 제외)은 제출 이력에서 확인 · 제출한 학생 우선 · 최근 제출순', row_attributes=attributes)
             + '<p data-results-empty-filter hidden>현재 보기 조건에 해당하는 학생이 없습니다. 선택한 과제가 보관·삭제되었거나 조회 대상에서 제외되었는지도 확인하세요.</p>'
             + ('<p>등록된 학생 또는 과제가 없습니다.</p>' if not rows else '')
             + '<details id="results-count-policy"><summary>집계 기준과 점수 안내</summary>'
@@ -162,39 +192,69 @@ def fragment(dashboard, *, portal, diagnostics):
               '과제별 인원은 현재 활성 수강 학생 기준이며 재제출을 중복 계산하지 않습니다. '
               '수락·다운로드만 한 학생은 미제출입니다. 제출 기록이 있으면 거절·채점 오류도 제출 그룹에 표시되므로 상태를 함께 확인하세요. '
               '미제출은 마감 위반이나 0점 판정이 아닙니다. 보관·삭제 과제와 미공개 검증용 과제는 기본 조회에서 제외합니다. '
-              '과거 점수는 코드·제출 이력에서 확인하세요. 서버 응답 준비 횟수는 학생 PC의 저장 완료가 아닙니다.</p></details>')
+              '최신 제출 점수와 이전 최고점은 다른 기준입니다. 이전 최고점(현재 제출 제외)은 코드·제출 이력에서 확인하세요. '
+              '서버 응답 준비 횟수는 학생 PC의 저장 완료가 아닙니다.</p></details>')
 
 
 STYLE = """
-.results-toolbar{display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin:16px 0}
-.results-toolbar select,.results-toolbar button,.results-toolbar a{font:inherit;min-height:44px;padding:8px 12px;border-radius:8px}
-.results-toolbar select,.results-toolbar button{background:var(--surface);color:var(--text);border:1px solid var(--border)}
+.results-page-header{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;border-bottom:1px solid var(--border);padding-bottom:16px}
+.results-page-header p{margin:0}.results-page-header h1{margin:6px 0 8px}.results-page-header .page-actions{gap:8px 16px;font-size:.9rem}
+.results-page-context{margin:12px 0 0;color:var(--muted);font-size:.9rem}.results-page-context strong{color:var(--text)}
+.results-filter-fields{display:flex;flex-wrap:wrap;gap:12px;flex:1 1 420px;min-width:0}
+.results-refresh-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;max-width:100%}
+.results-live-bar{display:flex;justify-content:space-between;align-items:center;gap:8px 20px;flex-wrap:wrap;padding:10px 0;border-bottom:1px solid var(--border)}
+.results-live-bar p{margin:0}.results-live-bar [data-results-message]{border:0;padding:0;margin:0;background:none;flex:1 1 360px;font-size:.9rem}
+.results-management{border-top:1px solid var(--border);margin-top:32px;padding-top:8px}
+.results-toolbar{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;margin:20px 0 12px;padding:16px;background:var(--surface-raised);border:1px solid var(--border);border-radius:var(--radius-sm)}
+.results-toolbar select,.results-toolbar button,.results-toolbar a{font:inherit;min-height:44px;padding:8px 12px;border-radius:var(--radius-sm)}
+.results-toolbar select,.results-toolbar button{background:var(--surface);color:var(--text);border:1px solid var(--control-border,var(--border))}
 .results-toolbar button{cursor:pointer}.result-hint,[data-results-message]{color:var(--muted)}
-.result-metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
-.result-metrics>div{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:8px 12px}
-.result-metrics strong{display:block;font-size:1.4rem}.result-metrics small{font-size:.9rem;margin-left:4px}
+.results-toolbar a{display:inline-flex;align-items:center;border:1px solid var(--control-border,var(--border));background:var(--surface);text-decoration:none}
+.results-toolbar label{display:flex;flex-direction:column;gap:6px;font-weight:600;flex:1 1 200px;min-width:0;max-width:100%}
+.results-toolbar select{font-weight:400;width:100%;max-width:100%}
+[data-results-message]{border-inline-start:3px solid var(--border);padding:8px 12px;margin:12px 0;background:var(--surface-raised)}
+[data-results-time]{font-variant-numeric:tabular-nums;color:var(--muted);font-size:.9rem}
+.results-summary-title,.results-participation-title{font-size:1.05rem;margin:24px 0 8px}
+.result-scope-note{color:var(--muted);font-size:.9rem;margin:0 0 12px}
+.result-metrics{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:0;border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden}
+.result-metrics>div{background:var(--surface);border:0;border-inline-end:1px solid var(--border);padding:14px 16px;min-width:0}.result-metrics>div:last-child{border-inline-end:0}
+.result-metric-label{font-size:.9rem;font-weight:600}.result-metrics strong{display:block;font-size:1.7rem;line-height:1.3;margin:6px 0;font-variant-numeric:tabular-nums}
+.result-metric-unit{font-size:.9rem;margin-left:4px;font-weight:400}.result-metric-note{display:block;font-size:.8rem;color:var(--muted)}
 .assignment-participation-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));gap:12px;margin:16px 0}
-.assignment-participation{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px;min-width:0}
-.assignment-participation h3,.assignment-participation p{margin:0 0 8px}
+.assignment-participation{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:16px;min-width:0}
+.assignment-participation h3,.assignment-participation p{margin:0 0 8px}.assignment-participation h3{font-size:1rem}
+.assignment-participation .result-hint{font-size:.8rem;margin:10px 0 0}
 .participation-links{display:flex;flex-wrap:wrap;gap:8px}
-.participation-links a{display:inline-block;min-height:44px;padding:8px;border:1px solid var(--border);border-radius:8px}
+.participation-links a{display:inline-flex;align-items:center;min-height:44px;padding:8px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);text-decoration:none}
 .participation-links a[aria-current]{background:var(--soft);font-weight:700;outline:2px solid var(--link)}
-.results-toolbar label{min-width:0;max-width:100%}.results-toolbar select{max-width:100%}
-.result-status{display:inline-block;border:1px solid var(--border);border-radius:8px;padding:4px 8px;font-weight:600}
-.result-status.waiting{border-style:dashed;background:var(--secondary)}
-.result-status.complete{color:var(--link);background:var(--soft)}
-.result-status.attention{border-width:2px;color:var(--warning);background:var(--warning-bg)}
+[data-results-selection]{padding:12px;border:1px solid var(--border);background:var(--surface-raised);border-radius:var(--radius-sm);font-size:.9rem}
+.result-status{display:inline-block;border:1px solid var(--border);border-radius:var(--radius-sm);padding:6px 8px;font-size:.85rem;line-height:1.4;font-weight:600}
+.result-status.waiting{border-style:dashed;background:var(--soft);color:var(--link)}
+.result-status.complete{color:var(--success);background:var(--success-bg)}
+.result-status.partial{color:var(--warning);background:var(--warning-bg)}
+.result-status.attention{color:var(--error);background:var(--error-bg)}
+.result-status.neutral{color:var(--muted);background:var(--surface-raised)}
 [data-live-results] [hidden]{display:none!important}
-[data-live-results] .result-table td:nth-child(3) .cell-value{font-weight:700}
 [data-live-results] .result-table small{font-weight:400;color:var(--muted)}
+.result-assignment-meta{display:block;margin-top:4px;font-size:.8rem;color:var(--muted)}
+.result-score-value{display:block;font-size:1.25rem;font-weight:700;line-height:1.4;font-variant-numeric:tabular-nums}
+.result-score-value.is-pending,.result-score-value.is-unavailable{font-size:1rem;font-weight:600;color:var(--muted)}
+.result-score-unit{font-size:.8rem;font-weight:400;margin-left:4px}
+.result-score-note{display:block;font-size:.8rem;margin-top:4px}
+[data-live-results] .result-table time{font-size:.9rem;font-variant-numeric:tabular-nums}
+[data-live-results] .result-table details{font-size:.85rem}
+[data-live-results] .result-table details summary{color:var(--muted)}
 [data-live-results] .result-table .results-updated{outline:2px solid var(--link,#3984d6);outline-offset:-2px}
 @media(min-width:1101px){
  [data-live-results] #student-results+.results-region th:nth-child(1){width:12%}
- [data-live-results] #student-results+.results-region th:nth-child(2){width:23%}
- [data-live-results] #student-results+.results-region th:nth-child(3){width:13%}
- [data-live-results] #student-results+.results-region th:nth-child(4){width:18%}
- [data-live-results] #student-results+.results-region th:nth-child(5){width:15%}
- [data-live-results] #student-results+.results-region th:nth-child(6){width:19%}
+ [data-live-results] #student-results+.results-region th:nth-child(2){width:22%}
+ [data-live-results] #student-results+.results-region th:nth-child(3){width:19%}
+ [data-live-results] #student-results+.results-region th:nth-child(4){width:17%}
+ [data-live-results] #student-results+.results-region th:nth-child(5){width:13%}
+ [data-live-results] #student-results+.results-region th:nth-child(6){width:17%}
 }
-@media(max-width:640px){.result-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.results-toolbar>*{max-width:100%}}
+@media(max-width:1024px){.result-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.result-metrics>div:nth-child(2n){border-inline-end:0}.result-metrics>div:nth-child(n+3){border-top:1px solid var(--border)}.result-metrics>div:last-child{grid-column:1/-1}}
+@media(max-width:640px){.result-metrics>div{padding:12px}.results-toolbar{padding:12px}.results-toolbar>*{max-width:100%}.results-toolbar label{flex-basis:100%}.results-refresh-actions{width:100%}.results-refresh-actions>*{flex:1 1 auto}.responsive-instructor .results-page-header{padding:0 0 16px}}
+@media(max-width:359px){.result-metrics{grid-template-columns:minmax(0,1fr)}.result-metrics>div{border-inline-end:0}.result-metrics>div+div{border-top:1px solid var(--border)}}
+@media(forced-colors:active){.result-status{border:1px solid CanvasText}.participation-links a[aria-current]{outline-color:Highlight}}
 """
