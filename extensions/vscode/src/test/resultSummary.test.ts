@@ -207,10 +207,11 @@ test("all unpublished states hide corrective fields while retaining only the pre
     assert.match(html, /이번 제출 이전 최고점/); assert.match(html, /8 \/ 10점/);
   }
   const extension = readFileSync(resolve(__dirname, "../../src/extension.ts"), "utf8");
-  const render = extension.split("function renderResult")[1]!.split("function publishDiagnostics")[0]!;
+  const render = extension.split("function renderResult")[1]!.split("function selectWorkspaceFolder")[0]!;
   assert.match(render, /result.state === "published" && result.score !== undefined/);
   assert.match(render, /const view = summarizeResult\(result\)/);
   assert.match(render, /result.state === "published" && result.diagnostics.length/);
-  const publish = extension.split("function publishDiagnostics")[1]!.split("function diagnosticSeverity")[0]!;
+  const publish = readFileSync(resolve(__dirname, "../../src/resultDiagnostics.ts"), "utf8");
   assert.match(publish, /if \(!item.path\) continue;/);
+  assert.match(publish, /result.state !== "published"/);
 });

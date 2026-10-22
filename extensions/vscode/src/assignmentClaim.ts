@@ -12,6 +12,21 @@ import { isInsecureHttpPilotUrl, normalizeClaimCode } from "./helpers";
 import type { AssignmentClaim, DeviceAuthorization, TokenResponse } from "./types";
 
 const MAX_CLAIM_CODE_INPUT_LENGTH = 256;
+type ClaimStage = "device" | "redeem" | "session" | "assignment";
+const CLAIM_STAGE_LABELS: Record<ClaimStage, string> = {
+  device: "기기 연결 준비 (/v1/device-authorizations)",
+  redeem: "수령 코드 확인 (/v1/assignment-claims/redeem)",
+  session: "로그인 연결 (/v1/device-authorizations/token)",
+  assignment: "수락 목록 확인 · 과제 다운로드",
+};
+// Never echo arbitrary server strings, even if they look like an error-code identifier.
+const SAFE_CLAIM_ERROR_CODES = new Set([
+  "internal_error", "service_unavailable", "not_found", "invalid_request", "invalid_response",
+  "network_error", "request_timeout", "response_too_large", "rate_limit_exceeded", "rate_limited",
+  "too_many_requests", "login_required", "invalid_grant", "access_denied", "expired_token",
+  "authorization_pending", "slow_down", "assignment_claim_denied", "assignment_claim_unavailable",
+  "invalid_claim_code", "insecure_claim_redemption", "server_upgrade_required", "permission_denied",
+]);
 
 export { normalizeClaimCode } from "./helpers";
 
@@ -70,6 +85,7 @@ export class AssignmentClaimController {
       .filter(Boolean)
       .join(" / ");
     let prepared: PreparedAssignmentClaim;
+    let stage: ClaimStage = "device";
     try {
       prepared = await vscode.window.withProgress(
         {
@@ -93,8 +109,9 @@ export class AssignmentClaimController {
             );
             validatePendingDeviceAuthorization(authorization);
             if (this.client.transport.getBaseUrl() !== serviceBaseUrl) {
-              throw new Error("수령 코드 확인 중 Autograde 서비스 주소가 변경되었습니다. 다시 시도하세요.");
+              throw new ApiError("service address changed", 401, "login_required");
             }
+            stage = "redeem";
             try {
               const claim = await this.client.redeemAssignmentClaim(
                 ephemeralClaimCode as string,
@@ -109,31 +126,28 @@ export class AssignmentClaimController {
               }
               throw error;
             }
-          } catch (error) {
-            if (error instanceof RequestCancelledError) {
-              throw new vscode.CancellationError();
-            }
-            throw error;
           } finally {
             subscription.dispose();
           }
         },
       );
+    } catch (error) {
+      throw claimStageError(stage, error);
     } finally {
       // Do not retain the claim secret after its single network request.
       ephemeralClaimCode = undefined;
     }
 
-    const tokens = await vscode.window.withProgress(
-      {
-        location: vscode.ProgressLocation.Notification,
-        title: prepared.recoveringFromLostResponse
-          ? "기기 승인 상태 복구 중"
-          : "과제용 로그인 연결 중",
-        cancellable: true,
-      },
-      async (progress, cancellationToken) => {
-        try {
+    try {
+      const tokens = await vscode.window.withProgress(
+        {
+          location: vscode.ProgressLocation.Notification,
+          title: prepared.recoveringFromLostResponse
+            ? "기기 승인 상태 복구 중"
+            : "과제용 로그인 연결 중",
+          cancellable: true,
+        },
+        async (progress, cancellationToken) => {
           return await this.tokenPoller({
             deviceCode: prepared.authorization.device_code,
             expiresInSeconds: prepared.authorization.expires_in,
@@ -153,30 +167,26 @@ export class AssignmentClaimController {
               });
             },
           });
-        } catch (error) {
-          if (error instanceof OperationCancelledError || error instanceof RequestCancelledError) {
-            throw new vscode.CancellationError();
-          }
-          if (prepared.recoveringFromLostResponse) {
-            throw new Error(
-              "서버 응답이 중간에 끊겨 기기 승인 복구를 완료하지 못했습니다. 수령 코드를 다시 입력해 보세요.",
-            );
-          }
-          throw error;
-        }
-      },
-    );
+        },
+      );
 
-    if (this.client.transport.getBaseUrl() !== serviceBaseUrl) {
-      throw new Error("수령 코드 확인 중 Autograde 서비스 주소가 변경되었습니다. 다시 시도하세요.");
+      if (this.client.transport.getBaseUrl() !== serviceBaseUrl) {
+        throw new ApiError("service address changed", 401, "login_required");
+      }
+      await this.client.tokens.storeSession(tokens, serviceBaseUrl);
+    } catch (error) {
+      throw claimStageError("session", error, prepared.recoveringFromLostResponse);
     }
-    await this.client.tokens.storeSession(tokens, serviceBaseUrl);
     if (prepared.recoveringFromLostResponse) {
       void vscode.window.showInformationMessage(
         "서버 응답이 끊겼지만 과제 승인과 로그인을 복구했습니다. 다운로드할 과제를 선택하세요.",
       );
     }
-    await this.onRedeemed(prepared.claim?.assignmentId);
+    try {
+      await this.onRedeemed(prepared.claim?.assignmentId);
+    } catch (error) {
+      throw claimStageError("assignment", error);
+    }
   }
 }
 
@@ -209,7 +219,7 @@ function validatePendingDeviceAuthorization(value: DeviceAuthorization): void {
       value.interval <= 0
     ))
   ) {
-    throw new Error("서비스가 유효하지 않은 기기 연결 응답을 반환했습니다.");
+    throw new ApiError("invalid device authorization response", 0, "invalid_response");
   }
 }
 
@@ -219,4 +229,30 @@ function isUncertainRedemptionResponse(error: unknown): boolean {
     "request_timeout",
     "invalid_response",
   ]).has(error.code ?? "");
+}
+
+function claimStageError(stage: ClaimStage, error: unknown, recovering = false): Error {
+  if (error instanceof vscode.CancellationError || error instanceof RequestCancelledError || error instanceof OperationCancelledError) {
+    return new vscode.CancellationError();
+  }
+  const apiError = error instanceof ApiError;
+  const status = apiError && Number.isInteger(error.status) && error.status >= 100 && error.status <= 599 ? error.status : 0;
+  const code = apiError && error.code && SAFE_CLAIM_ERROR_CODES.has(error.code) ? error.code : "unclassified_error";
+  const technical = apiError
+    ? `\n${status ? `HTTP ${status}` : "HTTP 응답 없음/확인 불가"} · 오류 코드: ${code}`
+    : "";
+  const actions: Record<ClaimStage, string> = {
+    device: status === 401 || code === "invalid_grant" || code === "invalid_claim_code"
+      ? "이 수령 코드로 연결할 수 없습니다. 학생 웹에서 새 코드를 발급받아 다시 입력하세요. 반복되면 교수자에게 교과목·과제 공개 상태와 서버 로그 확인을 요청하세요."
+      : "서버 연결 확인 후 다시 시도하세요. 반복되면 교수자에게 기기 연결 준비 단계의 서버 로그 확인을 요청하세요.",
+    redeem: "학생 웹에서 해당 과제의 새 수령 코드를 받아 다시 시도하세요. 계속 실패하면 교수자에게 과제 공개·수강 상태를 확인해 달라고 요청하세요.",
+    session: "수령 코드가 이미 사용되었을 수 있습니다. 학생 웹에서 새 코드를 받아 다시 연결하세요. 반복되면 교수자에게 로그인 연결 단계의 서버 로그 확인을 요청하세요.",
+    assignment: status === 401 || code === "login_required"
+      ? "수령 코드 확인 후 로그인이 만료되거나 변경되었습니다. 학생 웹에서 새 코드를 받아 다시 연결하세요. 기존 과제 파일은 삭제하지 마세요."
+      : "수령 코드 확인은 완료되었습니다. ‘과제 새로고침’ 후 수락 목록에서 ‘과제 파일 다운로드’를 다시 실행하세요. 기존 과제 파일은 삭제하지 마세요.",
+  };
+  const recovery = recovering ? "\n서버 응답이 끊긴 뒤 기기 승인 복구를 완료하지 못했습니다." : "";
+  const message = `과제 수령 중단 · ${CLAIM_STAGE_LABELS[stage]}${technical}${recovery}\n${actions[stage]}`;
+  // No raw message, payload, cause, device label, student identity or credential is retained.
+  return apiError ? new ApiError(message, status, code) : new Error(message);
 }

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import * as path from "node:path";
 import test from "node:test";
+import { runInNewContext } from "node:vm";
 
 import type { Assignment } from "../types";
 import { AssignmentDocumentState } from "../assignmentDocument";
@@ -236,6 +237,41 @@ test("sidebar welcome content offers authentication-aware clickable controls", a
     /command:autograde\.cloneAssignment/,
     "an empty assignment list must not offer a download action that is guaranteed to fail",
   );
+  for (const state of [signedOut, signedIn]) {
+    assert.match(state.contents, /\[학습 홈\]\(command:autograde\.openLearningHome\)/);
+  }
+});
+
+test("sidebar messages never suppress empty-state login and learning-home controls", async () => {
+  const source = await readFile(path.resolve(__dirname, "../../src/extension.ts"), "utf8");
+  const start = source.indexOf("const updateAuthenticationUI = async");
+  const end = source.indexOf("return authenticated;", start);
+  const assignment = source.slice(start, end).match(/treeView\.message\s*=[\s\S]*?;/)?.[0];
+  assert.ok(assignment, "authentication UI must explicitly update the sidebar message");
+  const treeProvider = new AssignmentsTreeProvider();
+  const treeView: { message?: string } = { message: "previous session message" };
+  const context = { treeView, treeProvider, authenticated: false };
+
+  // Execute the production assignment: VS Code hides viewsWelcome for any nonempty message.
+  runInNewContext(assignment, context);
+  assert.equal(treeView.message, undefined, "signed-out students must see claim and home links");
+
+  context.authenticated = true;
+  runInNewContext(assignment, context);
+  assert.equal(treeView.message, undefined, "an authenticated empty list must show welcome actions");
+
+  treeProvider.setAssignments([{ id: "a", title: "Practice A" }]);
+  runInNewContext(assignment, context);
+  assert.match(treeView.message ?? "", /현재 수령 코드로 연결된 과제/);
+
+  treeProvider.clear();
+  runInNewContext(assignment, context);
+  assert.equal(treeView.message, undefined, "clearing assignments must restore welcome actions");
+
+  treeProvider.setAssignments([{ id: "stale", title: "Previous session" }]);
+  context.authenticated = false;
+  runInNewContext(assignment, context);
+  assert.equal(treeView.message, undefined, "a signed-out transition must clear the old message");
 });
 
 test("extension keeps authentication and download availability contexts in sync", async () => {

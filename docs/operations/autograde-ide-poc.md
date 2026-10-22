@@ -1,0 +1,320 @@
+# Autograde IDE 개념연구 실행 안내
+
+## 실행 범위
+
+이 절차는 Code-OSS 소스에 Autograde 확장을 내장하고 개발용 IDE를 실행한다. 기존 Autograde
+서버·CSV·SQLite는 그대로 사용하며 PostgreSQL이나 Docker를 설치하지 않는다. 편집기 소스와
+빌드 도구는 개발 PC에 준비한다. 채점 서버에 편집기를 빌드하거나 설치할 필요는 없다.
+
+1단계는 수업 연결·과제 열기·다운로드·제출·결과 확인을 한곳에 모으는 개념연구다.
+AI 강제 차단·시험 감독·학생용 서명 설치 파일·자동 업데이트는 제공하지 않는다.
+자세한 구성과 후속 단계는 [전용 IDE 설계](../architecture/autograde-ide.md)를 참고한다.
+
+## 준비 사항
+
+- Autograde 저장소와 Git, 지정된 Node.js 및 npm.
+- 대상 운영체제에서 Code-OSS를 빌드할 수 있는 도구와 저장 공간.
+- 기존 파일럿 서버, 합성 시험 학생 계정, 제출 가능한 시험 과제.
+- 학생 작업 파일을 보관할 별도 수업 폴더. 실제 성적·운영 계정으로 초기 시험하지 않는다.
+
+Code-OSS의 native 의존성은 운영체제별로 다르다. [공식 빌드 안내](https://github.com/microsoft/vscode/wiki/How-to-Contribute)의
+해당 플랫폼 준비 사항을 확인하고, Node 버전은 아래 고정 소스의 `.nvmrc`를 따른다.
+upstream 최신 안내의 버전과 고정한 소스의 요구사항을 섞지 않는다.
+
+## 소스 준비
+
+이하 명령은 `autograde` 저장소 루트에서 실행한다. `.cache/code-oss`가 이미 있으면 새로운
+빈 경로를 사용하거나 기존 소스의 버전을 먼저 확인한다. 변경된 소스를 지우거나 강제로 되돌리지 않는다.
+
+```sh
+git clone --depth 1 --branch 1.143.0 https://github.com/microsoft/vscode.git .cache/code-oss
+git -C .cache/code-oss rev-parse HEAD
+```
+
+기준 소스는 다음과 같다.
+
+| 항목 | 고정 값 |
+| --- | --- |
+| upstream | `https://github.com/microsoft/vscode.git` |
+| tag | `1.143.0` |
+| commit | `2d0b7506a36c1d6db9a466440131a8e01eab2289` |
+| 소스의 Node 버전 | `24.18.0` |
+
+준비·검증 도구는 임의의 최신 소스를 자동으로 받거나 의존성을 자동 설치하지 않는다.
+소스 다운로드와 다음의 npm 설치는 별도의 네트워크 작업이며 개발자가 실행한다.
+
+## 내장 확장과 제품 설정 준비
+
+확장의 개발 의존성을 설치한 뒤 준비 도구를 실행한다.
+
+```sh
+npm --prefix extensions/vscode ci
+node ide/code-oss/manage.mjs prepare --source .cache/code-oss
+node ide/code-oss/manage.mjs verify --source .cache/code-oss
+```
+
+준비 도구는 확장을 빌드하고 Code-OSS의 `extensions/` 아래에 내장 확장과 제품 프로필을
+준비한다. 제품 설정에는 Autograde 이름·독립 데이터 경로와 학습용 기본값을 반영한다.
+Microsoft Marketplace·Microsoft 업데이트 서비스 연결은 설정하지 않는다.
+기존 VS Code 설치 폴더, 기존 사용자 프로필, Autograde 서버 DB는 변경하지 않는다.
+TypeScript 컴파일은 이미 설치한 도구를 사용하며 다운로드하지 않는다. 소스 입력 지문과 내장
+파일 해시를 기록하므로 준비 후 소스·내장 파일이 바뀌면 다시 검증해야 한다.
+
+Code-OSS 소스 안의 `.autograde-ide-overlay.json`은 준비 도구의 소유·검증 정보다.
+이전 생성본은 같은 소스 아래 `.autograde-stage-*` 경로에 보존한다. 임의로 편집하거나
+삭제하지 말고 문제가 있으면 변경 파일을 보존한 뒤 새 소스 폴더에서 준비한다.
+
+소스 버전 불일치나 관리되지 않는 대상 파일 때문에 거절되면 오류에 표시된 파일을 확인한다.
+강제 덮어쓰기로 우회하지 말고 지정한 버전의 새 개발 소스 폴더에서 다시 진행한다.
+`verify` 성공은 제품 설정과 내장 확장 검사 통과이며 전체 편집기의 빌드·GUI 실행 성공을 뜻하지 않는다.
+
+## Code OSS 빌드와 실행
+
+고정 소스에 맞는 Node 버전을 사용하여 편집기 의존성·클라이언트·Electron을 준비한다.
+
+```sh
+npm --prefix .cache/code-oss ci
+npm --prefix .cache/code-oss run compile-client
+npm --prefix .cache/code-oss run electron
+node ide/code-oss/manage.mjs verify --source .cache/code-oss
+node ide/code-oss/manage.mjs run --source .cache/code-oss
+```
+
+첫 빌드에는 native 모듈과 Electron 다운로드가 필요하다. 빌드 오류가 나면 해당 단계에서
+중지하고 Node 버전·플랫폼 빌드 도구·다운로드 접근 여부를 확인한다. 준비 도구만 성공한 상태를
+학생 설치 가능한 IDE로 배포하지 않는다.
+
+기존 수업 폴더로 바로 열려면 다음처럼 절대 경로를 지정한다. 경로는 자신의 시험 폴더로 바꾼다.
+
+```sh
+node ide/code-oss/manage.mjs run --source .cache/code-oss --workspace /absolute/path/to/course-workspace
+```
+
+개발 실행은 저장소의 `.cache/ide/` 아래 `user-data`, `extensions`, `shared-data`를 별도로
+사용한다. 작업 폴더는 이 프로필 밖에 보관한다. 별도 프로필은 기존 VS Code 설정과 섞이지
+않게 하는 기능이며, 학생 간 파일 접근을 격리하는 OS 보안 기능은 아니다.
+새 프로필에는 `runtime-settings.json`의 학습용 기본값 8개를 `user-data/User/settings.json`에
+최초 한 번만 만든다. AI·자동 업데이트·사용량 수집 비활성 등의 초기값이며 사용자가 바꿀 수 있다.
+기존 설정 파일은 주석 있는 JSONC를 포함해 그대로 보존하며 덮어쓰지 않는다. 새 파일은
+배타적 생성과 소유자 읽기·쓰기 권한을 사용한다. 내장 프로필 확장은 창 수준 기본값 3개를 제공한다.
+`run`은 실행 전 의존성이나 Electron을 자동 다운로드하지 않는다. 빌드 산출물이 없으면 먼저
+위의 명시적인 준비·빌드 단계를 완료한다.
+
+### 실행 경로와 macOS 빌드 오류
+
+저장소 경로가 길면 macOS·Linux의 Unix 소켓 경로 제한 때문에 IDE가 시작하지 못할 수 있다.
+실행 도구는 생성될 소켓 경로를 UTF-8 바이트 길이로 검사하며 macOS 103바이트·Linux 107바이트
+이상이면 짧은 경로를 요청한다. 본인만 접근하는 짧은 프로필 경로를 정해 `run`에만 전달한다.
+
+```sh
+node ide/code-oss/manage.mjs run --source .cache/code-oss --runtime /absolute/short/profile
+```
+
+프로필 디렉터리는 명시적으로 만들고 검사하며 심볼릭 링크를 거절한다. 짧은 경로를 만들기 위해
+기존 VS Code 프로필에 연결하거나 다른 학생과 프로필을 공유하지 않는다.
+
+macOS에서 native 모듈 설치 중 C++ 표준 헤더 `string`을 찾지 못하면 먼저 Xcode Command Line
+Tools와 SDK 설치를 확인한다. 이번 macOS ARM 개발 장비에서는 이미 설치된 SDK의 C++ 헤더
+경로를 **해당 npm 프로세스에만** 전달하여 설치했다. 동일한 SDK 경로가 존재할 때만 적용한다.
+
+```sh
+CPLUS_INCLUDE_PATH=/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 npm --prefix .cache/code-oss ci
+```
+
+이는 개발 PC의 도구 체인 경로 문제 대응이며 shell 시작 파일·시스템 SDK·서버 운영 설정을
+변경하는 절차가 아니다. 다른 빌드 오류를 이 설정으로 일괄 우회하지 않는다.
+
+## 학생 흐름 확인
+
+빈 창으로 시작하면 **Autograde 학습 홈**이 열린다. 기존 폴더·작업 영역·탭을 열어 시작한
+경우에는 작업 화면을 보존한다. 이때는 Autograde 사이드바의 학습 홈 메뉴 또는
+`Autograde: Open Learning Home` 명령으로 홈을 연다.
+
+1. 학습 홈에서 교수자가 안내한 **서버 주소**를 확인한다. 학생 웹 주소와 제출 API 주소는
+   기존 서버 구성에 따라 다를 수 있다. HTTPS·포트 설정은 [파일럿 서버 안내](independent-web-pilot.md)를 따른다.
+2. 전용 수업 폴더를 열고 본인의 시험 과제용 **새 수령 코드**를 입력한다. 홈에서 학번·학교
+   비밀번호를 별도로 저장하지 않는다.
+3. 과제를 다운로드하고 설명과 파일이 열리는지 확인한다. 소스를 수정·저장한다.
+4. **기존 과제 이어하기**로 같은 폴더를 다시 연결한다. 편집한 내용이 starter로 덮이지 않아야 한다.
+5. 제출 대상·파일을 확인하고 제출한다. **접수됨 → 채점 대기·진행 → 현재 제출 결과**가 구분되어야 한다.
+6. 코드를 고쳐 재제출한다. 새 제출이 채점 중이면 이전 점수가 현재 결과로 표시되면 안 된다.
+   이전 최고점·제출 이력은 별도로 확인한다.
+7. IDE를 종료한 뒤 기존 폴더를 열고 새 코드로 재인증한다. 파일은 남고 이전 세션 정보는
+   자동 복원되지 않아야 한다.
+8. 로그아웃한다. 공용 PC라면 학교의 작업 파일·브라우저 정리 절차를 별도로 수행한다.
+
+다른 과제로 전환하거나 폴더 열기가 실패한 경우에는
+[이어하기·전환 시나리오](assignment-workspace-lifecycle.md)를 따른다.
+재인증은 재다운로드를 의미하지 않으며 기존 코드를 보존해야 한다.
+
+## 연구용 기본값과 제한
+
+`chat.disableAIFeatures` 등 학습용 기본값은 사용자가 변경할 수 있다. 확장 갤러리를 설정하지
+않아도 수동 VSIX 설치·터미널·브라우저·외부 프로그램 사용을 차단한 것은 아니다.
+upstream에 포함된 AI 관련 구현을 모두 제거했다는 의미도 아니다. 학생에게 **AI 사용 불가가
+보장된 시험용 IDE**로 안내하지 않는다.
+고정한 Code-OSS 1.143.0은 시작할 때 `defaultChatAgent` 제품 메타데이터를 요구하므로 해당
+메타데이터는 보존한다. 기본 AI 비활성 설정과 실행 시 Copilot 비활성 플래그를 사용하고,
+별도 음성 서비스 URL과 내장 확장 자동 업데이트 목록은 제거한다. 모든 AI endpoint를 제거하거나
+네트워크 접근을 차단한 제품은 아니다.
+
+Windows 네이티브 C/C++ 컴파일·디버깅과 WSL 원격 작업 영역은 별도 검증 대상으로 남긴다.
+Microsoft C/C++·Remote WSL 확장을 자동 설치하지 않으며 Microsoft Marketplace 사용을
+전제로 하지 않는다. 기존 Visual Studio 확장은 계속 별도로 운영할 수 있다.
+
+준비 도구는 hosts·방화벽·브라우저 설정을 바꾸지 않고 화면을 촬영하거나 학생 활동을 숨겨서
+수집하지 않는다. 원격 서버를 배포하거나 기존 확장에 자동 업데이트를 강제하지 않는다.
+
+## 인수 기록
+
+개념연구를 완료하기 전 다음 결과를 분리해서 기록한다. 소스·설정 검사와 실제 IDE 실행은
+대체 관계가 아니다.
+
+| 항목 | 완료 증거 |
+| --- | --- |
+| 준비·검증 도구 | 고정 소스·내장 파일·제품 설정 검사 및 실패 경로 자동 시험 |
+| 확장 학습 홈 | TypeScript 빌드, 명령 연결·메시지 검증·테마 검사 |
+| 전체 편집기 | 대상 OS에서 Code-OSS 클라이언트 빌드·Electron 실행 성공 |
+| 학생 동작 | 시험 서버로 다운로드·이어하기·두 번 제출·현재 결과와 최고점 확인 |
+| 복구 | 통신 단절·재시작·만료·과제 전환에도 코드와 서버 접수 이력 보존 |
+| 학생 배포 | 별도 후속 단계의 서명·설치·업데이트·지원 플랫폼 검사 |
+
+실제 IDE와 서버를 연결하지 않은 단위 시험만으로 배포 승인을 내리지 않는다.
+공식 성적·신뢰할 수 없는 학생 코드 실행은 기존 채점 서버의 격리 기준도 별도로 충족해야 한다.
+
+### 자동 검사 실행
+
+```sh
+node --test ide/code-oss/manage.test.mjs
+npm --prefix extensions/vscode test
+```
+
+학습 홈의 브라우저 검사는 컴파일된 HTML과 합성 상태만 사용한다. Playwright 모듈과 Chrome
+실행 파일은 개발 장비에 설치된 절대 경로를 넘긴다. 외부 요청을 차단하고 실제 학생 자료나
+채점 서버에 연결하지 않는다.
+
+```sh
+node ide/code-oss/check-home.cjs \
+  extensions/vscode/out/learningHome.js \
+  /absolute/path/to/node_modules/playwright \
+  /absolute/path/to/chrome \
+  build/autograde-ide-home
+```
+
+320·375·768·1440px, 밝은·어두운·고대비 테마와 인증·신뢰·작업 영역·진행 중 상태 조합에서
+가로 넘침, 키보드 포커스, 버튼의 활성·비활성 및 고정 메시지 전송을 검사한다.
+대표 PNG와 `summary.json`은 지정한 출력 폴더에 남긴다. 이 검사는 실제 Code-OSS Webview·
+원격 API·C/C++ 도구 체인의 통합 시험을 대체하지 않는다.
+
+### 2026년 10월 22일 편집기 빌드 확인
+
+- 준비·검증·실행 도구의 자동 시험 **57개**, VS Code 확장 시험 **235개**가 통과했다.
+- 고정한 실제 upstream 소스에서 `prepare`·`verify`를 실행하여 내장 런타임 파일 92개의
+  무결성과 소스 입력 지문을 확인했다. SQLite와 서버 API는 변경하지 않았다.
+- 합성 학습 홈의 브라우저 검사 192개 화면 조합이 통과했다. 활성 버튼의 메시지 전송 420회,
+  비활성 버튼의 전송 차단 1,116회와 외부 요청 0건을 확인했다. 대표 화면 4개에서 가로 넘침·
+  본문 잘림 없이 좁은 화면과 밝은·어두운·고대비 테마의 내용을 확인했다.
+- macOS ARM·Node 24.18.0에서 upstream 의존성 설치, `compile-client`, Electron 준비가 완료됐다.
+- 실제 Code-OSS에서 내장 `autograde.autograde-vscode` 확장의 시작 활성화와 학습 홈 자동 열기를
+  확인했다. 1200×800 어두운 테마의 3열 화면과 **서버 주소 설정** 버튼의 기존 입력창 연결,
+  Escape 취소 후 상태·버튼 복구를 확인했고 Autograde 활성화 오류는 없었다.
+- 새 프로필을 처음 생성하는 실행에서도 학습 홈이 유일한 편집기 탭으로 자동 표시됐다.
+  upstream 편집기 핵심 코드는 수정하지 않았다. 개발 로그의 GitHub 세션 없음·remote tunnel
+  미지원 경고는 남아 있으며 해당 기능의 지원 완료를 의미하지 않는다.
+- 첫 실행의 연결 끊김 표시는 서버 미실행 상태에서 확인했다. 이후 서버 연결 시험은 아래와
+  구분한다. Windows·WSL·서명 설치 파일은 별도 검증 대상이다.
+
+## 격리된 실제 서버 시험
+
+운영 서버와 분리된 SQLite·합성 학생·C++ 과제로 웹 인증부터 실제 컴파일 결과까지 재현한다.
+`pilot-local`은 샌드박스가 아니므로 저장소의 검증된 예제만 실행하며, 외부 학생 코드를 넣거나
+외부 인터페이스에 공개하지 않는다. C++17 컴파일러가 필요하다.
+
+새 시험 환경을 만든다. 기본값은 API `127.0.0.1:28000`, 학생 웹 `127.0.0.1:28010`이며,
+명령 결과의 `fixture_root`와 `serve_command`를 사용한다. 운영 CSV 경로를 전달하지 않는다.
+
+```sh
+.venv/bin/python scripts/prepare_codeoss_e2e.py
+```
+
+첫 터미널에서 출력된 `serve_command`를 실행한다. 다른 터미널에서는 생성된 경로로 다음을
+실행한다. `<fixture_root>`는 실제 경로로 바꾼다.
+
+```sh
+.venv/bin/python scripts/check_codeoss_server_e2e.py <fixture_root>/fixture.json
+```
+
+시험은 합성 학생 `codeoss-http-002`로 웹 로그인·수령 코드 발급·수락·다운로드 후 네 번
+제출한다. 정상 동작의 기준은 다음과 같다.
+
+| 제출 | 현재 점수 | 확인할 내용 |
+| --- | --- | --- |
+| 미완성 starter | 5/10 | 실행 성공과 출력 불일치 피드백 |
+| 정답 | 10/10 | 출력 일치 |
+| 다시 미완성 코드 | 5/10 | 현재 결과는 5점, 이전 최고점은 10점 |
+| 컴파일 오류 | 0/10 | 현재 결과는 0점, 이전 최고점은 10점 |
+
+각 접수번호와 제출 코드 해시가 채점 결과에 일치해야 한다. 같은 요청의 재시도는 새 접수번호를
+만들지 않아야 하며, 제출 이력은 최신순이어야 한다. 결과는 `http-e2e-summary.json`에 남긴다.
+반복 실행하면 같은 합성 학생의 시험 제출 이력이 추가된다.
+
+실제 IDE에서도 시험하려면 서버 주소를 `http://127.0.0.1:28000`으로 설정하고 별도 수업 폴더를
+연다. 다음 명령은 별도 합성 학생 `codeoss-gui-001`의 수령 코드를 발급한다.
+
+```sh
+.venv/bin/python scripts/check_codeoss_server_e2e.py <fixture_root>/fixture.json --issue-gui-claim
+```
+
+수령 코드는 터미널에 출력하지 않고 명령 결과에 표시된 소유자 전용 파일에 저장한다. 코드를
+IDE 입력창에 직접 입력하고 만료 시 다시 발급한다. `synthetic-credentials.json`, roster CSV,
+수령 코드 파일은 커밋하거나 공유하지 않는다. 이 HTTP 시험 성공은 IDE 화면 검증을 대신하지 않는다.
+
+### 실제 서버 시험 기록
+
+2026년 10월 22일 macOS에서 별도 SQLite와 실제 C++17 채점기로 **5 → 10 → 5 → 0점**,
+접수번호·코드 해시 연결, 중복 요청 처리, 이전 최고점, 최신순 이력을 확인했다. 합성 학생만
+사용했으며 운영 학생의 제출 자료는 사용하지 않았다.
+
+배포 서버 `https://ai.cbchoi.info:20000/readyz`와 `:20010/readyz`는 정상 응답했고, 실제 IDE에서
+API 서버 연결됨 표시를 확인했다. 연결됨은 인증·제출 완료를 뜻하지 않는다. 원격 시험 학생의
+수령 코드 입력 후에는 `internal_error` 응답이 발생했고, 운영 로그에서
+`http_request_unexpected_exception`의 `exception_type=IntegrityError`를 확인했다.
+원격 다운로드·제출·결과 화면 검증은 이 오류 해결 후 다시 수행해야 한다.
+
+별도 DB에서는 31일 전에 취소된 로그인 기록에 bundle 다운로드·제출 이력이 연결된 경우
+새 기기의 로그인 토큰 발급 중 동일한 `IntegrityError`가 재현됐다. 로그인 기록 정리 대상에서
+이러한 감사 이력의 참조를 제외하도록 수정했다. 과제·학생·성적·SQLite를 삭제하거나
+초기화하지 않고 서버 코드 업데이트와 재시작 후 새 수령 코드로 다시 확인한다. 운영 로그에
+실패 경로가 없으므로 예외 유형의 일치만으로 원격 원인을 확정하지 않는다.
+
+### 시험 중 수정한 동작
+
+- 빈 창에서 수업 폴더를 연 뒤 학습 홈과 코드 입력 안내를 복원한다. 폴더 URI와 10분 유효한
+  진행 의도만 저장하고 수령 코드·토큰·학생 정보는 저장하지 않는다.
+- 채점 오류 위치는 현재 편집 창이 아니라 접수 당시 과제 폴더에 연결한다. WSL·SSH URI를
+  보존하고, 다른 제출이나 종료된 로그인 세션의 늦은 응답이 현재 오류 표시를 덮지 않도록 한다.
+- IDE 재시작으로 제출 폴더 연결을 알 수 없으면 임의 파일에 오류를 표시하지 않고 결과 본문을
+  제공한다. 새 제출 시작 시 이전 오류 표시를 지운다.
+- 로그인 전 또는 과제 목록이 비어 있을 때 사이드바 안내 문구가 기본 로그인 메뉴를 가리지
+  않도록 한다. 비어 있는 목록에서도 학습 홈·수령 코드 입력 버튼을 제공한다.
+- 오래된 로그인 기록 정리 시 Git 제출뿐 아니라 bundle 제출·다운로드 이력이 참조하는
+  기록도 보존한다. 이력이 없는 오래된 기록의 정리와 취소된 토큰의 접근 거부는 유지한다.
+- 수령 오류는 기기 연결 준비·수령 코드 확인·로그인 연결·수락 목록 및 다운로드 단계로
+  구분한다. HTTP 상태와 허용된 오류 코드, 해결 방법만 표시하며 서버 원문·토큰·수령 코드를
+  오류 메시지에 복사하지 않는다. 취소와 응답 손실 후 승인 복구 동작은 유지한다.
+
+실제 IDE를 다시 불러온 뒤 사이드바의 학습 홈·서버 설정·연결 확인·수령 코드 입력 버튼이
+표시되는 것을 확인했다. 원격 서버에 비밀값이 아닌 무효 시험 코드를 입력한 경우
+`기기 연결 준비 · HTTP 401 · invalid_grant`로 오류 단계를 구분했다.
+
+최종 검증에서 확장 **263개**, 준비 도구 **57개**, 서버 인증·상태 회귀 **99개**와 시험 도구
+**16개**가 모두 통과했다. 수정 서버로 실제 HTTP 시험을 다시 실행하여 **5 → 10 → 5 → 0점**과
+이력 보존을 확인했다. 생성한 격리 서버는 종료했으며 운영 서버는 변경하지 않았다.
+
+관련 자동 시험은 다음과 같이 실행한다.
+
+```sh
+npm --prefix extensions/vscode test
+.venv/bin/python -m pytest tests/unit/test_codeoss_e2e_fixture.py tests/unit/test_codeoss_server_e2e.py
+.venv/bin/python -m pytest tests/unit/test_bundle_auth_history_retention.py
+```

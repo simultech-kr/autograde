@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import * as path from "node:path";
 import test from "node:test";
 
-import { ApiError, type ApiTransport, type AutogradeClient, TokenManager } from "../api";
+import { ApiError, type ApiTransport, type AutogradeClient, RequestCancelledError, TokenManager } from "../api";
 import { OperationCancelledError } from "../deviceAuth";
 import type { DeviceTokenPollOptions } from "../deviceAuth";
 import type { AssignmentClaim, DeviceAuthorization, TokenResponse } from "../types";
@@ -332,7 +332,7 @@ test("an explicit claim denial does not poll or install a session", async () => 
     async () => { polls += 1; return TOKENS; },
   );
 
-  await assert.rejects(controller.redeem(), /claim denied/);
+  await assert.rejects(controller.redeem(), /수령 코드 확인.*\/v1\/assignment-claims\/redeem[\s\S]*HTTP 403.*assignment_claim_denied/);
   assert.equal(polls, 0);
   assert.equal(stored, 0);
 });
@@ -361,6 +361,137 @@ test("assignment-claim controller has no persistence or clipboard path for the r
   assert.doesNotMatch(source, /clipboard|writeText|getConfiguration/);
   assert.match(source, /entered\s*=\s*undefined/);
   assert.match(source, /ephemeralClaimCode\s*=\s*undefined/);
+});
+
+type FailureStage = "device" | "redeem" | "token" | "store" | "assignment";
+function failingController(stage: FailureStage, failure: unknown): InstanceType<typeof AssignmentClaimController> {
+  const fail = async (): Promise<never> => { throw failure; };
+  return new AssignmentClaimController(baseClient({
+    ...(stage === "device" ? { createDeviceAuthorization: fail } : {}),
+    ...(stage === "redeem" ? { redeemAssignmentClaim: fail } : {}),
+    ...(stage === "store" ? { storeSession: fail } : {}),
+  }), "0.5.7", stage === "assignment" ? fail : async () => undefined,
+  stage === "token" ? fail : async () => TOKENS);
+}
+
+const FAILURE_STAGES: readonly FailureStage[] = ["device", "redeem", "token", "store", "assignment"];
+const FAILURE_LABELS: Record<FailureStage, RegExp> = {
+  device: /기기 연결 준비 \(\/v1\/device-authorizations\)/,
+  redeem: /수령 코드 확인 \(\/v1\/assignment-claims\/redeem\)/,
+  token: /로그인 연결 \(\/v1\/device-authorizations\/token\)/,
+  store: /로그인 연결 \(\/v1\/device-authorizations\/token\)/,
+  assignment: /수락 목록 확인 · 과제 다운로드/,
+};
+
+test("each claim stage reports HTTP and an allowlisted code without server message or student secrets", async () => {
+  const secrets = ["AK1-2345-6789-ABCD", DEVICE.device_code, TOKENS.access_token, TOKENS.refresh_token,
+    "student-identity-private", "device-name-private", "raw-response-body-private"];
+  for (const stage of FAILURE_STAGES) {
+    resetUi(); inputResponses = ["AK1-2345-6789-ABCD"];
+    const original = new ApiError(secrets.join(" "), 500, "internal_error");
+    await assert.rejects(failingController(stage, original).redeem(), (error: unknown) => {
+      assert.ok(error instanceof ApiError);
+      assert.notEqual(error, original);
+      assert.match(error.message, FAILURE_LABELS[stage]);
+      assert.match(error.message, /HTTP 500 · 오류 코드: internal_error/);
+      assert.equal(error.status, 500); assert.equal(error.code, "internal_error");
+      assert.equal(error.cause, undefined);
+      for (const secret of secrets) assert.ok(!error.message.includes(secret), `${stage} leaked a secret`);
+      if (stage === "assignment") assert.match(error.message, /과제 새로고침/);
+      else if (stage === "device") assert.match(error.message, /서버 로그/);
+      else assert.match(error.message, /새.*코드/);
+      return true;
+    });
+  }
+});
+
+test("unknown exception strings and unrecognized error codes are never reflected", async () => {
+  for (const stage of FAILURE_STAGES) {
+    for (const failure of [
+      new Error("raw-body-student-20211001 AK1-2345-6789-ABCD"),
+      new ApiError("raw-body-student-20211001", 500, "student_20211001"),
+      new ApiError("raw-body-student-20211001", 500, "internal_error\nAK1-2345-6789-ABCD"),
+      { message: "raw-body-student-20211001", code: "AK1-2345-6789-ABCD" },
+    ]) {
+      resetUi(); inputResponses = ["AK1-2345-6789-ABCD"];
+      await assert.rejects(failingController(stage, failure).redeem(), (error: unknown) => {
+        assert.ok(error instanceof Error);
+        assert.match(error.message, FAILURE_LABELS[stage]);
+        assert.doesNotMatch(error.message, /20211001|AK1-2345-6789-ABCD|raw-body/);
+        if (error instanceof ApiError) assert.equal(error.code, "unclassified_error");
+        return true;
+      });
+    }
+  }
+});
+
+test("rejected preparation claim asks for a new code rather than treating it as lost connectivity", async () => {
+  resetUi(); inputResponses = ["AK1-2345-6789-ABCD"];
+  await assert.rejects(failingController("device", new ApiError("private response", 401, "invalid_grant")).redeem(), (error: unknown) => {
+    assert.ok(error instanceof ApiError);
+    assert.match(error.message, /기기 연결 준비[\s\S]*HTTP 401[\s\S]*새 코드를 발급/);
+    assert.doesNotMatch(error.message, /private response|서버 연결 확인 후/);
+    return true;
+  });
+});
+
+test("non-HTTP statuses are not presented as HTTP responses", async () => {
+  for (const status of [0, NaN, Infinity, -1, 99, 600, 401.5]) {
+    resetUi(); inputResponses = ["AK1-2345-6789-ABCD"];
+    await assert.rejects(failingController("device", new ApiError("secret", status, "network_error")).redeem(), (error: unknown) => {
+      assert.ok(error instanceof ApiError);
+      assert.equal(error.status, 0);
+      assert.match(error.message, /HTTP 응답 없음\/확인 불가/);
+      assert.doesNotMatch(error.message, /secret|NaN|Infinity/);
+      return true;
+    });
+  }
+});
+
+test("cancellation remains a cancellation at every claim stage", async () => {
+  for (const stage of FAILURE_STAGES) {
+    for (const failure of [new CancellationError(), new RequestCancelledError(), new OperationCancelledError()]) {
+      resetUi(); inputResponses = ["AK1-2345-6789-ABCD"];
+      await assert.rejects(failingController(stage, failure).redeem(), (error: unknown) => error instanceof CancellationError);
+    }
+  }
+});
+
+test("all uncertain redemption responses still recover without redeeming the code twice", async () => {
+  for (const code of ["network_error", "request_timeout", "invalid_response"]) {
+    resetUi(); inputResponses = ["AK1-2345-6789-ABCD"];
+    let redemptions = 0; let polls = 0; let callbacks = 0;
+    const controller = new AssignmentClaimController(baseClient({
+      redeemAssignmentClaim: async () => { redemptions += 1; throw new ApiError("secret response", 0, code); },
+    }), "0.5.7", async () => { callbacks += 1; }, async () => { polls += 1; return TOKENS; });
+    await controller.redeem();
+    assert.equal(redemptions, 1); assert.equal(polls, 1); assert.equal(callbacks, 1);
+    assert.match(String(informationCalls[0]?.[0]), /복구했습니다/);
+  }
+});
+
+test("failed lost-response recovery identifies login stage without leaking original details", async () => {
+  resetUi(); inputResponses = ["AK1-2345-6789-ABCD"];
+  const controller = new AssignmentClaimController(baseClient({
+    redeemAssignmentClaim: async () => { throw new ApiError("secret redeem response", 0, "network_error"); },
+  }), "0.5.7", async () => { assert.fail("callback must not run"); }, async () => {
+    throw new ApiError("secret token response", 503, "service_unavailable");
+  });
+  await assert.rejects(controller.redeem(), (error: unknown) => {
+    assert.ok(error instanceof ApiError);
+    assert.match(error.message, /로그인 연결/); assert.match(error.message, /HTTP 503/);
+    assert.match(error.message, /기기 승인 복구를 완료하지 못했습니다/);
+    assert.doesNotMatch(error.message, /secret/);
+    return true;
+  });
+});
+
+test("malformed device authorization has a safe preparation-stage response error", async () => {
+  resetUi(); inputResponses = ["AK1-2345-6789-ABCD"];
+  const controller = new AssignmentClaimController(baseClient({
+    createDeviceAuthorization: async () => ({ ...DEVICE, expires_in: NaN }),
+  }), "0.5.7", async () => { assert.fail("callback must not run"); });
+  await assert.rejects(controller.redeem(), /기기 연결 준비[\s\S]*invalid_response/);
 });
 
 interface ClientOverrides {

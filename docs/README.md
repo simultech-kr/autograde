@@ -1,5 +1,7 @@
 # Documentation
 
+- [Autograde 전용 IDE 설계](architecture/autograde-ide.md), [개념연구 준비·실행](operations/autograde-ide-poc.md): SQLite 유지, Code-OSS에 기존 확장 내장, 학습 홈과 AI 통제 경계. 서명된 학생 배포판·Windows/WSL 호환성 검증은 별도 단계.
+
 - [Next.js 단계별 전환 계획](architecture/nextjs-migration-plan.md): Python 인증·채점·SQLite와 IDE API 유지, 교수자 결과 화면 우선, JSON 계약·SES UI 모듈·시험·롤백 기준.
 - [Next.js 조회 파일럿 실행](operations/nextjs-pilot.md): 0~2단계 웹 빌드·CSV 수업 제한·20010 프록시·열린 화면 차단·기존 UI 복귀.
 - [Next.js 조회 파일럿 검증](testing/nextjs-pilot.md): 합성 데이터와 로컬 HTTP·브라우저 시험, 운영 HTTPS 인수 구분.

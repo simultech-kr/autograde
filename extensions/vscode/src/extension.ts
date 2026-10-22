@@ -40,7 +40,6 @@ import {
   isSupportedWorkspacePlatform,
   normalizeTargetRef,
   repositoryMatches,
-  resolveAssignmentDiagnosticPath,
   safeAssignmentDirectoryName,
   safeRepositoryDirectoryName,
   selectRepositoryCloneUrl,
@@ -62,10 +61,10 @@ import {
 } from "./studentSessionState";
 import { ServiceAddressController } from "./serviceAddress";
 import { AssignmentTreeItem, AssignmentsTreeProvider } from "./tree";
-import type { Assignment, GradeResult, ResultDiagnostic, SubmissionSummary } from "./types";
+import type { Assignment, GradeResult, SubmissionSummary } from "./types";
 import { clearResultPanel, pauseDisplayedResult, refreshDisplayedResult, showResultPanel } from "./resultPanel";
 import { diagnosticText, feedbackLocation, summarizeResult } from "./resultSummary";
-import { prepareClaimWorkspace } from "./claimWorkspace";
+import { prepareClaimWorkspace, resumeClaimWorkspace } from "./claimWorkspace";
 import { showAcceptedAssignments } from "./acceptedAssignments";
 import { startAssignment, type AssignmentStartAction } from "./assignmentStart";
 import { revealAssignmentFolder } from "./assignmentFolderView";
@@ -74,6 +73,9 @@ import { saveAssignmentDocuments } from "./submissionPreflight";
 import { SubmissionResultMonitor, type ResultScope } from "./submissionResultMonitor";
 import { DownloadDiagnostic, DownloadFailure, stageLabels } from "./downloadDiagnostic";
 import { clearDownloadDiagnostic, rememberDownloadDiagnostic, showDownloadDiagnostic } from "./downloadDiagnosticPanel";
+import { LEARNING_HOME_COMMAND, shouldOpenLearningHome } from "./learningHome";
+import { LearningHomeView } from "./learningHomeView";
+import { createResultDiagnosticTarget, publishResultDiagnostics, rememberResultDiagnosticTarget, type ResultDiagnosticTarget } from "./resultDiagnostics";
 let diagnosticExtensionVersion = "0.5.7";
 
 const SUCCESSFUL_SUBMISSION_STATES = new Set(["accepted", "queued", "running", "graded", "published"]);
@@ -83,6 +85,7 @@ interface ResultUi {
   readonly monitor: SubmissionResultMonitor;
   readonly tree: AssignmentsTreeProvider;
   readonly diagnostics: vscode.DiagnosticCollection;
+  readonly diagnosticTargets: Map<string, ResultDiagnosticTarget>;
   assignmentId?: string;
   onAuthenticationRequired(state: EphemeralStudentState): void;
 }
@@ -118,6 +121,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const treeView = vscode.window.createTreeView("autograde.assignments", { treeDataProvider: treeProvider });
   const output = vscode.window.createOutputChannel("Autograde");
   const diagnostics = vscode.languages.createDiagnosticCollection("autograde");
+  const diagnosticTargets = new Map<string, ResultDiagnosticTarget>();
   const resultMonitor = new SubmissionResultMonitor(client);
   const connectionMonitor = new ServerConnectionMonitor(
     transport,
@@ -139,6 +143,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   };
   let studentState = new EphemeralStudentState();
   let authenticationUiState = false;
+  const learningHome = new LearningHomeView(() => ({
+    authenticated: authenticationUiState,
+    trusted: vscode.workspace.isTrusted,
+    hasWorkspace: (vscode.workspace.workspaceFolders?.length ?? 0) > 0,
+  }));
   let submitting = false;
   const extensionVersion = String(context.extension.packageJSON.version ?? "0.0.0");
   diagnosticExtensionVersion = extensionVersion;
@@ -147,7 +156,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const authenticated = knownState ?? await tokens.hasSession();
     if (!authenticated) { resultMonitor.cancel(); clearResultPanel(); clearDownloadDiagnostic(); documentView.clear(); }
     if (!authenticated) clearWorkspaceSelection(true);
+    if (!authenticated) diagnosticTargets.clear();
     authenticationUiState = authenticated;
+    learningHome.refresh();
     await Promise.all([
       vscode.commands.executeCommand(
         "setContext",
@@ -162,14 +173,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           )]
         : []),
     ]);
-    treeView.message = authenticated
+    // A nonempty TreeView.message hides viewsWelcome, including its login buttons.
+    treeView.message = authenticated && treeProvider.getAssignments().length > 0
       ? "현재 수령 코드로 연결된 과제입니다. 기존 과제 열기로 이어서 작업하세요. 다른 과제는 해당 과제의 새 수령 코드로 연결합니다."
-      : "학생 웹에서 새 수령 코드를 입력해 연결하세요. 기존 파일은 다시 다운로드하지 않고 이어서 사용할 수 있습니다.";
+      : undefined;
     return authenticated;
   };
 
   const resultUi: ResultUi = {
-    monitor: resultMonitor, tree: treeProvider, diagnostics,
+    monitor: resultMonitor, tree: treeProvider, diagnostics, diagnosticTargets,
     onAuthenticationRequired: (expectedState) => {
       if (studentState !== expectedState || !expectedState.isActive()) return;
       void tokens.clear();
@@ -202,6 +214,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   };
 
   const auth = new AuthenticationController(client, extensionVersion, (authenticated) => {
+    diagnosticTargets.clear();
     documentView.clear();
     resultMonitor.cancel();
     clearDownloadDiagnostic();
@@ -213,6 +226,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
   });
   const assignmentClaims = new AssignmentClaimController(client, extensionVersion, async (assignmentId) => {
+    diagnosticTargets.clear();
     clearWorkspaceSelection(true);
     documentView.clear();
     resultMonitor.cancel();
@@ -270,6 +284,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   );
 
   context.subscriptions.push(
+    learningHome,
+    vscode.commands.registerCommand(LEARNING_HOME_COMMAND, () => learningHome.show()),
+    vscode.workspace.onDidChangeWorkspaceFolders(() => learningHome.refresh()),
     documentView,
     treeProvider.onDidChangeTreeData(() => documentView.reconcileAccepted()),
     vscode.workspace.registerTextDocumentContentProvider(ASSIGNMENT_DOCUMENT_SCHEME, documentView),
@@ -304,7 +321,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       "autograde.redeemAssignmentClaim",
       () => runCommand(async () => {
         ensureSupportedWorkspacePlatform("수령 코드 입력 및 다운로드");
-        if (!await prepareClaimWorkspace()) return;
+        if (!await prepareClaimWorkspace(context.globalState)) return;
         if (!vscode.workspace.isTrusted) {
           throw new Error("수령 코드로 파일을 받으려면 현재 workspace를 신뢰해야 합니다.");
         }
@@ -366,11 +383,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         if (resultUi.assignmentId && resultUi.assignmentId !== selected.assignment.id) {
           resultMonitor.cancel();
           clearResultPanel();
+          diagnostics.clear();
         }
         resultUi.assignmentId = selected.assignment.id;
       }
     }),
-    vscode.workspace.onDidGrantWorkspaceTrust(() => treeProvider.setAssignments(treeProvider.getAssignments())),
+    vscode.workspace.onDidGrantWorkspaceTrust(() => {
+      treeProvider.setAssignments(treeProvider.getAssignments());
+      learningHome.refresh();
+    }),
     vscode.workspace.onDidChangeConfiguration((event) => {
       if (
         !event.affectsConfiguration("autograde.serviceBaseUrl") &&
@@ -393,6 +414,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   );
 
   connectionMonitor.start();
+  if (shouldOpenLearningHome(vscode.env.appName, vscode.workspace.workspaceFolders?.length ?? 0,
+    Boolean(vscode.workspace.workspaceFile), vscode.window.tabGroups.all.reduce((count, group) => count + group.tabs.length, 0))) {
+    learningHome.show();
+  }
   void updateAuthenticationUI(false);
   void tokens.hasSession().then((hasSession) => {
     void updateAuthenticationUI(hasSession);
@@ -403,6 +428,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   }).catch(() => {
     treeProvider.clear();
   });
+  // Restore navigation only after a requested folder transition, never stored authentication.
+  void runCommand(() => resumeClaimWorkspace(context.globalState, () => learningHome.show()));
 }
 
 export function deactivate(): void {}
@@ -570,6 +597,8 @@ async function submitCurrentCommit(
     return;
   }
   await rememberSubmission(studentState, client.transport.getBaseUrl(), assignment.id, submission.id);
+  rememberResultDiagnosticTarget(resultUi.diagnosticTargets, submission.id,
+    createResultDiagnosticTarget(workspaceFolder.uri, assignment.assignmentPath));
   await clearSubmissionAttempt(studentState, attemptRequest, attempt.idempotencyKey);
 
   if (!SUCCESSFUL_SUBMISSION_STATES.has(submission.state.toLowerCase()) && !FAILED_SUBMISSION_STATES.has(submission.state.toLowerCase())) {
@@ -625,6 +654,9 @@ async function submitCurrentBundle(
   }).sort((left, right) => right.uri.fsPath.length - left.uri.fsPath.length)[0];
   const submissionUri = submissionWorkspace?.uri ?? workspaces.attached.get(path.resolve(assignmentRoot));
   if (!submissionUri) throw new Error("기존 과제 열기에서 제출할 과제 폴더를 먼저 연결하세요.");
+  const diagnosticTarget = createResultDiagnosticTarget(
+    vscode.Uri.joinPath(submissionUri, path.relative(submissionUri.fsPath, assignmentRoot)),
+  );
   if (!await saveAssignmentDocuments(assignmentRoot, () => vscode.workspace.textDocuments, async (files) => {
     const save = "저장 후 제출";
     return await vscode.window.showInformationMessage("이 과제에 저장하지 않은 코드가 있습니다.",
@@ -671,6 +703,7 @@ async function submitCurrentBundle(
   const resultScope = resultUi.monitor.begin();
   resultUi.assignmentId = assignment.id;
   clearResultPanel();
+  resultUi.diagnostics.clear();
   let submission: SubmissionSummary;
   try {
     submission = await client.submitBundle(
@@ -688,6 +721,7 @@ async function submitCurrentBundle(
     return;
   }
   await rememberSubmission(studentState, client.transport.getBaseUrl(), assignment.id, submission.id);
+  rememberResultDiagnosticTarget(resultUi.diagnosticTargets, submission.id, diagnosticTarget);
   await clearSubmissionAttempt(studentState, attemptRequest, attempt.idempotencyKey);
 
   resultUi.tree.setAssignments(resultUi.tree.getAssignments().map(item => item.id === assignment.id
@@ -1299,6 +1333,8 @@ function watchSubmissionResult(
   assignment: Assignment, submission: SubmissionSummary, context: string,
 ): void {
   const origin = client.transport.getBaseUrl();
+  const diagnosticTarget = ui.diagnosticTargets.get(submission.id);
+  const isCurrent = () => scope.isCurrent() && studentState.isActive() && client.transport.getBaseUrl() === origin;
   let first = true;
   ui.assignmentId = assignment.id;
   ui.monitor.start(scope, {
@@ -1306,15 +1342,15 @@ function watchSubmissionResult(
     isSessionCurrent: () => studentState.isActive() && client.transport.getBaseUrl() === origin,
     onAuthenticationRequired: () => ui.onAuthenticationRequired(studentState),
     onUpdate: ({ result, notice, watching }) => {
+      if (!isCurrent()) return;
       showResultPanel(assignment, result, submission.id, context, {
         refresh: () => scope.isCurrent() ? ui.monitor.refresh() : Promise.resolve(),
         pause: watching ? () => { if (scope.isCurrent()) ui.monitor.pause(); } : undefined,
-        onClose: () => { if (scope.isCurrent()) ui.monitor.cancel(); },
+        onClose: () => { if (scope.isCurrent()) { ui.monitor.cancel(); ui.diagnostics.clear(); } },
         notice, reveal: first,
       });
       first = false;
-      if (result.state === "published") publishDiagnostics(ui.diagnostics, result.diagnostics, assignment.assignmentPath);
-      else ui.diagnostics.clear();
+      publishResultDiagnostics(ui.diagnostics, result, diagnosticTarget, isCurrent);
       const current = ui.tree.getAssignments();
       const displayed = current.find(item => item.id === assignment.id);
       if (displayed && (!displayed.latestSubmission || displayed.latestSubmission.id === submission.id)) {
@@ -1365,58 +1401,6 @@ function renderResult(output: vscode.OutputChannel, assignment: Assignment, resu
     for (const item of result.diagnostics) {
       output.appendLine(`- ${diagnosticText(item)}`);
     }
-  }
-}
-
-function publishDiagnostics(
-  collection: vscode.DiagnosticCollection,
-  feedback: readonly ResultDiagnostic[],
-  assignmentPath?: string,
-): void {
-  collection.clear();
-  const workspaceFolder = selectWorkspaceFolder();
-  if (!workspaceFolder) {
-    return;
-  }
-  const grouped = new Map<string, vscode.Diagnostic[]>();
-  for (const item of feedback) {
-    if (!item.path) continue;
-    const absolute = resolveAssignmentDiagnosticPath(
-      workspaceFolder.uri.fsPath,
-      assignmentPath,
-      item.path,
-    );
-    if (!absolute) {
-      continue;
-    }
-    const startLine = Math.max(0, (item.line ?? 1) - 1);
-    const startColumn = Math.max(0, (item.column ?? 1) - 1);
-    const endLine = Math.max(startLine, (item.endLine ?? item.line ?? 1) - 1);
-    const endColumn = Math.max(startColumn + 1, (item.endColumn ?? item.column ?? 1));
-    const diagnostic = new vscode.Diagnostic(
-      new vscode.Range(startLine, startColumn, endLine, endColumn),
-      item.message,
-      diagnosticSeverity(item.severity),
-    );
-    diagnostic.source = "Autograde";
-    const entries = grouped.get(absolute) ?? [];
-    entries.push(diagnostic);
-    grouped.set(absolute, entries);
-  }
-  collection.set([...grouped.entries()].map(([file, entries]) => [vscode.Uri.file(file), entries]));
-}
-
-function diagnosticSeverity(value?: string): vscode.DiagnosticSeverity {
-  switch (value?.toLowerCase()) {
-    case "error":
-      return vscode.DiagnosticSeverity.Error;
-    case "warning":
-    case "warn":
-      return vscode.DiagnosticSeverity.Warning;
-    case "hint":
-      return vscode.DiagnosticSeverity.Hint;
-    default:
-      return vscode.DiagnosticSeverity.Information;
   }
 }
 

@@ -1,0 +1,17 @@
+{
+  "name": "autograde-ide-profile",
+  "displayName": "Autograde IDE Learning Defaults",
+  "description": "Overridable learning defaults; not an exam security policy.",
+  "version": "0.1.0",
+  "publisher": "autograde",
+  "private": true,
+  "license": "UNLICENSED",
+  "engines": { "vscode": "^1.92.0" },
+  "contributes": {
+    "configurationDefaults": {
+      "workbench.startupEditor": "none",
+      "workbench.tips.enabled": false,
+      "chat.disableAIFeatures": true
+    }
+  }
+}

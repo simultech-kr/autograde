@@ -1,0 +1,6 @@
+{
+  "repository": "https://github.com/microsoft/vscode.git",
+  "tag": "1.143.0",
+  "commit": "2d0b7506a36c1d6db9a466440131a8e01eab2289",
+  "node": "24.18.0"
+}

@@ -1,5 +1,7 @@
 # Design
 
+- [Autograde 전용 IDE 개념연구](../docs/architecture/autograde-ide.md): SQLite 유지, Code-OSS와 내장 확장, 학습 홈, AI 정책과 OS·네트워크 통제의 분리, SES 클라이언트 대안과 배포 전 검증.
+
 - [Next.js 웹 전환 계획](../docs/architecture/nextjs-migration-plan.md): 공통 UI와 업무별 모듈, 기존 Python 서비스 경계, 단계별 전환·완료 기준과 복구 계획.
 
 - [루브릭 평가 설계](../docs/architecture/rubric-evaluation-plugin.md), [C++ 옵저버 루브릭 예시](rubrics/observer.rubric.example.json): 설계용이며 현행 평가기에 바로 등록할 수 없음.

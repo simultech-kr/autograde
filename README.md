@@ -16,6 +16,11 @@ VS Code 0.4.0 / Visual Studio 0.2.0 소스에는 [제출 기록·이전 코드 �
 
 ## 현재 권장 실행 흐름
 
+소규모 수업 개념연구용 **Autograde IDE**는 Code-OSS에 기존 VS Code 확장을 내장하는 방식으로
+진행합니다. SQLite·서버 API는 유지하며, PostgreSQL은 향후 Docker 기반 운영 단계에서 검토합니다.
+[설계와 지원 경계](docs/architecture/autograde-ide.md), [개발용 준비·실행·검증](docs/operations/autograde-ide-poc.md)을 확인하세요.
+1단계는 학습 흐름 통합이며 AI 강제 차단이나 학생 배포용 서명 설치 파일을 제공하는 단계가 아닙니다.
+
 교수자 웹의 **학생별 자료 배포**에서 `학번.pdf` 또는 `학번.zip`을 개별·일괄 등록할 수 있습니다.
 학생은 기존 학번·전용 비밀번호로 로그인하여 자신에게 배정된 파일만 받습니다.
 [자료 준비·배포·수령·서버 반영 절차](docs/operations/student-material-distribution.md)를 확인하세요.

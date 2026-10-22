@@ -7482,9 +7482,9 @@ class PlatformStateStore:
     ) -> None:
         """Delete only old, terminal, unreferenced credential history.
 
-        A session referenced by a submission is audit evidence and is never
-        removed here.  The retained-history hard cap therefore remains the
-        final storage bound when all old sessions are audit-referenced.
+        A session referenced by a Git/bundle submission or starter download is
+        audit evidence and is never removed here. The retained-history hard cap
+        remains the final storage bound when all old sessions are referenced.
         """
 
         rows = connection.execute(
@@ -7497,6 +7497,14 @@ class PlatformStateStore:
               AND NOT EXISTS (
                   SELECT 1 FROM submission_requests AS r
                   WHERE r.session_id = s.session_id
+              )
+              AND NOT EXISTS (
+                  SELECT 1 FROM bundle_submission_requests AS r
+                  WHERE r.session_id = s.session_id
+              )
+              AND NOT EXISTS (
+                  SELECT 1 FROM bundle_download_events AS d
+                  WHERE d.session_id = s.session_id
               )
             """,
             (student_id, course_key, cleanup_before, cleanup_before),

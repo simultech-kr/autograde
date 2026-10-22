@@ -21,6 +21,9 @@ System Entity Structure(SES, 체계요소구조)로 가능한 조합을 정의�
 6. 운영자가 설치·승인한 플러그인만 사용한다. 교수자는 설치된 대안과 허용된 설정을 조합한다.
 7. 성취도 분석 실패가 제출 접수를 막거나 기존 점수를 바꾸지 않게 한다.
 8. Canvas/LTI는 제외한다. 컨테이너 채점은 후속 대안이며 현재 파일럿에 강제 도입하지 않는다.
+9. 2026-10-22 전용 IDE 개념연구는 SQLite·기존 API를 유지하고 Code-OSS에 기존 Autograde 확장을 내장한다.
+   PostgreSQL은 향후 Docker 기반 운영 단계의 검토 대상으로 두며 Docker를 기술적 필수조건으로 보지는 않는다.
+   [전용 IDE 설계](autograde-ide.md)에 제품 구성·AI 통제·배포 경계를 분리한다.
 
 ## 2. 현재와 목표의 차이
 
@@ -48,7 +51,7 @@ v1→v2 변환기, v2 검증기, 실행 Host, plugin SDK, 성취도 계산기와
 | 필수 provider | 인증, 수업 권한, 저장소, 감사, 수업·수강, 제출 원장 | 호환 구현 선택 가능. 실행 프로필에서 비활성 불가 |
 | 업무 plugin | 과제·자료 배포·채점·성취도·보고서·보관·지원 | 수업 목적에 따라 선택·조합 |
 | UI contribution | 교수자/학생 메뉴·화면·작업 버튼 | 선택된 기능·권한·데이터 상태에 따라 노출 |
-| Client adapter | VS Code, Visual Studio, 웹, CLI | 서버 계약과 버전 협상. 클라이언트 실행 파일은 별도 배포 |
+| Client adapter | VS Code, Visual Studio, Autograde IDE, 웹, CLI | 서버 계약과 버전 협상. 클라이언트 실행 파일은 별도 배포 |
 
 Host는 인증된 Principal과 서버가 확인한 CourseScope를 주입한다. 요청 본문의 `course_key`나
 클라이언트가 숨긴 버튼을 권한 근거로 사용하지 않는다. 수업 경계와 공개 정책은 모든 읽기·쓰기·파일 접근에 적용한다.
@@ -88,11 +91,15 @@ Host는 인증된 Principal과 서버가 확인한 CourseScope를 주입한다. 
 | `data.portability` | 신규 공통 계약 | 권한 있는 원본/평가 이력의 기본 내보내기. 고급 보고서 상품·사용권 만료와 분리 |
 | `ui.instructor` / `ui.student_portal` | instructor_web, platform_portal, theme | MVC 화면 기여, 서비스 계약만 호출 |
 | `client.vscode` / `client.visualstudio` / `client.cli` | 기존 확장·CLI | 능력 협상, 다운로드·접수·결과·업데이트 안내 |
+| `client.autograde_ide` | Code-OSS 제품 설정·내장 Autograde 확장 | 1단계 개발용 제품 구성. 기존 학생 API 재사용, SES 실행 플러그인 등록과는 별개 |
+| `policy.learning` / `guard.exam_environment` | 후속 계약 후보 | IDE 내 학습 정책 / 별도 관리 PC 시험 환경. 현행 SES에서 선택·실행 불가 |
 
 삭제, 성적 확정, 학생 연락 등 영향이 큰 작업은 별도 capability와 확인 절차를 가진다.
 예컨대 `archive`를 켰다고 `artifact.delete` 권한을 자동 부여하지 않는다.
 업데이트 모듈은 서명/배포 채널·호환 버전을 관리하며 서버 설정만으로 IDE 확장을 원격 교체하지 않는다.
-시험 통제·화면 채증은 이 학습/운영 구성에 포함하지 않는다.
+시험 통제·화면 채증은 이 학습/운영 구성에 포함하지 않는다. 전용 IDE의 AI 관련 기본값은
+강제 통제나 AI 미사용 증명이 아니다. 후속 정책·시험 환경 계약을 문서에 표현해도 현재
+플러그인 registry에 등록하거나 운영 profile에서 활성화하지 않는다.
 
 ## 4. SES 구성 공간
 
@@ -131,7 +138,7 @@ AutogradePlatform [E]
       └─ Channels [A]
          ├─ InstructorWeb [E]
          ├─ StudentWeb [E]
-         └─ IdeClients [E: VS Code / Visual Studio adapter sets]
+         └─ IdeClients [E: VS Code / Visual Studio / Autograde IDE adapter sets]
 ```
 
 이 그림은 축약도다. 실제 모델은 entity/relation 교대, 유일한 template label,
