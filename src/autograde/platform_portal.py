@@ -26,12 +26,15 @@ class CourseAPI:
         "get_me", "list_sessions", "revoke_current", "revoke_session", "list_assignments",
         "get_bundle_starter", "submit_bundle", "get_submission", "get_result",
         "get_bundle_history", "get_bundle_source", "list_accepted_assignments", "list_accepted_assignment_catalog",
-        "report_download_diagnostic", "get_assignment_document",
+        "report_download_diagnostic", "get_assignment_document", "report_classroom_event",
+        "poll_classroom_commands", "respond_classroom_command",
     })
 
-    def __init__(self, services: Mapping[str, StudentPlatformService], secret: bytes, *, courses=None):
+    def __init__(self, services: Mapping[str, StudentPlatformService], secret: bytes, *, courses=None, student_materials=None, content_service=None):
         self.services = services
         self.courses = courses
+        self.student_materials = student_materials
+        self.content_service = content_service
         self.secret = secret
         self.state = next(iter(services.values())).state
 
@@ -60,6 +63,34 @@ class CourseAPI:
     def refresh_tokens(self, payload):
         return self._service("refresh", payload.get("refresh_token")).refresh_tokens(payload)
 
+    def list_materials(self, access_token, cursor=None):
+        from .student_material_api import list_materials
+        return list_materials(self, access_token, cursor)
+
+    def get_material_download(self, access_token, material_id, expected_sha256):
+        from .student_material_api import download_material
+        return download_material(self, access_token, material_id, expected_sha256)
+
+    def get_content_context(self, access_token):
+        from .content_api import context
+        return context(self, access_token)
+
+    def list_content_collections(self, access_token):
+        from .content_api import collections
+        return collections(self, access_token)
+
+    def get_content_manifest(self, access_token, release_id):
+        from .content_api import manifest
+        return manifest(self, access_token, release_id)
+
+    def verify_content_manifest(self, access_token, release_id, payload):
+        from .content_api import verify
+        return verify(self, access_token, release_id, payload)
+
+    def get_content_object(self, access_token, release_id, sha256, expected_digest):
+        from .content_api import download
+        return download(self, access_token, release_id, sha256, expected_digest)
+
     def __getattr__(self, name):
         if name not in self.TOKEN_METHODS:
             raise AttributeError(name)
@@ -68,7 +99,7 @@ class CourseAPI:
             service = self._service("access", token)
             if name in {"list_assignments", "list_accepted_assignments"}:
                 return service.list_accepted_assignments(token)
-            if name not in {"get_me", "list_sessions", "revoke_current", "revoke_session"}:
+            if name not in {"get_me", "list_sessions", "revoke_current", "revoke_session", "report_classroom_event", "poll_classroom_commands", "respond_classroom_command"}:
                 service.require_assignment_acceptance(token, touch=name != "list_accepted_assignment_catalog")
             return getattr(service, name)(token, *args, **kwargs)
         return call

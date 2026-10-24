@@ -135,7 +135,7 @@ class InstructorWeb:
 
     def __init__(self, course_admin, enrollment_admin, assignment_admin, *, authorize,
                  secret, web_url, submissions=None, submission_review=None, submission_updates=None, rubrics=None, identities=None,
-                 next_ui_policy=None, exam_papers=None, student_materials=None):
+                 next_ui_policy=None, exam_papers=None, student_materials=None, content_service=None):
         self.courses = course_admin
         self.students = enrollment_admin
         self.assignments = assignment_admin
@@ -149,6 +149,7 @@ class InstructorWeb:
         self.identities = identities
         self.exam_papers = exam_papers
         self.student_materials = student_materials
+        self.content_service = content_service
         self.principal = None
         self.next_ui_policy = next_ui_policy if next_ui_policy is not None else lambda: frozenset()
         self.catalog = InstructorAssignmentCatalog(assignment_admin.state) if assignment_admin else None
@@ -209,7 +210,7 @@ class InstructorWeb:
             return None
         from . import instructor_web_api
         if instructor_web_api.matches(path):
-            return instructor_web_api.request(self, method, path, form, cookies, authorization)
+            return instructor_web_api.request(self, method, path, form, cookies, authorization, origin=origin)
         return self._scoped(authorization)._authenticated_request(method, path, form, cookies, origin, authorization)
 
     def _authenticated_request(self, method, path, form, cookies, origin, authorization):
@@ -275,6 +276,7 @@ class InstructorWeb:
             base = self._base(course)
             links += [(base, '수업 개요'), (base + '/assignments', '과제 관리'),
                       (base + '/students', '학생 관리'), (base + '/submissions', '제출·채점 현황'),
+                      (base + '/classroom', '실습 교실'),
                       (base + '/settings', '수업 설정')]
             if self.rubrics:
                 links.insert(3, (base + '/rubrics', '루브릭 관리'))
@@ -282,6 +284,8 @@ class InstructorWeb:
                 links.insert(3, (base + '/exam-papers', '시험지 배포'))
             if self.student_materials:
                 links.insert(3, (base + '/materials', '학생별 자료 배포'))
+            if self.content_service is not None:
+                links.insert(3, (base + '/content', '콘텐츠'))
             context = f'{course["code"]} · {course.get("name") or "정보 확인 필요"} · {course.get("year") or "학년도 미설정"} / {course.get("semester") or "학기 미설정"} · {course.get("section") or "분반 미설정"}'
         if self.principal:
             identity = f'{self.principal.display_name} ({self.principal.username}) · ' + ('관리자' if self.principal.role == 'admin' else '담당 교수자')
@@ -324,7 +328,8 @@ class InstructorWeb:
         guarded = bool(re.search(r'/instructor/(?:drafts(?:/[a-zA-Z0-9_-]+(?:/(?:uploads/(?:starter|solution|negative)|starter-template|grading-template))?)?|assignments/[a-zA-Z0-9_-]+/(?:extend|document)|rubrics/preview)$', action))
         guarded = guarded or bool(re.search(r'/rubrics/versions/[^/]+/[0-9]+/submissions/bsub_[A-Za-z0-9_-]+$', action))
         guarded = guarded or bool(re.search(r'/instructor/exam-papers(?:/[A-Za-z0-9_-]+(?:/upload)?)?$', action))
-        guarded = guarded or bool(re.search(r'/instructor/materials(?:/mat_[A-Za-z0-9_-]+(?:/upload(?:-batch)?)?)?$', action))
+        guarded = guarded or bool(re.search(r'/instructor/materials(?:/mat_[A-Za-z0-9_-]+(?:/(?:upload(?:-batch)?|revise))?)?$', action))
+        guarded = guarded or bool(re.search(r'/instructor/content(?:/cc_[0-9a-f]{32}/(?:upload|metadata))?$', action))
         guard = 'data-dirty-guard' if guarded else ''
         notice = '<p data-save-status role="status" aria-live="polite">각 영역의 저장 버튼을 눌러야 보존됩니다.</p>' if guarded else ''
         identity = f'data-form-kind="{_e(form_kind)}"' if form_kind else ''
@@ -366,9 +371,13 @@ class InstructorWeb:
                     self.rubrics._writable(course)
                     title, body = editor(self, course, session, _value(form, 'document'))
                     return title, FormRecovery.restore(body, base + '/rubrics/preview', form)
-                if route == 'materials' and self.student_materials:
+                if route == 'content' and self.content_service is not None:
                     target = route
-                elif self.student_materials and re.fullmatch(r'materials/mat_[A-Za-z0-9_-]+(?:/(?:upload|upload-batch|publish|archive|remove/[0-9]+))?', route):
+                elif self.content_service is not None and re.fullmatch(r'content/cc_[0-9a-f]{32}/(?:upload|metadata|remove|publish|withdraw)', route):
+                    target = '/'.join(route.split('/')[:2])
+                elif route == 'materials' and self.student_materials:
+                    target = route
+                elif self.student_materials and re.fullmatch(r'materials/mat_[A-Za-z0-9_-]+(?:/(?:upload|upload-batch|publish|archive|revise|remove/[0-9]+))?', route):
                     target = '/'.join(route.split('/')[:2])
                 elif route == 'exam-papers' and self.exam_papers:
                     target = route
@@ -485,6 +494,23 @@ class InstructorWeb:
     def _course_request(self, method, course, route, form, session, authorization):
         base = self._base(course)
         key = course['course_key']
+        if route == 'classroom' and method == 'GET':
+            from .instructor_classroom import page
+            return page(self, course, session)
+        if route == 'content' or route.startswith('content/'):
+            from .content_store import ContentStorageError
+            from .instructor_content import request
+            try:
+                return request(self, method, course, route, form, session,
+                               reauthorize=lambda: self._scoped(authorization).courses.get_course(course['course_key']))
+            except ContentStorageError:
+                return self._page('콘텐츠 저장소 확인 필요',
+                                  '<div class="notice error" role="alert"><p>콘텐츠 저장소를 사용할 수 없습니다. '
+                                  '서버의 Git 설치·저장 공간·파일 상태를 운영자에게 확인해 주세요.</p></div>'
+                                  '<p>이전 공개본은 유지됩니다. 목록에서 저장 상태를 확인한 뒤 다시 시도하세요. '
+                                  '입력 원본은 따로 보관해 주세요.</p>'
+                                  f'<p><a href="{_e(base)}/content">콘텐츠 목록 다시 확인</a></p>',
+                                  course=course, status=503, current_path=base + '/content')
         if route == 'materials' or route.startswith('materials/'):
             from .instructor_student_materials import request
             return request(self, method, course, route, form, session)

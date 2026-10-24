@@ -250,7 +250,7 @@ test("sidebar messages never suppress empty-state login and learning-home contro
   assert.ok(assignment, "authentication UI must explicitly update the sidebar message");
   const treeProvider = new AssignmentsTreeProvider();
   const treeView: { message?: string } = { message: "previous session message" };
-  const context = { treeView, treeProvider, authenticated: false };
+  const context = { treeView, treeProvider, authenticated: false, sharedSession: false };
 
   // Execute the production assignment: VS Code hides viewsWelcome for any nonempty message.
   runInNewContext(assignment, context);
@@ -263,6 +263,11 @@ test("sidebar messages never suppress empty-state login and learning-home contro
   treeProvider.setAssignments([{ id: "a", title: "Practice A" }]);
   runInNewContext(assignment, context);
   assert.match(treeView.message ?? "", /현재 수령 코드로 연결된 과제/);
+
+  context.sharedSession = true;
+  runInNewContext(assignment, context);
+  assert.match(treeView.message ?? "", /공용 실습/);
+  context.sharedSession = false;
 
   treeProvider.clear();
   runInNewContext(assignment, context);

@@ -1,20 +1,24 @@
-"""Read-only JSON adapter for the opt-in Next.js instructor results pilot."""
+"""Instructor JSON: read-only results and student-confirmed classroom requests."""
 from __future__ import annotations
 
 import logging
+import hmac
 import re
 import secrets
 import sqlite3
 from urllib.parse import urlencode
 
 from .instructor_results_query import CourseResultsQuery
+from .classroom_state import ClassroomState
 from .platform_service import PlatformAPIError, PlatformResponse
-from .platform_state import PlatformAccessDenied, PlatformNotFound, utc_iso
+from .platform_state import PlatformAccessDenied, PlatformNotFound, PlatformConflict, utc_iso
 
 
 PREFIX = '/instructor/api/v1'
 _COURSE = re.compile(r'[a-z0-9_-]{1,96}')
 _RESULTS = re.compile(PREFIX + r'/courses/([a-z0-9_-]{1,96})/results')
+_CLASSROOM = re.compile(PREFIX + r'/courses/([a-z0-9_-]{1,96})/classroom(?:/students/([^/]{1,128}))?')
+_COMMANDS = re.compile(PREFIX + r'/courses/([a-z0-9_-]{1,96})/classroom/students/([^/]{1,128})/commands')
 _LOG = logging.getLogger(__name__)
 
 
@@ -33,7 +37,7 @@ def _courses(web, enabled):
             if course['course_key'] in enabled]
 
 
-def request(web, method, path, query, cookies, authorization):
+def request(web, method, path, query, cookies, authorization, *, origin=None):
     """Authenticate every request, including existing open tabs after rollback.
 
     The signed cookie is only CSRF state. Basic credentials are always required;
@@ -46,25 +50,66 @@ def request(web, method, path, query, cookies, authorization):
     headers = {'Content-Type': 'application/json; charset=utf-8', 'X-Request-ID': request_id}
     try:
         scoped = web._scoped(authorization)
+        command_match = _COMMANDS.fullmatch(path)
+        if command_match:
+            if method != 'POST':
+                raise PlatformAPIError(405, 'method_not_allowed', 'IDE 요청은 POST만 허용합니다.', headers={'Allow': 'POST'})
+            session, _ = scoped._session(cookies, required=True)
+            if origin != scoped.web_url:
+                raise PlatformAPIError(403, 'instructor_origin', '교수자 웹 주소에서 다시 시도해 주세요.')
+            supplied = query.get('csrf')
+            if not isinstance(supplied, str) or len(supplied) != 43 or not hmac.compare_digest(supplied.encode('utf-8'), session['csrf'].encode('ascii')):
+                raise PlatformAPIError(403, 'instructor_csrf', '화면을 다시 열고 요청해 주세요.')
+            course_key, student_key = command_match.groups()
+            course = scoped.courses.get_course(course_key)
+            if course['status'] != 'active':
+                raise PlatformAccessDenied('course is not active')
+            from .classroom_commands import ClassroomCommands
+            payload = {key: value for key, value in query.items() if key != 'csrf'}
+            result = ClassroomCommands(web.courses.state).create(course_key, student_key, payload,
+                actor=scoped.principal.user_id if scoped.principal else 'shared')
+            return PlatformResponse(200 if result['duplicate'] else 201, {**metadata, **result}, headers)
         enabled = scoped.next_ui_policy()
-        if not enabled:
+        classroom_match = _CLASSROOM.fullmatch(path)
+        classroom_bootstrap = path == PREFIX + '/classroom/bootstrap'
+        classroom_entry = path == PREFIX + '/entry' and query.get('screen') == 'classroom'
+        classroom = bool(classroom_match or classroom_bootstrap or classroom_entry)
+        if not enabled and not classroom:
             raise PlatformAPIError(404, 'next_ui_disabled', '새 결과 화면을 현재 사용할 수 없습니다. 기존 교수자 화면을 이용해 주세요.')
         if method != 'GET':
             raise PlatformAPIError(405, 'method_not_allowed', '조회만 가능한 경로입니다.', headers={'Allow': 'GET'})
         if path == PREFIX + '/entry':
-            if set(query) - {'screen', 'course_key'} or query.get('screen', 'results') != 'results':
+            if set(query) - {'screen', 'course_key'} or query.get('screen', 'results') not in {'results', 'classroom'}:
                 raise PlatformAPIError(400, 'invalid_return_target', '이동할 화면을 확인해 주세요.')
             course_key = query.get('course_key', '')
             if not isinstance(course_key, str) or (course_key and not _COURSE.fullmatch(course_key)):
                 raise PlatformAPIError(400, 'invalid_return_target', '이동할 수업을 확인해 주세요.')
             if course_key:
                 scoped.courses.get_course(course_key)
-                if course_key not in enabled:
+                if not classroom_entry and course_key not in enabled:
                     raise PlatformAPIError(404, 'next_ui_disabled', '이 수업은 기존 교수자 화면을 이용해 주세요.')
             _, signed = scoped._session(cookies, required=False)
-            headers.update({'Location': '/app' + ('?' + urlencode({'course_key': course_key}) if course_key else ''),
+            headers.update({'Location': ('/app/classroom' if classroom_entry else '/app') + ('?' + urlencode({'course_key': course_key}) if course_key else ''),
                             'Set-Cookie': _cookie(scoped, signed)})
             return PlatformResponse(303, None, headers)
+        if classroom_bootstrap:
+            if query:
+                raise PlatformAPIError(400, 'invalid_query', '조회 조건을 확인해 주세요.')
+            session, signed = scoped._session(cookies, required=False)
+            principal = scoped.principal
+            fields = ('course_key', 'name', 'code', 'section', 'status')
+            payload = dict(courses=[{key: course[key] for key in fields} for course in scoped.courses.list_courses()],
+                principal={'id': principal.user_id if principal else 'shared',
+                           'display_name': principal.display_name if principal else '공유 교수자',
+                           'mode': 'personal' if principal else 'shared'}, csrf=session['csrf'], capabilities=['classroom.read', 'classroom.control'])
+            headers['Set-Cookie'] = _cookie(scoped, signed)
+            return PlatformResponse(200, {**metadata, **payload}, headers)
+        if classroom_match:
+            scoped._session(cookies, required=True)
+            course_key, student_key = classroom_match.groups()
+            scoped.courses.get_course(course_key)
+            payload = ClassroomState(web.courses.state).snapshot(course_key, query, student_key=student_key)
+            return PlatformResponse(200, {**metadata, **payload}, headers)
         if path in {PREFIX + '/bootstrap', PREFIX + '/courses'}:
             if query:
                 raise PlatformAPIError(400, 'invalid_query', '조회 조건을 확인해 주세요.')
@@ -94,6 +139,10 @@ def request(web, method, path, query, cookies, authorization):
         error = PlatformAPIError(403, 'access_denied', '현재 수업에서 이 작업을 수행할 수 없습니다.')
     except PlatformAPIError as exc:
         error = exc
+    except PlatformConflict:
+        error = PlatformAPIError(409, 'classroom_request_conflict', '동일한 요청 식별자로 다른 작업을 보낼 수 없습니다.')
+    except ValueError:
+        error = PlatformAPIError(400, 'invalid_request', 'IDE 요청 종류·과제·안내 내용을 확인해 주세요.')
     except sqlite3.Error:
         error = PlatformAPIError(503, 'results_unavailable', '결과를 잠시 조회할 수 없습니다. 다시 시도해 주세요.',
                                  headers={'Retry-After': '5'})

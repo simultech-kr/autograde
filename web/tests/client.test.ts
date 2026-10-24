@@ -41,4 +41,5 @@ test("invalid JSON failure never falls back to fixture or empty success", async 
 test("trusted registry exposes only implemented, permitted features", () => {
   assert.deepEqual(availableModules([]), []);
   assert.deepEqual(availableModules(["results.read", "arbitrary-remote-plugin"]).map(m => m.id), ["courses", "results"]);
+  assert.deepEqual(availableModules(["classroom.read"]).map(m => m.id), ["classroom"]);
 });

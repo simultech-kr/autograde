@@ -2,7 +2,7 @@
   "name": "autograde-vscode",
   "displayName": "Autograde",
   "description": "C/C++ 실습 과제 수령·다운로드·제출·채점 피드백을 VS Code에서. Linux, macOS, Windows WSL2 수업용 Autograde 확장.",
-  "version": "0.5.7",
+  "version": "0.5.12",
   "private": true,
   "publisher": "autograde",
   "repository": {
@@ -36,6 +36,9 @@
   "activationEvents": [
     "onStartupFinished",
     "onCommand:autograde.openLearningHome",
+    "onCommand:autograde.studentMaterials",
+    "onCommand:autograde.syncContent",
+    "onCommand:autograde.openExamMode",
     "onView:autograde.assignments",
     "onCommand:autograde.configureServiceAddress",
     "onCommand:autograde.checkServerConnection",
@@ -49,10 +52,32 @@
     "onCommand:autograde.acceptedAssignmentHistory",
     "onCommand:autograde.submitCurrentCommit",
     "onCommand:autograde.viewLatestResult",
-    "onCommand:autograde.viewAssignmentDocument"
+    "onCommand:autograde.viewAssignmentDocument",
+    "onCommand:autograde.exportLearning",
+    "onCommand:autograde.endLearningSession"
   ],
   "contributes": {
     "commands": [
+      {
+        "command": "autograde.syncContent",
+        "title": "Autograde: Sync Course Content",
+        "shortTitle": "강의자료 업데이트 · 변경분 받기",
+        "enablement": "autograde.authenticated",
+        "icon": "$(sync)"
+      },
+      {
+        "command": "autograde.studentMaterials",
+        "title": "Autograde: My Learning Materials",
+        "shortTitle": "내 배포 자료 · PDF / ZIP 받기",
+        "enablement": "autograde.authenticated",
+        "icon": "$(files)"
+      },
+      {
+        "command": "autograde.openExamMode",
+        "title": "Autograde: Exam Mode",
+        "shortTitle": "시험 모드 · 좌석 / Agent 상태",
+        "icon": "$(shield)"
+      },
       {
         "command": "autograde.openLearningHome",
         "title": "Autograde: Open Learning Home",
@@ -161,11 +186,31 @@
         "shortTitle": "채점 결과 보기",
         "enablement": "autograde.authenticated",
         "icon": "$(output)"
+      },
+      {
+        "command": "autograde.exportLearning",
+        "title": "Autograde: Export My Learning",
+        "shortTitle": "내 학습내용 내보내기 · 폴더 / ZIP",
+        "enablement": "isWorkspaceTrusted",
+        "icon": "$(export)"
+      },
+      {
+        "command": "autograde.endLearningSession",
+        "title": "Autograde: End Shared Learning Session",
+        "shortTitle": "공용 실습 종료 · 임시 파일 정리",
+        "enablement": "autograde.sharedSession",
+        "icon": "$(sign-out)"
       }
     ],
     "configuration": {
       "title": "Autograde",
       "properties": {
+        "autograde.examControlBaseUrl": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "markdownDescription": "별도 시험 관리 서버의 HTTPS origin(주소·포트)입니다. **사용자 설정 값만 읽으며 작업 영역 설정은 무시합니다.** HTTP는 loopback만 허용합니다. 시험 토큰은 저장되지 않으며 Autograde 토큰을 이 주소로 보내지 않습니다."
+        },
         "autograde.serviceBaseUrl": {
           "type": "string",
           "default": "http://127.0.0.1:20000",
@@ -211,6 +256,21 @@
     ],
     "menus": {
       "view/title": [
+        {
+          "command": "autograde.syncContent",
+          "when": "view == autograde.assignments && autograde.authenticated",
+          "group": "1_assignment@6"
+        },
+        {
+          "command": "autograde.studentMaterials",
+          "when": "view == autograde.assignments && autograde.authenticated",
+          "group": "1_assignment@5"
+        },
+        {
+          "command": "autograde.openExamMode",
+          "when": "view == autograde.assignments",
+          "group": "2_settings@5"
+        },
         {
           "command": "autograde.openLearningHome",
           "when": "view == autograde.assignments",

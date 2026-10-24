@@ -15,6 +15,14 @@ def test_portal_referrer_override_is_web_only():
     assert "Referrer-Policy" not in api
     assert "proxy_set_header Origin" not in config
     assert "proxy_hide_header Content-Security-Policy" not in config
+    stream = web.split('location ~ ^/instructor/api/v1/courses/[a-z0-9_-]+/classroom/events$ {')[1].split('}', 1)[0]
+    assert 'proxy_pass http://127.0.0.1:18081;' in stream
+    assert 'proxy_http_version 1.1;' in stream
+    assert 'proxy_buffering off;' in stream
+    assert 'proxy_cache off;' in stream
+    assert 'proxy_read_timeout 45s;' in stream
+    assert 'proxy_intercept_errors off;' in stream
+    assert '/classroom/events' not in api
 
 
 def test_document_form_has_scoped_unicode_body_limit():
@@ -62,4 +70,18 @@ def test_individual_material_upload_limits_do_not_publish_private_storage():
         assert 'access_log off;' in location
     assert 'client_max_body_size 64k;' in web
     assert '/materials/' not in api
+    assert 'alias ' not in config
+
+
+def test_content_upload_limit_is_private_and_scoped():
+    config = (Path(__file__).resolve().parents[2]
+              / "config/nginx-autograde-portal.conf.example").read_text()
+    web, api = config.split("server {")[1:]
+    location = web.split('location ~ ^/courses/[a-z0-9_-]+/instructor/content/cc_[0-9a-f]+/upload$ {')[1].split('}', 1)[0]
+    assert 'client_max_body_size 26m;' in location
+    assert 'proxy_request_buffering off;' in location
+    assert 'proxy_pass http://127.0.0.1:18081;' in location
+    assert 'access_log off;' in location
+    assert 'client_max_body_size 64k;' in web
+    assert '/content/' not in api
     assert 'alias ' not in config

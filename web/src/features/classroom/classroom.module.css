@@ -1,0 +1,52 @@
+.links,.filters,.live,.summary,.tabs,.controlButtons { display:flex; flex-wrap:wrap; gap:12px; align-items:center; }
+.links { margin-bottom:20px; }
+.filters { margin:16px 0; align-items:end; }
+.filters label { display:flex; flex-direction:column; gap:6px; flex:1 1 210px; max-width:420px; min-width:0; }
+.filters select,.filters input { width:100%; }
+.live { justify-content:space-between; padding:10px 0; border-bottom:1px solid var(--border); font-weight:650; }
+.live span,.footnote { color:var(--muted); font-weight:400; font-size:.875rem; }
+.summary { gap:0; margin:16px 0; border:1px solid var(--border); background:var(--surface); }
+.summary>span { flex:1 1 150px; padding:14px 18px; }
+.summary strong { display:block; font-size:1.35rem; }
+.grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(min(100%,205px),1fr)); gap:12px; }
+.student { --signal:var(--muted); display:flex; flex-direction:column; align-items:stretch; gap:12px; min-width:0; text-align:left; padding:16px; border:1px solid var(--border); border-top:4px solid var(--signal); background:var(--surface); color:var(--text); font-weight:400; border-radius:3px; }
+.online { --signal:light-dark(#1b7055,#83d8b5); }
+.stale { --signal:light-dark(#946200,#f2c76c); }
+.offline,.never_connected { --signal:var(--muted); }
+.studentKey { font-size:1.05rem; font-weight:750; overflow-wrap:anywhere; }
+.studentName { margin-top:-10px; color:var(--muted); }
+.connection { display:flex; align-items:center; gap:7px; font-size:.875rem; color:var(--signal); font-weight:650; }
+.dot { width:8px; height:8px; border-radius:50%; background:currentColor; flex-shrink:0; }
+.metric { display:flex; gap:8px; font-size:.875rem; }
+.metric>span[aria-hidden] { width:18px; flex-shrink:0; font-weight:750; }
+.metric small { display:block; color:var(--muted); font-size:.75rem; }
+.notice { border-left:3px solid var(--accent); padding:14px 16px; background:var(--secondary); margin:16px 0; }
+.footnote { margin-top:16px; }
+.dialog { width:min(740px,calc(100% - 24px)); max-height:calc(100dvh - 32px); padding:24px; border:1px solid var(--border); border-radius:4px; background:var(--surface); color:var(--text); }
+.dialog::backdrop { background:rgb(0 0 0 / .5); }
+.dialogHeader { display:flex; justify-content:space-between; align-items:start; gap:16px; }
+.dialogHeader>div { min-width:0; }
+.dialogHeader h2 { margin-bottom:4px; }
+.dialogHeader p { color:var(--muted); font-size:.875rem; }
+.dialogHeader button { flex-shrink:0; }
+.tabs { border-bottom:1px solid var(--border); margin:12px 0 20px; padding-bottom:12px; }
+.tabs button { background:var(--secondary); color:var(--text); }
+.tabs button[aria-pressed=true] { background:var(--accent); color:var(--on-accent); }
+.facts { display:grid; grid-template-columns:minmax(100px,1fr) minmax(0,3fr); gap:10px 16px; margin:12px 0 24px; }
+.facts dt { color:var(--muted); }
+.facts dd { margin:0; overflow-wrap:anywhere; }
+.history { padding:0; list-style:none; }
+.history article,.history li { display:flex; flex-wrap:wrap; gap:8px 16px; padding:12px 0; border-top:1px solid var(--border); }
+.history article>* { flex:1 1 200px; overflow-wrap:anywhere; }
+.history code { font-size:.8rem; }
+.history time { color:var(--muted); }
+.commandForm { display:flex; flex-direction:column; gap:12px; padding:16px; border:1px solid var(--border); }
+.commandForm label { display:flex; flex-direction:column; gap:6px; min-width:0; }
+.commandForm select,.commandForm textarea { width:100%; min-width:0; padding:10px; color:var(--text); background:var(--surface); border:1px solid var(--border); font:inherit; }
+.commandForm textarea { resize:vertical; }
+.commandForm button { align-self:flex-start; }
+.commandHistory { list-style:none; padding:0; }
+.commandHistory>li { border-top:1px solid var(--border); padding:16px 0; overflow-wrap:anywhere; }
+.commandHeading { display:flex; flex-wrap:wrap; gap:8px 20px; justify-content:space-between; }
+.commandMessage { white-space:pre-wrap; }
+@media(max-width:480px) { .dialog { padding:16px; }.tabs { gap:6px; }.tabs button { padding:8px 10px; }.facts { grid-template-columns:1fr; gap:4px; }.facts dd { margin-bottom:12px; } }

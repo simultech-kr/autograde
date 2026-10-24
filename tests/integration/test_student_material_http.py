@@ -386,17 +386,19 @@ def test_upload_csrf_truncation_and_stale_revision_preserve_file(material_http):
     assert_file(env.admin.get(preview_path(env, path)))
 
 
-def test_publication_freezes_files_recipients_and_schedule(material_http):
+def test_publication_allows_direct_file_recipient_and_schedule_updates(material_http):
     env = material_http
     path = publish_material(env)
     before = revision(env, path)
-    assert env.admin.upload(path + "/upload", revision=before, content=OTHER_PDF)[0] == 409
+    assert env.admin.upload(path + "/upload", revision=before, content=OTHER_PDF)[0] == 303
     batch = zip_bytes([("20260002.pdf", OTHER_PDF)])
-    assert env.admin.upload(path + "/upload-batch", revision=before,
-                            filename="new-recipients.zip", content=batch)[0] == 409
-    assert env.admin.post(path, revision=str(before), title="changed", instructions="changed",
-                          opens_at="2026-10-21T08:00", closes_at="2026-10-21T11:00")[0] == 409
-    assert_file(student_login(env).post(download_path(path)))
+    assert env.admin.upload(path + "/upload-batch", revision=revision(env, path),
+                            filename="new-recipients.zip", content=batch)[0] == 303
+    assert env.admin.post(path, revision=str(revision(env, path)), title="changed", instructions="changed",
+                          opens_at="2026-10-21T08:00", closes_at="2026-10-21T11:00")[0] == 303
+    assert env.materials.get(COURSE, path.rsplit("/", 1)[1])["status"] == "published"
+    assert_file(student_login(env).post(download_path(path)), content=OTHER_PDF)
+    assert_file(student_login(env, key="20260002", password="234567").post(download_path(path)), content=OTHER_PDF)
 
 
 def test_publish_requires_upload_and_confirmation_and_archive_preserves_history(material_http):
@@ -499,7 +501,7 @@ def test_removing_withdrawn_draft_recipient_unblocks_remaining_publication(mater
 
 @pytest.mark.parametrize("change,expected", [
     ("csrf", 403), ("origin", 403), ("unconfirmed", 400), ("stale", 409),
-    ("published", 409), ("archived", 409), ("course", 404),
+    ("archived", 409), ("course", 404),
 ])
 def test_remove_recipient_checks_confirmation_revision_auth_and_lifecycle(material_http, change, expected):
     env = material_http

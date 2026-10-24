@@ -53,10 +53,17 @@ class MaterialService:
         assert student_id == 7
         return Path('/tmp/synthetic-material.pdf')
 
+    def file_snapshot_for_instructor(self, course, material, student_id, file_revision=None):
+        assert file_revision is None
+        return self.file_for_instructor(course, material, student_id), self.file_metadata(course, material, student_id)
+
     def download(self, course, material, student_id):
         self.calls.append(('download', course, material, student_id))
         assert student_id == 7
         return Path('/tmp/synthetic-material.pdf')
+
+    def download_snapshot(self, course, material, student_id):
+        return self.download(course, material, student_id), self.file_metadata(course, material, student_id)
 
     def upload(self, *args, **kwargs):
         self.calls.append(('upload', args, kwargs))
@@ -99,7 +106,8 @@ def test_instructor_detail_guides_mapping_batch_partial_delivery_and_escapes(ui)
     assert '최상위' in body and '앞자리 0' in body
     assert '파일 배정 1명 · 활성 수강 중 미배정 1명' in body
     assert '미배정 · 학생에게 표시 안 됨' in body
-    assert '공개 후에는 안내·파일·배포 기간·배정 대상을 변경할 수 없습니다.' in body
+    assert '자료 배포는 성적·과제 채점과 무관합니다.' in body
+    assert '공개 후에도 안내·기간과 학생별 파일을 직접 수정할 수 있습니다.' in body
     assert '다운로드 완료·열람을 증명하지 않습니다.' in body
     assert '&lt;script&gt;Alice&lt;/script&gt;' in body
     assert '<script>Alice</script>' not in body
@@ -118,14 +126,16 @@ def test_instructor_listing_links_student_destination_and_draft(ui):
     assert '초안 저장 · 학생별 파일 등록으로' in body
 
 
-def test_published_detail_removes_file_and_metadata_edit_forms(ui):
+def test_published_detail_allows_direct_file_and_metadata_edit_forms(ui):
     material = dict(MATERIAL, status='published')
     _, body = instructor.detail(ui, COURSE, material, {'csrf': 'csrf-token'})
-    assert 'type="file"' not in body
-    assert 'name="title"' not in body
+    assert 'type="file"' in body
+    assert 'name="title"' in body
     assert '학생별 자료 공개' not in body
     assert '/archive' in body
-    assert '/remove/' not in body
+    assert '/remove/' in body
+    assert '안내·기간 수정 즉시 반영' in body
+    assert '개별 파일 교체·즉시 반영' in body
 
 
 @pytest.mark.parametrize('action', ['upload', 'upload-batch'])

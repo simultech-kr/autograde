@@ -65,6 +65,36 @@ def test_preview_reset_backup_and_reregister(records):
         apply(paths, plan)  # Stale apply must not delete the re-registered student.
 
 
+def test_reset_removes_only_target_course_classroom_metadata(records):
+    paths, state, _ = records
+    student = state.get_student_by_key('001')
+    with state._write() as db:
+        for course in ('come2201', 'come3105'):
+            db.execute('''INSERT INTO classroom_clients(client_session_id,session_id,course_key,student_id,
+                latest_sequence,latest_payload,first_seen_at,last_seen_at)
+                VALUES (?,?,?,?,1,'{}','2026-10-25T00:00:00Z','2026-10-25T00:00:00Z')''',
+                ('client-' + course, 'audit-session', course, student.id))
+            db.execute('''INSERT INTO classroom_events(client_session_id,course_key,student_id,sequence,kind,received_at)
+                VALUES (?,?,?,1,'workspace_opened','2026-10-25T00:00:00Z')''', ('client-' + course, course, student.id))
+            db.execute('''INSERT INTO classroom_commands(command_id,course_key,student_id,request_key,request_json,kind,
+                message,created_by,status,client_session_id,created_at,expires_at)
+                VALUES (?,?,?,'test-request','{}','notice','Hello','teacher','received',?,'2026-10-25T00:00:00Z','2026-10-25T00:10:00Z')''',
+                ('command-' + course, course, student.id, 'client-' + course))
+            db.execute('INSERT INTO classroom_command_events(command_id,course_key,student_id,status,actor,recorded_at) '
+                       "VALUES (?,?,?,'received','ide','2026-10-25T00:00:00Z')", ('command-' + course, course, student.id))
+    plan = reset_course(paths, 'come2201')
+    assert plan['counts']['classroom_clients'] == 1
+    assert plan['counts']['classroom_events'] == 1
+    assert plan['counts']['classroom_commands'] == 1
+    assert plan['counts']['classroom_command_events'] == 1
+    apply(paths, plan)
+    with state._connection() as db:
+        assert [row[0] for row in db.execute('SELECT course_key FROM classroom_clients')] == ['come3105']
+        assert [row[0] for row in db.execute('SELECT course_key FROM classroom_events')] == ['come3105']
+        assert [row[0] for row in db.execute('SELECT course_key FROM classroom_commands')] == ['come3105']
+        assert [row[0] for row in db.execute('SELECT course_key FROM classroom_command_events')] == ['come3105']
+
+
 def test_live_service_and_confirmation_refused(records):
     paths, _, _ = records
     with _exclusive_course_service_lock(paths, "come3105"):
@@ -120,7 +150,7 @@ def test_unexpected_cross_course_change_rolls_back_and_restores_guard(records):
     assert fingerprint(paths) == plan["expected_state"]
 
 
-@pytest.mark.parametrize('version', [10, 11, 12, 13, 14, 15, 16])
+@pytest.mark.parametrize('version', [10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20])
 def test_legacy_schema_reset_remains_supported(tmp_path, monkeypatch, version):
     import autograde.platform_state as module
     monkeypatch.setattr(module, '_LATEST_SCHEMA_VERSION', version)
@@ -430,7 +460,8 @@ def test_reset_rolls_back_incidental_exam_request_evidence_deletion(records):
     assert service.receipts("come3105", papers["come3105"]["paper_id"])[0]["request_count"] == 1
 
 
-def test_reset_preserves_personal_material_assignments_requests_and_backups(records):
+@pytest.mark.parametrize('mode', ['original', 'edition', 'direct'])
+def test_reset_preserves_personal_material_assignments_requests_and_backups(records, mode):
     paths, state, _ = records
     now = datetime(2026, 10, 21, tzinfo=timezone.utc)
     service = StudentMaterialService(state, paths.root / 'student-materials', clock=lambda: now)
@@ -441,7 +472,19 @@ def test_reset_preserves_personal_material_assignments_requests_and_backups(reco
                               filename='001.pdf', data=b'%PDF-1.4\nprivate feedback\n%%EOF\n', actor='teacher')
     material = service.publish('come2201', material['material_id'], revision=material['revision'], actor='teacher')
     artifact = service.download('come2201', material['material_id'], student_id)
-    preserved_tables = ('student_materials', 'student_material_files', 'student_material_requests', 'student_material_audit')
+    artifacts = [artifact]
+    if mode != 'original':
+        if mode == 'edition':
+            material = service.create_revision('come2201', material['material_id'], revision=material['revision'],
+                                               change_note='피드백 내용 보완', actor='teacher')
+        material = service.upload('come2201', material['material_id'], revision=material['revision'],
+                                  filename='001.pdf', data=b'%PDF-1.4\ncorrected feedback\n%%EOF\n', actor='teacher')
+        if mode == 'edition':
+            material = service.publish('come2201', material['material_id'], revision=material['revision'], actor='teacher')
+        artifact = service.download('come2201', material['material_id'], student_id)
+        artifacts.append(artifact)
+    preserved_tables = ('student_materials', 'student_material_files', 'student_material_requests', 'student_material_audit',
+                        'student_material_versions', 'student_material_file_history')
     with state._connection() as db:
         original = {table: [tuple(row) for row in db.execute(f'SELECT * FROM {table} ORDER BY rowid')]
                     for table in preserved_tables}
@@ -451,10 +494,38 @@ def test_reset_preserves_personal_material_assignments_requests_and_backups(reco
             assert [tuple(row) for row in db.execute(f'SELECT * FROM {table} ORDER BY rowid')] == rows
             assert saved.execute(f'SELECT * FROM {table} ORDER BY rowid').fetchall() == rows
         assert db.execute('PRAGMA foreign_key_check').fetchall() == []
-    assert (Path(result['backup_directory']) / artifact.relative_to(paths.root)).read_bytes() == artifact.read_bytes()
+    for saved_artifact in artifacts:
+        assert (Path(result['backup_directory']) / saved_artifact.relative_to(paths.root)).read_bytes() == saved_artifact.read_bytes()
     with pytest.raises(PlatformAccessDenied):
         service.download('come2201', material['material_id'], student_id)
     assert service.recipients('come2201', material['material_id'])[0]['request_count'] == 1
     state.upsert_enrollment(student_id=student_id, course_key='come2201')
     assert service.download('come2201', material['material_id'], student_id).read_bytes() == artifact.read_bytes()
     assert service.recipients('come2201', material['material_id'])[0]['request_count'] == 2
+
+
+def test_reset_preserves_git_content_history_objects_and_backup(records):
+    from autograde.content_store import ContentService
+    paths, state, _ = records
+    now = datetime(2026, 10, 24, tzinfo=timezone.utc)
+    service = ContentService(state, paths.root / 'content', clock=lambda: now)
+    student = state.get_student_by_key('001')
+    row = service.create('come2201', title='CMS reference', student_ids=[student.id], actor='teacher')
+    row = service.upload('come2201', row['collection_id'], revision=row['revision'], path='README.md',
+                         data=b'preserve content\n', actor='teacher')
+    release = service.publish('come2201', row['collection_id'], revision=row['revision'],
+                              idempotency_key='reset-preservation-test', actor='teacher')
+    tables = ('content_collections', 'content_draft_files', 'content_releases', 'content_release_files',
+              'content_publish_jobs', 'content_audit')
+    with state._connection() as db:
+        original = {table: [tuple(record) for record in db.execute(f'SELECT * FROM {table} ORDER BY rowid')]
+                    for table in tables}
+    artifact = service.object_path('come2201', release['files'][0]['sha256'])
+    result = apply(paths, reset_course(paths, 'come2201'))
+    with state._connection() as db, sqlite3.connect(Path(result['backup_directory']) / 'state.sqlite3') as saved:
+        for table, rows in original.items():
+            assert [tuple(record) for record in db.execute(f'SELECT * FROM {table} ORDER BY rowid')] == rows
+            assert saved.execute(f'SELECT * FROM {table} ORDER BY rowid').fetchall() == rows
+    assert (Path(result['backup_directory']) / artifact.relative_to(paths.root)).read_bytes() == artifact.read_bytes()
+    with pytest.raises(PlatformAccessDenied):
+        service.get_student_manifest('come2201', student.id, release['release_id'], subject_scope='a' * 64)

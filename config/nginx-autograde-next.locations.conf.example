@@ -35,7 +35,8 @@ location ^~ /app/ {
     error_log /dev/null crit;
 }
 location ^~ /instructor/api/v1/ {
-    # Phase 0-2 is GET only; do not enlarge all API body limits for future ZIPs.
+    # Results are GET-only. Classroom command POSTs use bounded JSON+CSRF;
+    # do not enlarge all API body limits for future ZIPs.
     client_max_body_size 64k;
     proxy_request_buffering off;
     limit_req zone=portal_web burst=100 nodelay;
@@ -44,7 +45,12 @@ location ^~ /instructor/api/v1/ {
     proxy_set_header X-Forwarded-Proto $scheme;
     # Preserve Authorization, Cookie, original Origin and backend JSON errors.
     proxy_intercept_errors off;
-    proxy_read_timeout 30s;
+    # This ^~ prefix wins over the portal's regex SSE route. Classroom events
+    # must therefore stream here too; ordinary JSON responses remain unchanged.
+    proxy_http_version 1.1;
+    proxy_buffering off;
+    proxy_cache off;
+    proxy_read_timeout 45s;
     access_log off;
     error_log /dev/null crit;
 }

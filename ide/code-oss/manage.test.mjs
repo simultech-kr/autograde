@@ -456,6 +456,8 @@ test('CLI rejects missing, duplicated, unknown, positional and inappropriate wor
     ['prepare', '--source', '--workspace'], ['prepare', '--source', 'a', '--source', 'b'],
     ['verify', '--workspace', 'a'], ['prepare', 'unexpected'], ['run', '--workspace'],
     ['prepare', '--runtime', 'a'], ['verify', '--runtime', 'a'], ['run', '--runtime'],
+    ['prepare', '--learner', 'test-a'], ['verify', '--learning-policy', 'standard'], ['run', '--learner'],
+    ['run', '--learner', 'a', '--learner', 'b'], ['run', '--learning-policy'],
     ['run', '--runtime', 'a', '--runtime', 'b'], ['run', '--runtime', '--source']]) {
     assert.throws(() => main(args), /Expected prepare|Usage:|only supported/);
   }
@@ -463,6 +465,26 @@ test('CLI rejects missing, duplicated, unknown, positional and inappropriate wor
   assert.equal(result.status, 1);
   assert.match(result.stderr, /^Autograde IDE: Expected prepare/);
   assert.equal(result.stdout, '');
+});
+
+test('run validates learner and policy before checking source or creating runtime', t => {
+  const f = fixture(t);
+  for (const options of [['--learner', '../student'], ['--learning-policy', 'unknown'], ['--learning-policy', 'restricted']]) {
+    const result = spawnSync(process.execPath, [path.join(here, 'manage.mjs'), 'run', '--source', path.join(f.root, 'missing'), ...options], { encoding: 'utf8' });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /Learner|Learning policy|requires --learner/);
+    assert.doesNotMatch(result.stderr, /ENOENT/);
+  }
+});
+
+test('shared lifetime defaults with a learner and rejects unsafe or ambiguous launch options before source access', () => {
+  const bad = [
+    [['run', '--learning-lifetime', 'unknown', '--learner', 'test'], /Learning lifetime must/],
+    [['run', '--learning-lifetime', 'shared'], /requires --learner/],
+    [['prepare', '--learning-lifetime', 'shared'], /only supported by run/],
+    [['run', '--learner', 'test', '--workspace', '/old-user-files'], /fresh workspace/],
+  ];
+  for (const [args, pattern] of bad) assert.throws(() => main(args), pattern);
 });
 
 test('run accepts an explicit runtime path option before checking the required source checkout', t => {

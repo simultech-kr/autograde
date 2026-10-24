@@ -300,7 +300,7 @@ def test_student_and_instructor_views_are_separate(portal):
     status, _, body = request(web, path, authorization=auth)
     assert status == 200
     assert b'data-audience="instructor"' in body
-    assert "교과목 전체 현황" in body.decode()
+    assert "제출·채점 현황" in body.decode()
     assert "학생 관리" in body.decode()
     assert b'data-audience="student"' not in body
 

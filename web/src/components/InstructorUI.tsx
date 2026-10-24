@@ -10,6 +10,7 @@ export function AppShell({ children, testId }: { children: ReactNode; testId?: s
           <span>Autograde</span>
           <span className={styles.audience}>교수자</span>
         </a>
+        <a className={styles.legacy} href="/app/classroom">실습 교실</a>
         <a className={styles.legacy} href="/instructor">기존 관리 화면 ↗</a>
       </header>
       <main id="main" tabIndex={-1} className={styles.main}>{children}</main>

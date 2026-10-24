@@ -682,6 +682,49 @@ class StudentPlatformService:
             }
         return response
 
+    def report_classroom_event(self, access_token: str, payload: Mapping[str, Any]) -> Mapping[str, Any]:
+        """Record only authenticated, allowlisted learning-space metadata.
+
+        ClassroomState rechecks this session in the write transaction. Client
+        submission events are never an authoritative submission receipt.
+        """
+        from .classroom_state import ClassroomState
+        session, _student = self._authorize(access_token, touch=False)
+        try:
+            return ClassroomState(self.state).record(
+                session=session, access_token_hash=self._access_verifier(access_token),
+                payload=payload, at=self._aware_now(),
+            )
+        except ValueError as exc:
+            raise PlatformAPIError(400, "invalid_classroom_event", "수업 활동 보고 형식을 확인해 주세요.") from exc
+        except PlatformAccessDenied as exc:
+            raise PlatformAPIError(403, "classroom_scope_denied", "현재 학생·수업·과제의 보고 권한을 확인해 주세요.") from exc
+        except PlatformConflict as exc:
+            raise PlatformAPIError(409, "classroom_event_conflict", "이전 세션 또는 중복 보고입니다. 연결을 다시 확인해 주세요.") from exc
+
+    def poll_classroom_commands(self, access_token: str, payload: Mapping[str, Any]) -> Mapping[str, Any]:
+        if not isinstance(payload, dict) or set(payload) != {'client_session_id'}:
+            raise PlatformAPIError(400, 'invalid_classroom_request', 'IDE 연결 정보를 확인해 주세요.')
+        return self._classroom_command_action(access_token, 'poll', client_session_id=payload['client_session_id'])
+
+    def respond_classroom_command(self, access_token: str, command_id: str, payload: Mapping[str, Any]) -> Mapping[str, Any]:
+        return self._classroom_command_action(access_token, 'respond', command_id=command_id, payload=payload)
+
+    def _classroom_command_action(self, access_token: str, action: str, **parameters) -> Mapping[str, Any]:
+        from .classroom_commands import ClassroomCommands
+        session, _student = self._authorize(access_token, touch=False)
+        try:
+            return getattr(ClassroomCommands(self.state), action)(session=session,
+                access_token_hash=self._access_verifier(access_token), at=self._aware_now(), **parameters)
+        except ValueError as exc:
+            raise PlatformAPIError(400, 'invalid_classroom_request', 'IDE 요청 또는 응답 형식을 확인해 주세요.') from exc
+        except PlatformAccessDenied as exc:
+            raise PlatformAPIError(403, 'classroom_scope_denied', '현재 학생·수업·과제의 요청 권한을 확인해 주세요.') from exc
+        except PlatformNotFound as exc:
+            raise PlatformAPIError(404, 'classroom_request_not_found', '현재 연결에 해당하는 IDE 요청이 없습니다.') from exc
+        except PlatformConflict as exc:
+            raise PlatformAPIError(409, 'classroom_request_conflict', '이미 처리되었거나 만료된 요청입니다. 상태를 다시 확인해 주세요.') from exc
+
     def list_sessions(self, access_token: str) -> Mapping[str, Any]:
         current, _student = self._authorize(access_token)
         try:

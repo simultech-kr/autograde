@@ -68,7 +68,7 @@ def published(service, **changes):
 def test_metadata_restart_and_migration(setup):
     state, service, _, _ = setup
     material = draft(service)
-    assert state.schema_version() == 17
+    assert state.schema_version() == state.LATEST_SCHEMA_VERSION
     assert material["revision"] == 1 and material["file_count"] == 0 and material["status"] == "draft"
     assert material["material_id"].startswith("mat_") and len(material["material_id"]) == 36
     assert service.list_for_instructor(COURSE) == [material]
@@ -88,7 +88,7 @@ def test_migration_from16_preserves_existing_exam_and_student(tmp_path, monkeypa
         paper = exams.create(COURSE, title="기존 시험", opens_at=NOW, closes_at=NOW + timedelta(hours=1), actor="teacher")
         assert old.schema_version() == 16
     state = PlatformStateStore(path)
-    assert state.schema_version() == 17
+    assert state.schema_version() == state.LATEST_SCHEMA_VERSION
     assert state.get_student_by_key("001") == student
     assert ExamPaperService(state, tmp_path / "papers").get(COURSE, paper["paper_id"]) == paper
     assert published(StudentMaterialService(state, tmp_path / "materials", clock=lambda: NOW))["status"] == "published"
@@ -425,15 +425,13 @@ def test_inactive_draft_recipient_can_be_removed_to_publish_remaining(setup):
     assert material["status"] == "published"
 
 
-def test_recipient_removal_not_allowed_after_publish_or_archive(setup):
+def test_recipient_removal_not_allowed_after_archive(setup):
     _, service, _, students = setup
     material = published(service)
-    for archive in (False, True):
-        if archive:
-            material = service.archive(COURSE, material["material_id"], revision=material["revision"], actor="teacher")
-        with pytest.raises(PlatformConflict):
-            service.remove_recipient(COURSE, material["material_id"], students[0].id, revision=material["revision"], actor="teacher")
-        assert service.get(COURSE, material["material_id"])["file_count"] == 1
+    material = service.archive(COURSE, material["material_id"], revision=material["revision"], actor="teacher")
+    with pytest.raises(PlatformConflict):
+        service.remove_recipient(COURSE, material["material_id"], students[0].id, revision=material["revision"], actor="teacher")
+    assert service.get(COURSE, material["material_id"])["file_count"] == 1
 
 
 def test_publish_requires_files_and_future_close(setup):
@@ -447,24 +445,24 @@ def test_publish_requires_files_and_future_close(setup):
         service.publish(COURSE, material["material_id"], revision=2, actor="teacher")
 
 
-def test_published_and_archived_content_frozen_at_service_and_db(setup):
+def test_archived_content_frozen_at_service_and_db(setup):
     state, service, _, students = setup
     material = published(service)
     mid = material["material_id"]
+    with pytest.raises(PlatformConflict):
+        service.publish(COURSE, mid, revision=material["revision"], actor="teacher")
+    material = service.archive(COURSE, mid, revision=material["revision"], actor="teacher")
     for sql in ("UPDATE student_materials SET title='forged',revision=revision+1", "DELETE FROM student_materials",
                 "UPDATE student_material_files SET filename='other.pdf'", "DELETE FROM student_material_files",
-                "INSERT INTO student_material_files SELECT material_id,999,filename,format,size_bytes,sha256 FROM student_material_files",
+                "INSERT INTO student_material_files SELECT material_id,999,filename,format,size_bytes,sha256,file_revision FROM student_material_files",
                 "UPDATE student_material_audit SET actor='forged'", "DELETE FROM student_material_audit"):
         with pytest.raises(sqlite3.IntegrityError):
             with state._write() as db:
                 db.execute(sql)
-    for archived in (False, True):
-        if archived:
-            material = service.archive(COURSE, mid, revision=material["revision"], actor="teacher")
-        with pytest.raises(PlatformConflict):
-            upload(service, material)
-        with pytest.raises(PlatformConflict):
-            service.publish(COURSE, mid, revision=material["revision"], actor="teacher")
+    with pytest.raises(PlatformConflict):
+        upload(service, material)
+    with pytest.raises(PlatformConflict):
+        service.publish(COURSE, mid, revision=material["revision"], actor="teacher")
     assert service.archive(COURSE, mid, revision=material["revision"], actor="teacher") == material
     assert service.list_for_student(COURSE, students[0].id) == []
     with pytest.raises(PlatformNotFound):

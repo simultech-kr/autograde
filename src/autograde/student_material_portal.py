@@ -27,10 +27,24 @@ def _listing(portal, course, session):
         body += '<p role="status">현재 자신에게 배정된 공개 자료가 없습니다. 담당 교수자에게 학번과 자료 배정 여부를 확인하세요.</p>'
     for material in materials:
         availability = material['availability']
+        edition = material.get('edition', 1)
+        file_revision = material.get('file_revision', 1)
+        file_updated = bool(material.get('file_updated')) or file_revision > 1
+        requested = material.get('request_count', 0) > 0 or bool(material.get('requested', False))
         body += (f'<article><h2>{escape(material["title"])}</h2>'
-                 f'<p><strong>{_AVAILABILITY[availability]}</strong></p>'
+                 f'<p><strong>{_AVAILABILITY[availability]}</strong> · 배포본 v{escape(str(edition))}'
+                 f' · 내 파일 v{escape(str(file_revision))}</p>'
                  f'<p>시작: {escape(deadline(material["opens_at"]))}<br>'
                  f'종료: {escape(deadline(material["closes_at"]))}</p>')
+        if edition > 1 or file_updated:
+            if availability == 'open' and not requested:
+                label = f'파일 수정본 v{file_revision}' if file_updated else f'수정본 v{edition}'
+                body += (f'<p class="notice" role="status"><strong>{escape(label)} · 다시 다운로드하세요</strong><br>'
+                         '이전에 받은 파일은 자동으로 변경되지 않습니다. 현재 파일을 새로 받아 확인하세요.</p>')
+            if material.get('change_note'):
+                body += '<p><strong>변경 안내:</strong> ' + escape(material['change_note']).replace('\n', '<br>') + '</p>'
+        if requested:
+            body += '<p class="progress-hint">현재 파일의 요청 기록이 있습니다. 실제 저장 여부는 브라우저 다운로드 목록에서 확인하세요.</p>'
         if availability == 'open':
             if material.get('instructions'):
                 body += '<p>' + escape(material['instructions']).replace('\n', '<br>') + '</p>'
@@ -94,8 +108,7 @@ def request(portal, method, path, form, cookies, origin):
                     student_id = session.credential.student_id
                     # File identity is derived only from the authenticated session;
                     # there is no student key/id selector in this request surface.
-                    artifact = portal.student_materials.download(course, action, student_id)
-                    metadata = portal.student_materials.file_metadata(course, action, student_id)
+                    artifact, metadata = portal.student_materials.download_snapshot(course, action, student_id)
                     suffix = metadata['format']
                     return PlatformFileResponse(200, artifact, 'application/pdf' if suffix == 'pdf' else 'application/zip', {
                         'Content-Disposition': f'attachment; filename="material.{suffix}"; filename*=UTF-8\'\'{quote(metadata["filename"], safe="")}',
@@ -114,6 +127,6 @@ def request(portal, method, path, form, cookies, origin):
     except PlatformAccessDenied:
         status, message = 403, '자료 배포가 중지되었거나 접근할 수 없습니다. 배포 기간과 수강 상태를 확인하세요.'
     except PlatformConflict:
-        status, message = 409, '자료 파일의 준비 상태를 확인할 수 없습니다. 교수자에게 문의한 뒤 다시 시도하세요.'
+        status, message = 409, '자료가 수정 배포되었거나 준비 상태가 변경되었습니다. 최신 내 자료 목록을 열어 다시 다운로드하세요. 계속 실패하면 교수자에게 문의하세요.'
     return portal._page('자료 다운로드 확인', f'<p role="alert">{escape(message)}</p>'
                         f'<p><a href="/courses/{course}/materials">내 자료 목록으로 돌아가기</a></p>', status=status)

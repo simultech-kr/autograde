@@ -5,6 +5,9 @@ import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { execFileSync, spawn } from 'node:child_process';
+import { learnerEnvironment, learnerLayout, prepareLearner, validateLearningOptions, verifyRestrictedLaunch } from './learning-profile.mjs';
+import { sharedSessionLayout, prepareSharedSession, markSessionLaunching, recordSessionProcess,
+  cleanupSharedSession, superviseSharedChild } from './shared-session.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const repoRoot = path.resolve(here, '../..');
@@ -314,8 +317,8 @@ function optionsFrom(args) {
   const options = {};
   for (let index = 0; index < args.length; index += 2) {
     const key = args[index];
-    if (!['--source', '--workspace', '--runtime'].includes(key) || !args[index + 1] || args[index + 1].startsWith('--') || key in options) {
-      throw new Error('Usage: node ide/code-oss/manage.mjs prepare|verify|run [--source PATH] [--workspace PATH (run only)] [--runtime PATH (run only)]');
+    if (!['--source', '--workspace', '--runtime', '--learner', '--learning-policy', '--learning-lifetime'].includes(key) || !args[index + 1] || args[index + 1].startsWith('--') || key in options) {
+      throw new Error('Usage: node ide/code-oss/manage.mjs prepare|verify|run [--source PATH] [--workspace PATH (run only)] [--runtime PATH (run only)] [--learner LOCAL_ALIAS (run only)] [--learning-policy standard|restricted (run only)] [--learning-lifetime shared|persistent (run only)]');
     }
     options[key] = args[index + 1];
   }
@@ -326,29 +329,76 @@ export function main(args) {
   const [command, ...rest] = args;
   if (!['prepare', 'verify', 'run'].includes(command)) throw new Error('Expected prepare, verify or run');
   const options = optionsFrom(rest);
-  for (const key of ['--workspace', '--runtime']) {
+  for (const key of ['--workspace', '--runtime', '--learner', '--learning-policy', '--learning-lifetime']) {
     if (options[key] && command !== 'run') throw new Error(`${key} is only supported by run`);
   }
+  validateLearningOptions(options['--learner'], options['--learning-policy']);
+  const lifetime = options['--learning-lifetime'] ?? (options['--learner'] ? 'shared' : undefined);
+  if (lifetime && !['shared', 'persistent'].includes(lifetime)) throw new Error('Learning lifetime must be shared or persistent');
+  if (lifetime && !options['--learner']) throw new Error('Learning lifetime requires --learner');
+  if (lifetime === 'shared' && options['--workspace']) throw new Error('Shared sessions always create a fresh workspace; --workspace is only available with --learning-lifetime persistent');
+  if (lifetime === 'shared' && process.platform === 'win32') throw new Error('Shared disposable sessions currently require macOS or Linux/WSL2. Native Windows cleanup is not supported.');
   const source = path.resolve(options['--source'] ?? path.join(repoRoot, '.cache/code-oss'));
   if (command === 'prepare') return console.log(JSON.stringify(prepare(source), null, 2));
   const checked = verify(source);
   if (command === 'verify') return console.log(JSON.stringify(checked, null, 2));
-  const workspace = options['--workspace'] ? fs.realpathSync(path.resolve(options['--workspace'])) : undefined;
-  if (workspace) requireDirectory(workspace);
-  const runtime = path.resolve(options['--runtime'] ?? path.join(repoRoot, '.cache/ide'));
+  const runtimeBase = path.resolve(options['--runtime'] ?? path.join(repoRoot, '.cache/ide'));
+  let learner = options['--learner'] ? (lifetime === 'shared'
+    ? sharedSessionLayout(runtimeBase, options['--learner'], options['--learning-policy'])
+    : learnerLayout(runtimeBase, options['--learner'], options['--learning-policy'], options['--workspace'])) : undefined;
+  const workspace = learner?.workspace ?? (options['--workspace'] ? fs.realpathSync(path.resolve(options['--workspace'])) : undefined);
+  if (workspace && !learner) requireDirectory(workspace);
+  const runtime = learner?.runtime ?? runtimeBase;
   validateRuntimePath(runtime, readJson(path.join(source, 'package.json')).version);
   const spec = launchSpec(source, runtime, workspace);
   for (const required of [path.join(source, 'out/main.js'), spec.executable]) {
     if (!fs.existsSync(required)) throw new Error(`Code-OSS is not built: ${required}. Follow docs/operations/autograde-ide-poc.md`);
   }
   // No prelaunch downloads and no shared VS Code profile. No OS/network controls.
-  prepareRuntime(repoRoot, options['--runtime'] ? runtime : undefined);
+  if (learner) {
+    learner = lifetime === 'shared'
+      ? prepareSharedSession(learner, readJson(path.join(here, 'runtime-settings.json')))
+      : prepareLearner(learner, readJson(path.join(here, 'runtime-settings.json')));
+    try {
+      const approvedBuiltins = new Set([...git(source, 'ls-tree', '--name-only', 'HEAD:extensions').split('\n'), ...extensionNames]);
+      verifyRestrictedLaunch(learner, source, approvedBuiltins);
+    } catch (error) {
+      if (lifetime === 'shared') cleanupSharedSession(learner);
+      throw error;
+    }
+    console.log(JSON.stringify({ learner: { runtime, workspace, materials: learner.materials, policy: learner.policy,
+      lifetime,
+      identity: 'local-alias-only-not-server-authentication', isolation: 'directory-and-profile-only',
+      osIsolation: false, networkRestriction: false,
+      notice: lifetime === 'shared'
+        ? 'Shared lab session: code, materials and IDE profile are deleted after the IDE process exits. Export or submit work before quitting. Export outside this session is retained. This is not OS isolation.'
+        : 'Persistent learner mode: local files remain after exit. Do not use for a shared lab seat.',
+      ...(learner.policy === 'restricted' ? { restrictionNotice: 'Launch-time IDE AI/extension restrictions only. External AI, browser and terminal traffic are not blocked.' } : {}),
+      ...(learner.preservedLegacyProfiles ? { preservedLegacyProfiles: learner.preservedLegacyProfiles,
+        legacyNotice: 'Old persistent learner profiles were preserved. The operator must relocate or remove them before this OS account is shared with students.' } : {}),
+      ...(process.platform === 'win32' ? { permissionsNotice: 'Windows account/ACL isolation must be provisioned separately.' } : {}),
+    } }, null, 2));
+  } else {
+    prepareRuntime(repoRoot, options['--runtime'] ? runtime : undefined);
+    console.log('Developer mode: files remain after exit. Shared lab seats require --learner with shared lifetime.');
+  }
+  if (lifetime === 'shared') markSessionLaunching(learner);
   const child = spawn(spec.executable, spec.args, {
-    cwd: source, stdio: 'inherit', shell: false,
-    env: { ...process.env, VSCODE_DEV: '1', VSCODE_CLI: '1', NODE_ENV: 'development' },
+    cwd: source, stdio: 'inherit', shell: false, detached: lifetime === 'shared',
+    env: { ...learnerEnvironment(learner), VSCODE_DEV: '1', VSCODE_CLI: '1', NODE_ENV: 'development' },
   });
-  child.on('error', error => { console.error(error.message); process.exitCode = 1; });
-  child.on('exit', (code, signal) => { process.exitCode = code ?? (signal ? 1 : 0); });
+  if (lifetime === 'shared') {
+    const completion = superviseSharedChild(child, learner);
+    try { if (child.pid) recordSessionProcess(learner, child.pid); }
+    catch (error) { child.kill('SIGTERM'); console.error(error.message); process.exitCode = 1; }
+    void completion.then(({ code }) => { process.exitCode = process.exitCode || code; }, error => {
+      console.error(`Shared IDE cleanup failed; the next student cannot start until cleanup succeeds: ${error.message}`);
+      process.exitCode = 1;
+    });
+  } else {
+    child.on('error', error => { console.error(error.message); process.exitCode = 1; });
+    child.on('exit', (code, signal) => { process.exitCode = code ?? (signal ? 1 : 0); });
+  }
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

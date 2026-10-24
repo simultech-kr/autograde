@@ -15,7 +15,8 @@ class InstructorUploadUnavailable(RuntimeError):
     """Upload-only deployment failure; never fall back to unbounded parsing."""
 
 
-def parse_instructor_upload(content_type: str, body: bytes, *, file_limit: int, capture_filename=False) -> dict:
+def parse_instructor_upload(content_type: str, body: bytes, *, file_limit: int, capture_filename=False,
+                            allow_content_path=False) -> dict:
     try:
         from python_multipart import MultipartParser
         from python_multipart.multipart import parse_options_header
@@ -62,7 +63,10 @@ def parse_instructor_upload(content_type: str, body: bytes, *, file_limit: int, 
     def headers_finished():
         disposition, attrs = parse_options_header(headers.get(b"content-disposition", b""))
         name = attrs.get(b"name", b"").decode("ascii", "strict")
-        if disposition != b"form-data" or name not in {"csrf", "revision", "file", "auto_generate", "starter_confirm", "grading_confirm"} or name in result:
+        allowed = {"csrf", "revision", "file", "auto_generate", "starter_confirm", "grading_confirm"}
+        if allow_content_path:
+            allowed.add("logical_path")
+        if disposition != b"form-data" or name not in allowed or name in result:
             raise ValueError("중복되거나 허용되지 않은 업로드 항목입니다.")
         is_file = b"filename" in attrs
         if (name == "file") != is_file:

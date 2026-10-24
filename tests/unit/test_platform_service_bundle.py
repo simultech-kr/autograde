@@ -197,7 +197,7 @@ def test_dashboard_requires_basic_auth_and_escapes_content(bundle_platform) -> N
     assert dashboard["rows"][0]["student_key"] == "s001"
     assert dashboard["rows"][0]["acceptance_count"] == 0
     page = service.instructor_dashboard_page(authorization)
-    assert "교과목 요약" in str(page.body)
+    assert '<h1>제출·채점 현황</h1>' in str(page.body)
     assert "학생 관리" in str(page.body)
     assert "전용 비밀번호" in str(page.body)
     assert "등록 학생 1명" in str(page.body)

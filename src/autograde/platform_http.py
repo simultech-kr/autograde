@@ -213,6 +213,11 @@ class PlatformHTTPServer(ThreadingHTTPServer):
         self.max_form_bytes = max_form_bytes
         self.request_timeout_seconds = float(request_timeout_seconds)
         self._request_slots = threading.BoundedSemaphore(max_concurrent_requests)
+        # Keep large CMS object validation/streams from exhausting all API handlers.
+        self.content_download_slots = threading.BoundedSemaphore(8)
+        # Long-lived instructor readers must leave capacity for student uploads
+        # and heartbeats. Deployments with fewer than four handlers fail closed.
+        self.classroom_stream_slots = threading.BoundedSemaphore(min(8, max_concurrent_requests // 4))
         self._active_requests_lock = threading.Lock()
         self._active_requests: set[socket.socket] = set()
         self._closing = False
@@ -392,6 +397,7 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
 
     def _dispatch(self, method: str) -> None:
         self.close_connection = True
+        content_slot = False
         try:
             self._validate_insecure_http_host()
             path, query = self._request_target()
@@ -405,6 +411,15 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
                     "Method not allowed",
                     headers={"Allow": ", ".join(sorted(allowed))},
                 )
+            if route == "classroom_stream":
+                from .classroom_stream import serve
+                serve(self, parameters["path"], query)
+                return
+            if route == "content_object":
+                content_slot = self.platform_server.content_download_slots.acquire(blocking=False)
+                if not content_slot:
+                    raise PlatformHTTPError(429, "content_transfer_busy", "자료 전송 중입니다. 잠시 후 다시 시도하세요.",
+                                            headers={"Retry-After": "1"})
             result, default_status = self._invoke(
                 route,
                 parameters,
@@ -427,6 +442,9 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
                     "The service could not process the request",
                 )
             self._send_error_result(mapped)
+        finally:
+            if content_slot:
+                self.platform_server.content_download_slots.release()
 
     def _validate_insecure_http_host(self) -> None:
         if self.platform_server.external_access_mode != "insecure-http":
@@ -486,6 +504,10 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
                 and (path == "/instructor" or path.startswith("/instructor/"))
             ):
                 if path == '/instructor/api/v1' or path.startswith('/instructor/api/v1/'):
+                    if re.fullmatch(r'/instructor/api/v1/courses/[a-z0-9_-]{1,96}/classroom/events', path):
+                        return "classroom_stream", {"path": path}, frozenset({"GET"})
+                    if re.fullmatch(r'/instructor/api/v1/courses/[a-z0-9_-]{1,96}/classroom/students/[^/]{1,128}/commands', path):
+                        return "portal", {"path": path}, frozenset({"POST"})
                     return "portal", {"path": path}, frozenset({"GET"})
                 return "portal", {"path": path}, frozenset({"GET", "POST"})
             return None, {}, frozenset()
@@ -529,6 +551,11 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
                 "revoke_current",
             ),
             "/v1/me": ("me", frozenset({"GET"}), "get_me"),
+            "/v1/classroom/events": ("classroom_event", frozenset({"POST"}), "report_classroom_event"),
+            "/v1/classroom/commands/poll": ("classroom_command_poll", frozenset({"POST"}), "poll_classroom_commands"),
+            "/v1/materials": ("materials", frozenset({"GET"}), "list_materials"),
+            "/v1/content/context": ("content_context", frozenset({"GET"}), "get_content_context"),
+            "/v1/content/collections": ("content_collections", frozenset({"GET"}), "list_content_collections"),
             "/v1/me/sessions": (
                 "sessions",
                 frozenset({"GET"}),
@@ -606,11 +633,33 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
                 "github_callback",
                 "instructor_dashboard_page",
                 "instructor_dashboard",
+                "list_materials",
+                "report_classroom_event",
+                "poll_classroom_commands",
+                "get_content_context",
+                "list_content_collections",
             } and not callable(getattr(facade, optional_method, None)):
                 return None, {}, frozenset()
             return route, {}, allowed
 
         parts = path.split("/")
+        if (len(parts) == 6 and parts[:4] == ["", "v1", "classroom", "commands"]
+                and parts[5] == 'responses' and self._identifier(parts[4]) is not None
+                and callable(getattr(facade, 'respond_classroom_command', None))):
+            return 'classroom_command_response', {'command_id': parts[4]}, frozenset({'POST'})
+        if (len(parts) in {6, 7} and parts[:4] == ["", "v1", "content", "releases"]
+                and re.fullmatch(r"cr_[0-9a-f]{32}", parts[4])):
+            if len(parts) == 6 and parts[5] in {"manifest", "verify"}:
+                method = "get_content_manifest" if parts[5] == "manifest" else "verify_content_manifest"
+                if callable(getattr(facade, method, None)):
+                    return "content_" + parts[5], {"release_id": parts[4]}, frozenset({"GET" if parts[5] == "manifest" else "POST"})
+            if (len(parts) == 7 and parts[5] == "objects" and re.fullmatch(r"[0-9a-f]{64}", parts[6])
+                    and callable(getattr(facade, "get_content_object", None))):
+                return "content_object", {"release_id": parts[4], "sha256": parts[6]}, frozenset({"GET"})
+        if (len(parts) == 5 and parts[:3] == ["", "v1", "materials"]
+                and parts[4] == "download" and self._identifier(parts[3]) is not None
+                and callable(getattr(facade, "get_material_download", None))):
+            return "material_download", {"material_id": parts[3]}, frozenset({"GET"})
         if (
             len(parts) == 3
             and parts[:2] == ["", "assignment-claim"]
@@ -726,6 +775,7 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
                              'sort', 'page', 'page_size', 'version'} if next_api else
                             participation_fields if participation_page else
                             {'course_key'} if path == '/instructor/switch' else
+                            {'assignment_id'} if re.fullmatch(r'/courses/[a-z0-9_-]{1,96}/instructor/classroom', path) else
                             {'q', 'visibility', 'page'} if re.fullmatch(r'/courses/[a-z0-9_-]{1,96}/instructor/assignments', path) else set())
             if query and (self.command != 'GET' or
                           (getattr(facade, 'instructor', None) is None and not participation_page) or
@@ -745,7 +795,13 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
                     csv_upload = re.fullmatch(r"/courses/[^/]+/instructor/students/import/preview", path)
                     exam_upload = re.fullmatch(r"/courses/[a-z0-9_-]{1,96}/instructor/exam-papers/ep_[A-Za-z0-9_-]+/upload", path)
                     material_upload = re.fullmatch(r"/courses/[a-z0-9_-]{1,96}/instructor/materials/mat_[A-Za-z0-9_-]+/(upload|upload-batch)", path)
-                    if upload or csv_upload or exam_upload or material_upload:
+                    content_upload = re.fullmatch(r"/courses/[a-z0-9_-]{1,96}/instructor/content/cc_[0-9a-f]{32}/upload", path)
+                    classroom_command = re.fullmatch(r'/instructor/api/v1/courses/[a-z0-9_-]{1,96}/classroom/students/[^/]{1,128}/commands', path)
+                    if classroom_command:
+                        # Narrow JSON mutation route; all other instructor API
+                        # routes remain GET-only. CSRF checked by the facade.
+                        form = self._read_json_object(max_bytes=8192)
+                    elif upload or csv_upload or exam_upload or material_upload or content_upload:
                         if not facade.admin_upload_slots.acquire(blocking=False):
                             raise PlatformHTTPError(503, "upload_busy", "파일 처리 중입니다. 잠시 후 다시 시도하세요.")
                         try:
@@ -755,16 +811,19 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
                             if material_upload:
                                 from .student_materials import MAX_MATERIAL_BYTES, MAX_BATCH_BYTES
                                 limit = MAX_BATCH_BYTES if material_upload[1] == 'upload-batch' else MAX_MATERIAL_BYTES
+                            if content_upload:
+                                limit = 25 * 1024 * 1024
                             body = self._read_body(expected_media_type="multipart/form-data", max_bytes=limit + 64 * 1024)
                             try:
                                 form = parse_instructor_upload(self.headers.get("Content-Type", ""), body, file_limit=limit,
-                                                               capture_filename=bool(material_upload))
+                                                               capture_filename=bool(material_upload or content_upload),
+                                                               allow_content_path=bool(content_upload))
                             except InstructorUploadUnavailable as exc:
                                 emit_operator_event("instructor_upload_unavailable", component="http", exception=exc.__cause__ or exc)
                                 raise PlatformHTTPError(503, "upload_unavailable", str(exc)) from exc
                             except ValueError as exc:
                                 raise PlatformHTTPError(400, "invalid_upload", str(exc)) from exc
-                            if material_upload:
+                            if material_upload or content_upload:
                                 # Keep admission bounded through ZIP validation and storage,
                                 # not just parsing: each batch may retain up to 100 MiB.
                                 return facade.portal_request(
@@ -811,12 +870,51 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
             return facade.redeem_assignment_claim(self._read_json_object()), 200
         if route == "refresh_tokens":
             return facade.refresh_tokens(self._read_json_object()), 200
+        if route == "classroom_event":
+            if query:
+                raise PlatformHTTPError(400, "invalid_query", "Unexpected query parameter")
+            return facade.report_classroom_event(self._bearer_token(), self._read_json_object()), 200
+        if route in {'classroom_command_poll', 'classroom_command_response'}:
+            if query:
+                raise PlatformHTTPError(400, 'invalid_query', 'Unexpected query parameter')
+            token, payload = self._bearer_token(), self._read_json_object(max_bytes=4096)
+            if route == 'classroom_command_poll':
+                return facade.poll_classroom_commands(token, payload), 200
+            return facade.respond_classroom_command(token, parameters['command_id'], payload), 200
         if route == "revoke_current":
             self._ensure_no_body()
             return facade.revoke_current(self._bearer_token()), 204
         if route == "me":
             self._ensure_no_body()
             return facade.get_me(self._bearer_token()), 200
+        if route in {"content_context", "content_collections", "content_manifest", "content_object", "content_verify"}:
+            if query:
+                raise PlatformHTTPError(400, "invalid_request", "Unexpected query parameter")
+            token = self._bearer_token()
+            if route == "content_verify":
+                return facade.verify_content_manifest(token, parameters["release_id"], self._read_json_object(max_bytes=4096)), 200
+            self._ensure_no_body()
+            if route == "content_context":
+                return facade.get_content_context(token), 200
+            if route == "content_collections":
+                return facade.list_content_collections(token), 200
+            if route == "content_manifest":
+                return facade.get_content_manifest(token, parameters["release_id"]), 200
+            pins = self.headers.get_all("X-Autograde-Manifest-SHA256") or []
+            if len(pins) != 1 or not re.fullmatch(r"[0-9a-f]{64}", pins[0]):
+                raise PlatformHTTPError(400, "invalid_content_manifest", "One valid manifest SHA256 header is required")
+            return facade.get_content_object(token, parameters["release_id"], parameters["sha256"], pins[0]), 200
+        if route in {"materials", "material_download"}:
+            self._ensure_no_body()
+            if set(query) - ({"cursor"} if route == "materials" else set()):
+                raise PlatformHTTPError(400, "invalid_request", "Unexpected query parameter")
+            token = self._bearer_token()
+            if route == "materials":
+                return facade.list_materials(token, cursor=query.get("cursor")), 200
+            pins = self.headers.get_all("X-Autograde-Expected-SHA256") or []
+            if len(pins) != 1 or not re.fullmatch(r"[0-9a-f]{64}", pins[0]):
+                raise PlatformHTTPError(400, "invalid_material_digest", "One valid expected SHA256 header is required")
+            return facade.get_material_download(token, parameters["material_id"], pins[0]), 200
         if route == "sessions":
             self._ensure_no_body()
             return facade.list_sessions(self._bearer_token()), 200
@@ -1274,7 +1372,13 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
                 instructor = getattr(self.platform_server.facade, 'instructor', None)
                 if instructor is not None and instructor.matches(urlsplit(self.path).path) and content_type.startswith('text/html'):
                     from .instructor_browser import SCRIPT_CSP
-                    value += SCRIPT_CSP
+                    if b'data-classroom-enhancement' in body:
+                        from .instructor_classroom import SCRIPT_CSP as CLASSROOM_CSP
+                        # One script-src directive: the browser ignores a second
+                        # directive with the same name instead of merging hashes.
+                        value += CLASSROOM_CSP
+                    else:
+                        value += SCRIPT_CSP
                 elif content_type.startswith('text/html') and b'<script data-student-enhancement>' in body:
                     from .student_browser import SCRIPT_CSP
                     value += SCRIPT_CSP

@@ -24,6 +24,10 @@ System Entity Structure(SES, 체계요소구조)로 가능한 조합을 정의�
 9. 2026-10-22 전용 IDE 개념연구는 SQLite·기존 API를 유지하고 Code-OSS에 기존 Autograde 확장을 내장한다.
    PostgreSQL은 향후 Docker 기반 운영 단계의 검토 대상으로 두며 Docker를 기술적 필수조건으로 보지는 않는다.
    [전용 IDE 설계](autograde-ide.md)에 제품 구성·AI 통제·배포 경계를 분리한다.
+10. 2026-10-24 [Git 콘텐츠 CMS 설계](git-content-cms.md)를 선택적 업무 기능으로 추가한다.
+    서버 내부 Git·인가된 manifest 전송·학생 캐시·명시적 내보내기를 분리한다. 관련 모듈 ID는
+    계약 후보이며 현행 SES v1 registry/운영 CSV에 등록하거나 실행 가능하다고 표시하지 않는다.
+    기존 서비스에 C0~C2 1차 adapter를 구현했지만 플러그인 Host 등록·SES 런타임 활성화와는 구분한다.
 
 ## 2. 현재와 목표의 차이
 
@@ -72,6 +76,10 @@ Host는 인증된 Principal과 서버가 확인한 CourseScope를 주입한다. 
 | `assignment.authoring` / `assignment.validation` | assignment_admin, instructor_upload, grader | 문제·starter·정답·오답·테스트·초안 검증 |
 | `assignment.release` / `lifecycle.deadlines` | 공개/복제/숨김/연장, 마감 검사 | 검증한 버전만 공개. 별도 수락 기간·개인 예외는 추가 구현 |
 | `delivery.bundle` / `claim.web_code` | platform_portal, platform_service | 웹 접속 링크·수령 코드·수락·자료 다운로드 |
+| `content.catalog` / `content.authoring` / `content.release` | student_materials·교수자 자료 UI 기반, 신규 CMS 계약 | 콘텐츠 초안·불변 배포본·대상/기간·감사. 채점 과제/성적과 독립 |
+| `content.version.git` / `content.objects.local_cas` | gitops 안전 기법·기존 파일 저장 기반, 신규 adapter | 서버 내부 버전·객체 관리. 학생 raw Git 접근 금지 |
+| `content.delivery.manifest` / `content.sync.file_cache` / `content.export.copy` | 기존 자료 API·IDE 검증 기반, 신규 계약 | 본인 변경 파일 수신·불변 캐시·독립 복사. 답안 자동 덮어쓰기 금지 |
+| `content.receipts` / `ui.content_admin` / `ui.content_student` | 기존 요청 이력·Next/IDE shell 기반, 신규 계약 | 자기보고와 서버 요청 구분, CMS CRUD·동기화 화면. 아직 runtime_ready 아님 |
 | `submission.receipt` | platform_service, platform_state | 필수 불변 접수·중복 방지·현재 제출 식별 |
 | `submission.history` / `source.compare` | submission_review, digest 조회 | 제출 시각·버전·점수 증감·코드 비교 |
 | `grading.queue` / `grading.io_cases` | course_runtime, platform_bundle_worker, grader | 접수와 실행 분리, 실행 결과→항목별 증거 |

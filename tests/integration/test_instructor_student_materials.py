@@ -94,7 +94,9 @@ def test_remove_draft_recipient_requires_confirm_and_supports_corrected_upload(m
     second = student_login(env, key='20260002', password='234567')
     assert second.post(download_path(path))[0] == 200
     recipient = env.students.get_student(COURSE, '20260002')['student_id']
-    assert env.admin.post(path + f'/remove/{recipient}', revision=str(revision(env, path)), confirm='yes')[0] == 409
+    assert env.admin.post(path + f'/remove/{recipient}', revision=str(revision(env, path)), confirm='yes')[0] == 303
+    assert second.post(download_path(path))[0] == 404
+    assert env.materials.get(COURSE, path.rsplit('/', 1)[1])['status'] == 'published'
 
 
 @pytest.mark.parametrize('fields', [{'csrf': 'wrong-csrf'}, {'origin': 'https://other.example'}])

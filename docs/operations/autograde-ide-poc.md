@@ -7,6 +7,11 @@
 빌드 도구는 개발 PC에 준비한다. 채점 서버에 편집기를 빌드하거나 설치할 필요는 없다.
 
 1단계는 수업 연결·과제 열기·다운로드·제출·결과 확인을 한곳에 모으는 개념연구다.
+2단계 MVP는 본인 배포 자료 수령, 로컬 학습자별 프로필·폴더 분리와 선택적인 IDE 제한 시작
+설정을 추가한다. **폴더 분리는 OS 보안 샌드박스가 아니다.**
+2026-10-24 확정 범위는 **폴더 분리 MVP + OS 격리 설계**다. 이 안내에서는 실제 OS 계정·
+VM·컨테이너 생성이나 hosts·방화벽 변경을 수행하지 않는다. 해당 격리의 구현·적용은 별도 단계다.
+0.5.12는 선택한 학습내용의 폴더/ZIP 내보내기와 실행기 소유 공용 세션의 종료 후 정리를 추가한다.
 AI 강제 차단·시험 감독·학생용 서명 설치 파일·자동 업데이트는 제공하지 않는다.
 자세한 구성과 후속 단계는 [전용 IDE 설계](../architecture/autograde-ide.md)를 참고한다.
 
@@ -100,6 +105,70 @@ node ide/code-oss/manage.mjs run --source .cache/code-oss --workspace /absolute/
 `run`은 실행 전 의존성이나 Electron을 자동 다운로드하지 않는다. 빌드 산출물이 없으면 먼저
 위의 명시적인 준비·빌드 단계를 완료한다.
 
+### 공용 실습실 학습공간으로 시작
+
+같은 OS 계정에서도 과제·자료·IDE 설정을 우발적으로 섞지 않도록 로컬 별칭을 사용한다.
+학번·비밀번호·수령 코드 대신 `learner-a` 같은 비민감 별칭을 지정한다. 이 별칭은 서버의 학생
+인증을 대신하지 않는다. 아래 runtime 경로는 운영 계정이 소유한 짧은 절대 경로로 바꾼다.
+공용 모드는 매번 새 임시 세션을 사용한다. 보관할 자료는 세션 밖에 내보낸다.
+
+```sh
+node ide/code-oss/manage.mjs run --source .cache/code-oss \
+  --runtime /absolute/short/autograde-learners --learner learner-a \
+  --learning-lifetime shared --learning-policy standard
+```
+
+생성 구조는 다음과 같다. 별칭이 같아도 새 실행에서는 세션을 재사용하지 않는다.
+
+```text
+autograde-learners/e-<세션 식별자>/
+├─ workspace/          # 과제와 C/C++ 소스
+├─ materials/          # 자료와 콘텐츠 캐시 (제출 폴더와 분리)
+└─ r/                  # 이번 세션의 IDE 설정·백업·공유 데이터
+```
+
+학습 홈에서 새 수령 코드로 연결하면 과제를 새 작업 공간에 내려받는다. 이전 제출본은
+**제출 이력·코드 복원**에서 복원한다. 필요한 내용은 **내 학습내용 내보내기**로 세션 밖의
+폴더나 ZIP으로 저장하고 **공용 실습 종료**를 누른다. 앱 프로세스가 종료된 뒤 실행기가 코드·
+자료·IDE 기록을 정리한다. macOS의 창 닫기 버튼만으로는 앱이 종료되지 않을 수 있으므로
+종료 버튼이나 `Command+Q`를 사용한다. 아직 제출하거나 내보내지 않은 코드도 정리된다.
+
+`--learner`의 기본 수명은 `shared`이며 `--workspace`를 함께 지정할 수 없다. 개인 PC에서
+파일을 계속 보관할 때만 `--learning-lifetime persistent`를 명시한다. 개인 모드는 기존
+`l-<별칭 해시>/workspace`와 `materials`를 재사용한다. 기존 개인 폴더는 공용 모드에서도
+자동 삭제하지 않는다. `--learner` 없는 개발 실행이나 일반 VS Code도 자동 정리 대상이 아니다.
+자세한 선택·저장·종료·장애 처리는 [학습내용 내보내기 안내](student-learning-export.md)를 따른다.
+
+POSIX 디렉터리는 0700, 최초 설정·소유 표식은 0600으로 생성한다. 링크·소유 표식 불일치·
+다른 학습자의 작업 경로는 거절한다. 기존 개인 파일은 자동 삭제·초기화하지 않는다. Windows ACL,
+다른 OS 계정 차단, 같은 OS 계정을 사용하는 학생 사이의 기밀성은 이 실행기가 보장하지 않는다.
+공용 좌석에서 진짜 개인 공간을 보장하려면 학생별 OS 계정 또는 관리된 VM을 별도로 준비한다.
+
+### IDE 안의 Agent/AI 진입 제한
+
+동일한 학습자 공간에 제한 시작 설정을 적용하려면 위 명령의 정책만 바꾼다.
+
+```sh
+node ide/code-oss/manage.mjs run --source .cache/code-oss \
+  --runtime /absolute/short/autograde-learners --learner learner-a \
+  --learning-policy restricted
+```
+
+- 공용 모드는 새 `workspace`·`materials`·`r/`를 만들고 종료 후 함께 정리한다. 개인 VS Code 설정은 변경하지 않는다.
+- 새 학습자/정책 프로필은 서버 주소도 별도다. 처음 열 때 학습 홈에서 운영 API 주소를 다시 설정한다.
+- 내장 AI·Agent·Copilot CLI 진입을 비활성화하고 확장 설치 허용 설정을 제한한다.
+- 충돌 설정, 추가 사용자 확장, 승인하지 않은 내장 확장이나 대체 프로필이 있으면 실행을
+  거절한다. 파일을 삭제해 고치지 않으며 일반 프로필에서 확인하거나 새 제한 프로필을 준비한다.
+- 관리 설정은 JSON으로 검사한다. 주석 있는 JSONC나 변경된 제한 키는 자동 덮어쓰기 대신
+  오류를 표시한다. 일반 `standard` 프로필의 기존 설정은 보존한다.
+- 학습 홈의 **IDE AI 제한 시작 설정** 표시는 실행 정보일 뿐 실제 차단 검증이나 시험 인증이 아니다.
+  시작 후 설정 변경, 브라우저, 터미널 AI CLI, 다른 앱·기기의 AI는 통제하지 않는다.
+- 임의 확장을 막으므로 C/C++ 언어 확장도 별도 승인·빌드가 필요하다. 기본 편집·컴파일러
+  실행과 언어 확장 자동 설치를 구분한다.
+
+hosts·방화벽 변경이나 화면 촬영은 수행하지 않는다. 시험의 네트워크 통제는 별도
+[시험 모드/Agent](ide-exam-mode.md) 운영 및 OS 격리 검증이 필요하다.
+
 ### 실행 경로와 macOS 빌드 오류
 
 저장소 경로가 길면 macOS·Linux의 Unix 소켓 경로 제한 때문에 IDE가 시작하지 못할 수 있다.
@@ -143,6 +212,33 @@ CPLUS_INCLUDE_PATH=/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/inclu
    자동 복원되지 않아야 한다.
 8. 로그아웃한다. 공용 PC라면 학교의 작업 파일·브라우저 정리 절차를 별도로 수행한다.
 
+### 교수자가 배포한 개인 자료 받기
+
+1. 교수자는 기존 [학생별 자료 배포 화면](student-material-distribution.md)에서 학번별 PDF/ZIP을
+   등록하고 배포 기간을 설정한다. 과제·채점용 ZIP 업로드와는 별개다.
+2. 서버에 업데이트한 Python 코드를 반영하고 기존 portal 서버를 재시작한다. 자료 서비스는
+   현재 `instructor_assignment_web_enabled,true` 구성에서 활성화된다. SQLite 초기화는 하지 않는다.
+   `/v1/` API 경로는 기존 API 포트/프록시를 사용한다. 추가 포트나 외부 파일 URL은 필요 없다.
+3. 학생은 기존 과제 수령 코드로 로그인한 뒤 **학습 홈 → 내 배포 자료 · PDF / ZIP 받기** 또는
+   사이드바의 같은 메뉴를 선택한다. 현재 인증 교과목의 본인 자료만 보인다.
+4. 자료 형식·파일 버전·배포 기간을 확인하고 선택한다. 저장할 때는 신뢰한 작업 영역과 별도
+   자료 폴더가 필요하다. 관리 학습공간에서는 `materials`를 기본 위치로 제안한다.
+5. 크기·파일 형식·SHA-256 검증 후 새 파일로 저장한다. ZIP은 자동 실행·해제하지 않으며
+   같은 버전 파일이 있으면 덮어쓰지 않는다. 받은 자료는 과제 제출에 자동 포함되지 않는다.
+
+| 안내/오류 | 대응 |
+| --- | --- |
+| 로그인 필요 | 학생 웹에서 새 수령 코드를 발급하고 다시 연결한다. |
+| 서버가 자료 배포를 지원하지 않음 | 업데이트·자료 서비스 설정을 확인하고 그 전에는 학생 웹을 이용한다. |
+| 배포 시작 전 / 종료 | 표시된 한국시간을 확인하고 교수자에게 기간 확인을 요청한다. |
+| 교수자가 자료를 수정함 | 메뉴를 다시 열어 최신 목록에서 받는다. 기존 파일은 그대로 남는다. |
+| 코드 폴더 안에 저장 불가 | 과제와 형제인 `materials` 등 별도 폴더를 선택한다. |
+| 파일 존재 / 권한 / 디스크 부족 | 다른 저장 폴더 또는 저장 공간을 확인한다. 기존 자료를 자동 삭제하지 않는다. |
+
+자료 API는 페이지 단위로 조회하며 파일 수정·목록 변경 중이면 처음부터 다시 조회하도록
+안내한다. 현재 과제 수락 여부·점수와 자료 권한은 별개지만, 자료만을 위한 별도 IDE 로그인은
+추가하지 않았다. 서버의 다운로드 기록은 요청 기록이며 열람·완료 증명이 아니다.
+
 다른 과제로 전환하거나 폴더 열기가 실패한 경우에는
 [이어하기·전환 시나리오](assignment-workspace-lifecycle.md)를 따른다.
 재인증은 재다운로드를 의미하지 않으며 기존 코드를 보존해야 한다.
@@ -185,8 +281,9 @@ Microsoft C/C++·Remote WSL 확장을 자동 설치하지 않으며 Microsoft Ma
 ### 자동 검사 실행
 
 ```sh
-node --test ide/code-oss/manage.test.mjs
+node --test ide/code-oss/manage.test.mjs ide/code-oss/learning-profile.test.mjs
 npm --prefix extensions/vscode test
+.venv/bin/python -m pytest -q tests/integration/test_student_material_api.py
 ```
 
 학습 홈의 브라우저 검사는 컴파일된 HTML과 합성 상태만 사용한다. Playwright 모듈과 Chrome
@@ -360,3 +457,79 @@ npm --prefix extensions/vscode test
 .venv/bin/python -m pytest tests/unit/test_codeoss_e2e_fixture.py tests/unit/test_codeoss_server_e2e.py
 .venv/bin/python -m pytest tests/unit/test_bundle_auth_history_retention.py
 ```
+
+## 2026-10-23 자료 배포·학습공간 확장 검증
+
+SQLite와 기존 학생 자료 저장소를 유지한 상태에서 다음 자동 검사를 수행했다.
+
+| 검사 | 결과 |
+| --- | --- |
+| VS Code 확장 전체 | 364개 통과 |
+| Code-OSS 실행기·학습자 프로필 | 93개 통과 |
+| 개인 자료 API·포털·기존 자료 서비스·공용 HTTP·서버 기동 | 205개 통과 |
+| 합성 학습 홈 | 192개 화면 조합, 활성 동작 564회·비활성 차단 1,356회, 외부 요청 0건 |
+| 실제 고정 Code-OSS 소스의 내장 확장 준비·검증 | 0.5.8, 런타임 파일 99개 무결성 확인 |
+
+다른 학생·교과목 자료, 종료·예정 자료, 중복 해시 헤더, 자료 교체 중 목록·다운로드,
+취소·로그인 만료·다른 학생 로그인, 저장 권한·동일 파일·해시 불일치 등을 검증했다.
+장문 안내문을 가진 자료 70개를 30/30/10으로 조회해 HTTP 응답 크기 상한을 지켰으며,
+목록 변경·반복 커서·과도한 전체 목록은 일부 자료만 조용히 반환하지 않고 중단한다.
+기존 대시보드 제목을 기대하던 포털 시험은 현재의 ‘제출·채점 현황’ 제목으로 갱신했다.
+
+학습자 프로필은 다른 별칭의 경로 분리·같은 별칭의 파일 보존·링크/표식 거절·정책 충돌과
+설정 파일을 정상 저장한 뒤의 재실행을 검사했다. 실행 후 설정 변조를 막거나 다른 프로세스의
+파일 접근을 막는 시험은 아니다.
+
+Code-OSS 내장 산출물은 다시 준비했지만 기존 IDE 창을 재시작하거나 `restricted` 모드를
+실제 사용자 기기에 적용하지 않았다. 새 자료 기능의 실제 IDE/원격 서버 종단간 시험,
+Windows ACL·WSL·VM 격리, 서명 설치 파일은 별도 인수 대상이다. 운영 서버·실제 학생 자료는
+변경하지 않았고 커밋·push·배포는 수행하지 않았다.
+
+서버 회귀 검사 재현:
+
+```sh
+.venv/bin/python -m pytest -q \
+  tests/integration/test_student_material_api.py \
+  tests/integration/test_course_portal.py \
+  tests/integration/test_student_material_http.py \
+  tests/unit/test_student_materials.py \
+  tests/unit/test_platform_http.py \
+  tests/unit/test_platform_http_bundle.py \
+  tests/integration/test_pilot_portal_cli.py
+```
+
+## 2026-10-24 Git CMS 저장·공개·변경분 동기화 검증
+
+서버 내부 Git/CAS와 SQLite migration 20, 기존 교수자 웹의 콘텐츠 편집·즉시 공개,
+VS Code/Autograde IDE 0.5.9의 수동 캐시 동기화·새 폴더 복사를 구현했다.
+[기능 범위](../architecture/git-content-cms.md#0-이번-구현-범위)와
+[교수자·학생 사용 절차](student-material-distribution.md#git-콘텐츠-변경분-동기화-1차-mvp)를 함께 본다.
+
+| 검사 | 결과 |
+| --- | --- |
+| 콘텐츠·인증/HTTP·기존 자료 배포·학생 초기화·서버 기동 관련 서버 회귀 | 597개 통과, skip 0 |
+| VS Code 확장 전체 | 383개 통과, skip 0 |
+| Code-OSS 준비/검증·학습자 프로필 | 93개 통과 |
+| 실제 로컬 HTTP → 컴파일된 IDE 전송·동기화·내보내기 모듈 | 최초 2파일, 반복 0파일, 수정 후 1파일만 수신 |
+| 합성 학생 20명 동시 수령 | 본인 manifest·파일 해시 검증 통과, 서로 다른 학생 범위 20개 |
+| 서버 전송 포화 | 8개 슬롯 포화 시 429/Retry-After, 자료 목록 조회는 정상 |
+| Code-OSS 내장 확장 | 0.5.9, 파일 102개 검증, SQLite 운영 데이터 변경 없음 |
+| 개발용 VSIX | 0.5.9, 파일 105개; 동기화 모듈 포함·테스트/DB/중첩 VSIX 제외 |
+
+공개 중 교수자 권한 철회, 다른 학생/수업 접근, 기간 종료, 중단·새 판 공개, Git 준비 후 DB
+실패, 멱등 재시도, revision 충돌, 해시 오류, 계정 전환, workspace 신뢰 해제, 링크/경로 침범,
+중간 실패 후 재수신, 종료한 프로세스의 잠금·staging 복구를 검증했다. 기존 답안과 학생이
+수정한 내보내기 파일은 그대로 남았다. 학생 초기화의 백업에도 Git/CAS와 공개 이력을 보존했다.
+
+확장 전체 검사의 최초 실행은 개발 도구의 루프백 소켓 제한으로 기존 Git 테스트 1개가
+실행되지 않았다. 로컬 통신을 허용한 재실행에서 383개 모두 통과했다. 서버 검사는 처음부터
+로컬 통신을 허용하여 합성 학생·임시 SQLite/Git만 사용했다.
+
+VSIX SHA-256:
+`1b1517652ebd7ba81a1477012782d4384950f9553f990fe56b46b7488940a23c`
+
+이는 로컬 모듈·HTTP 검증이며 운영 HTTPS/Nginx·실제 IDE 클릭 흐름·Windows/WSL2/Linux의
+플랫폼별 인수를 대체하지 않는다. 20명 시험도 전체 채점 부하 성능 보장은 아니다. 기존 IDE
+창은 강제 재시작하지 않았고 운영 서버·실제 학생 자료를 변경하지 않았다. Marketplace 서명
+배포·라이선스 고지 정리는 별도이며 이번 VSIX 패키징에는 LICENSE 파일 누락 경고가 남는다.
+커밋·push·운영 배포는 수행하지 않았다.

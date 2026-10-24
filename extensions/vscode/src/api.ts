@@ -7,9 +7,13 @@ import {
   normalizeSubmission,
 } from "./helpers";
 import { shouldDiscardTokensAfterRefreshError } from "./authPolicy";
+import type { ClassroomEvent, ClassroomScope } from "./classroomActivity";
+import { parseClassroomCommands, type ClassroomCommand, type ClassroomCommandContext, type ClassroomCommandResponse } from "./classroomCommands";
 import { parseAssignmentDocument } from "./assignmentDocument";
 import { parseSubmissionHistory, verifySubmissionSource, type SubmissionVersion } from "./submissionHistory";
 import { parseAcceptedAssignments, type AcceptedAssignmentEntry } from "./acceptedAssignmentCatalog";
+import { MAX_STUDENT_MATERIAL_BYTES, MAX_STUDENT_MATERIALS, parseStudentMaterials, verifyStudentMaterial,
+  type StudentMaterial, type StudentMaterialsCatalog } from "./studentMaterials";
 import type {
   Assignment,
   AssignmentClaim,
@@ -578,6 +582,67 @@ export class AutogradeClient {
     private readonly retrySleep: (milliseconds: number) => Promise<void> = delay,
   ) {}
 
+  private checkClassroomCommandScope(context: ClassroomCommandContext, signal: AbortSignal): void {
+    if (signal.aborted) throw new RequestCancelledError();
+    if (context.baseUrl !== this.getBaseUrl() || context.generation !== this.tokens.getSessionGeneration?.()) {
+      throw new ApiError("교수자 요청 세션이 변경되었습니다.", 401, "login_required");
+    }
+    if (!/^[A-Za-z0-9_-]{8,96}$/.test(context.clientSessionId)) throw new Error("수업 연결 정보가 올바르지 않습니다.");
+  }
+  public async pollClassroomCommands(context: ClassroomCommandContext, signal: AbortSignal): Promise<readonly ClassroomCommand[]> {
+    this.checkClassroomCommandScope(context, signal);
+    // Server timestamps precede response transfer. Subtract the whole request
+    // duration conservatively instead of extending a request by network latency.
+    const startedAt = Date.now();
+    const value = await this.authorizedRequest<unknown>("/v1/classroom/commands/poll", {
+      method: "POST", body: JSON.stringify({client_session_id: context.clientSessionId}),
+    }, {timeoutMs: 5000, signal, expectedBaseUrl: context.baseUrl});
+    this.checkClassroomCommandScope(context, signal);
+    return parseClassroomCommands(value, startedAt);
+  }
+  public async respondClassroomCommand(id: string, response: ClassroomCommandResponse, context: ClassroomCommandContext, signal: AbortSignal): Promise<void> {
+    this.checkClassroomCommandScope(context, signal);
+    if (!/^[A-Za-z0-9_-]{1,128}$/.test(id)) throw new Error("교수자 요청 식별자가 올바르지 않습니다.");
+    const checks = response.result?.checks;
+    const result = response.result ? {
+      ...(response.result.submission_id ? {submission_id: response.result.submission_id} : {}),
+      ...(checks ? {checks: {server: checks.server, workspace: checks.workspace, compiler: checks.compiler, os: checks.os, remote: checks.remote}} : {}),
+    } : undefined;
+    const ack = await this.authorizedRequest<{command?: {command_id?: string; status?: string; result_code?: string | null}; duplicate?: boolean}>(`/v1/classroom/commands/${encodeURIComponent(id)}/responses`, {
+      method: "POST", body: JSON.stringify({client_session_id: context.clientSessionId, status: response.status,
+        ...(response.result_code ? {result_code: response.result_code} : {}), ...(result ? {result} : {})}),
+    }, {timeoutMs: 5000, signal, expectedBaseUrl: context.baseUrl});
+    this.checkClassroomCommandScope(context, signal);
+    if (ack?.command?.command_id !== id || ack.command.status !== response.status || typeof ack.duplicate !== "boolean"
+      || (response.result_code && ack.command.result_code !== response.result_code)) {
+      throw new Error("교수자 요청 처리 결과를 서버가 확인하지 못했습니다.");
+    }
+  }
+
+  /** Optional classroom presence is isolated from submission retries and bound to its original identity. */
+  public async reportClassroomEvent(event: ClassroomEvent, scope: ClassroomScope, signal: AbortSignal): Promise<void> {
+    const checkScope = (): void => {
+      if (signal.aborted) throw new RequestCancelledError();
+      if (scope.baseUrl !== this.transport.getBaseUrl() || scope.generation !== this.tokens.getSessionGeneration?.()
+        || scope.assignmentId !== event.assignment_id) {
+        throw new ApiError("수업 상태 공유 세션이 변경되었습니다.", 401, "login_required");
+      }
+    };
+    checkScope();
+    // Explicit field projection prevents file names, paths, contents, and student IDs
+    // from ever accidentally being serialized from an expanded client-side object.
+    const body = JSON.stringify({
+      client_session_id: event.client_session_id, sequence: event.sequence, kind: event.kind,
+      assignment_id: event.assignment_id,
+      environment: { os: event.environment.os, ide: event.environment.ide,
+        ...(event.environment.remote_name ? { remote_name: event.environment.remote_name } : {}) },
+    });
+    await this.authorizedRequest<unknown>("/v1/classroom/events", { method: "POST", body }, {
+      timeoutMs: 5_000, signal, expectedBaseUrl: scope.baseUrl,
+    });
+    checkScope();
+  }
+
   public async createDeviceAuthorization(
     deviceName: string,
     extensionVersion: string,
@@ -679,6 +744,62 @@ export class AutogradeClient {
   }
 
   public getBaseUrl(): string { return this.transport.getBaseUrl(); }
+
+  public async getStudentMaterials(signal?: AbortSignal): Promise<StudentMaterialsCatalog> {
+    const checkSession = this.sessionGuard();
+    const materials: StudentMaterial[] = [];
+    const identifiers = new Set<string>();
+    const cursors = new Set<string>();
+    let courseKey: string | undefined;
+    let cursor: string | undefined;
+    const invalid = () => new ApiError("배포 자료 목록의 페이지가 일치하지 않습니다. 목록을 다시 열어 주세요.", 0, "invalid_response");
+    const tooMany = () => new ApiError(`배포 자료가 ${MAX_STUDENT_MATERIALS}개를 초과했습니다. 교수자에게 종료 자료 정리를 요청하세요.`,
+      0, "material_catalog_limit");
+    try {
+      while (true) {
+        checkSession();
+        if (signal?.aborted) throw new RequestCancelledError();
+        const endpoint = `/v1/materials${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ""}`;
+        const page = parseStudentMaterials(await this.authorizedRequest<unknown>(endpoint, {method: "GET"}, {signal}));
+        checkSession();
+        if (signal?.aborted) throw new RequestCancelledError();
+        if (courseKey !== undefined && courseKey !== page.courseKey) throw invalid();
+        courseKey = page.courseKey;
+        if (materials.length + page.materials.length > MAX_STUDENT_MATERIALS) throw tooMany();
+        for (const material of page.materials) {
+          if (identifiers.has(material.id)) throw invalid();
+          identifiers.add(material.id);
+          materials.push(material);
+        }
+        if (page.nextCursor === null) return {courseKey, materials};
+        if (!page.materials.length || cursors.has(page.nextCursor)) throw invalid();
+        if (materials.length >= MAX_STUDENT_MATERIALS) throw tooMany();
+        cursors.add(page.nextCursor);
+        cursor = page.nextCursor;
+      }
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 404) {
+        throw new ApiError("현재 서버는 IDE 자료 배포를 지원하지 않습니다. 학생 웹을 이용하거나 서버 업데이트를 요청하세요.",
+          404, "materials_unsupported");
+      }
+      throw error;
+    }
+  }
+
+  public async getStudentMaterialFile(material: StudentMaterial, signal?: AbortSignal): Promise<Uint8Array> {
+    if (!/^[A-Za-z0-9_-]{1,128}$/.test(material.id) || !/^[a-f0-9]{64}$/.test(material.sha256) ||
+        !["pdf", "zip"].includes(material.format) || !Number.isSafeInteger(material.sizeBytes) ||
+        material.sizeBytes <= 0 || material.sizeBytes > MAX_STUDENT_MATERIAL_BYTES) {
+      throw new ApiError("자료 파일 정보가 올바르지 않습니다. 목록을 새로고침하세요.", 0, "invalid_response");
+    }
+    const contentType = material.format === "pdf" ? "application/pdf" : "application/zip";
+    const bytes = await this.authorizedBytesRequest(`/v1/materials/${encodeURIComponent(material.id)}/download`,
+      {method: "GET", headers: {Accept: contentType, "X-Autograde-Expected-SHA256": material.sha256}},
+      {timeoutMs: STARTER_REQUEST_TIMEOUT_MS, maxResponseBytes: MAX_STUDENT_MATERIAL_BYTES,
+        acceptedContentTypes: [contentType], signal});
+    verifyStudentMaterial(bytes, material);
+    return bytes;
+  }
 
   public async getAcceptedAssignmentCatalog(): Promise<AcceptedAssignmentEntry[]> {
     try {

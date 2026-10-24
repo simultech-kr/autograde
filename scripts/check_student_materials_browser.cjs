@@ -51,7 +51,59 @@ const {chromium} = require(modulePath);
           if (name === 'instructor-receipts') {
             assert.ok(content.includes('요청 기록 있음 1명'));
             assert.ok(content.includes('요청 기록 없음 1명'));
-            assert.equal(await page.locator('input[type="file"]').count(), 0, 'published files are frozen');
+            assert.equal(await page.locator('input[type="file"]').count(), 2, 'published materials allow direct file edits');
+          }
+          if (name.startsWith('student-corrected-')) {
+            assert.equal(await page.locator('form[action$="/download"]').count(), 1);
+            assert.equal(await page.locator('form[action$="/download"]').getAttribute('method'), 'post');
+            assert.ok(content.includes('배포본 v2'));
+            assert.ok(content.includes('변경 안내:'));
+            assert.ok(content.includes('20260001.pdf'));
+            assert.ok(!content.includes('20260002.zip'), 'another student filename must not appear');
+            assert.equal(content.includes('수정본 v2 · 다시 다운로드하세요'), name.endsWith('-unrequested'));
+            assert.equal(content.includes('현재 파일의 요청 기록이 있습니다'), name.endsWith('-requested'));
+          }
+          if (name === 'instructor-revision-draft') {
+            assert.equal(await page.locator('form[action$="/upload"] input[type="file"]').count(), 1);
+            assert.equal(await page.locator('form[action$="/upload-batch"] input[type="file"]').count(), 1);
+            assert.equal(await page.getByRole('button', {name:'수정본 공개 · 기존 배포본 교체', exact:true}).count(), 1);
+            assert.ok(content.includes('미래 시각으로 예약 전환할 수 없습니다'));
+          }
+          if (name === 'instructor-revision-pending') {
+            assert.equal(await page.getByRole('link', {name:'작성 중인 수정본 열기', exact:true}).count(), 1);
+            assert.equal(await page.locator('form[action$="/revise"]').count(), 0, 'only one pending correction');
+          }
+          if (name === 'instructor-revision-history') {
+            assert.equal(await page.getByRole('link', {name:'이전 배포본의 파일·요청 기록 보기', exact:true}).count(), 1);
+            assert.equal(await page.locator('form[action$="/revise"]').count(), 1);
+            assert.equal(await page.getByLabel('학생에게 표시할 변경 내용 (최대 1,000자)').getAttribute('maxlength'), '1000');
+            assert.ok(content.includes('배포본 v1'));
+            assert.ok(content.includes('배포본 v2'));
+          }
+          if (name === 'instructor-revision-previous') {
+            assert.ok(content.includes('이전 배포본 · 수정본으로 대체됨'));
+            assert.equal(await page.getByRole('link', {name:'대체한 수정본 보기', exact:true}).count(), 1);
+            assert.equal(await page.locator('form[action$="/revise"]').count(), 0, 'superseded editions cannot branch');
+          }
+          if (['instructor-revision-pending', 'instructor-revision-previous'].includes(name)) {
+            assert.equal(await page.locator('input[type="file"]').count(), 0, 'pending changes and archived history are protected');
+          }
+          if (name === 'instructor-revision-history') {
+            assert.equal(await page.locator('input[type="file"]').count(), 2, 'current corrected edition remains directly editable');
+          }
+          if (['instructor-published-edit', 'instructor-file-history'].includes(name)) {
+            assert.equal(await page.getByLabel('자료 배포 제목').count(), 1);
+            assert.equal(await page.locator('form[action$="/upload"] input[type="file"]').count(), 1);
+            assert.equal(await page.locator('form[action$="/upload-batch"] input[type="file"]').count(), 1);
+            assert.ok(content.includes('성적'));
+          }
+          if (name === 'instructor-file-history') {
+            assert.ok(await page.locator('a[href*="/download/"]').count() >= 2, 'current and historical file links');
+          }
+          if (name.startsWith('student-file-changed-')) {
+            assert.equal(await page.locator('form[action$="/download"]').count(), 1);
+            assert.ok(!content.includes('20260002.zip'), 'another student filename must not appear');
+            assert.equal(content.includes('다시 다운로드하세요'), name.endsWith('-before'));
           }
           if ((width === 1440 && colorScheme === 'light') || (width === 375 && colorScheme === 'dark')) {
             await page.screenshot({path:path.join(output, `${name}-${width}-${colorScheme}.png`), fullPage:true});
@@ -60,7 +112,7 @@ const {chromium} = require(modulePath);
         }
       }
     }
-    await page.setContent(pages['student-open']);
+    await page.setContent(pages['student-open'] || pages['student-corrected-unrequested'] || pages['student-file-changed-before']);
     await page.emulateMedia({forcedColors:'active'});
     await page.setViewportSize({width:320, height:1000});
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false);

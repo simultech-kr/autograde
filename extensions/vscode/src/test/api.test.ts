@@ -15,6 +15,122 @@ import {
 } from "../api";
 import type { TokenResponse } from "../types";
 import { sha256Hex } from "../bundle";
+import type { ClassroomEvent } from "../classroomActivity";
+
+test("classroom activity is authenticated, bounded, origin-bound and projects only approved metadata", async () => {
+  const transport = new FakeTransport([{ accepted: true }]);
+  const tokens = new TokenManager(transport);
+  await tokens.storeSession({ access_token: "access", refresh_token: "refresh", expires_in: 3600 }, transport.baseUrl);
+  const client = new AutogradeClient(transport, tokens);
+  const event = { client_session_id: "session", sequence: 1, kind: "workspace_opened", assignment_id: "a1",
+    environment: { os: "macos", ide: "autograde", hostname: "private-host" }, path: "/private/student.cpp", code: "private" } as unknown as ClassroomEvent;
+  const scope = { baseUrl: transport.baseUrl, generation: tokens.getSessionGeneration(), assignmentId: "a1" };
+  const controller = new AbortController();
+  await client.reportClassroomEvent(event, scope, controller.signal);
+  const call = transport.calls[0]!;
+  assert.equal(call.endpoint, "/v1/classroom/events"); assert.equal(call.init.method, "POST");
+  assert.equal(call.bearerToken, "access"); assert.equal(call.options?.expectedBaseUrl, transport.baseUrl);
+  assert.equal(call.options?.signal, controller.signal); assert.equal(call.options?.timeoutMs, 5_000);
+  assert.deepEqual(JSON.parse(String(call.init.body)), { client_session_id: "session", sequence: 1, kind: "workspace_opened",
+    assignment_id: "a1", environment: { os: "macos", ide: "autograde" } });
+  await tokens.clear();
+  await assert.rejects(client.reportClassroomEvent(event, scope, controller.signal), error => error instanceof ApiError && error.code === "login_required");
+  assert.equal(transport.calls.length, 1);
+});
+
+test("classroom commands use the registered session and actual server acknowledgement contract", async () => {
+  const command = {command_id: "cmd_" + "a".repeat(32), kind: "notice", assignment_id: "a1", message: "hello", status: "received",
+    created_by: "teacher", expires_at: "2026-10-25T15:30:00Z"};
+  const transport = new FakeTransport([{commands: [command], server_time: "2026-10-25T15:25:00Z"}, {command: {...command, status: "accepted"}, duplicate: false},
+    {command: {...command, status: "completed", result_code: "notice_acknowledged"}, duplicate: true}]);
+  const tokens = new TokenManager(transport); await tokens.storeSession({access_token: "access", refresh_token: "refresh", expires_in: 3600}, transport.baseUrl);
+  const client = new AutogradeClient(transport, tokens), signal = new AbortController().signal;
+  const scope = {baseUrl: transport.baseUrl, generation: tokens.getSessionGeneration(), assignmentId: "a1", clientSessionId: "client-test001", workspaceKey: "/private/local"};
+  assert.equal((await client.pollClassroomCommands(scope, signal))[0]?.command_id, command.command_id);
+  await client.respondClassroomCommand(command.command_id, {status: "accepted"}, scope, signal);
+  await client.respondClassroomCommand(command.command_id, {status: "completed", result_code: "notice_acknowledged"}, scope, signal);
+  assert.deepEqual(JSON.parse(String(transport.calls[0]?.init.body)), {client_session_id: "client-test001"});
+  assert.deepEqual(JSON.parse(String(transport.calls[1]?.init.body)), {client_session_id: "client-test001", status: "accepted"});
+  assert.ok(transport.calls.every(call => call.bearerToken === "access" && call.options?.signal === signal && call.options?.timeoutMs === 5000));
+  assert.ok(transport.calls.every(call => !String(call.init.body).includes("private")));
+});
+
+test("classroom response rejects unrelated or malformed acknowledgement and projects approved checks only", async () => {
+  const transport = new FakeTransport([{accepted: true}, {command: {command_id: "wrong", status: "completed"}, duplicate: false}]);
+  const tokens = new TokenManager(transport); await tokens.storeSession({access_token: "access", refresh_token: "refresh", expires_in: 3600}, transport.baseUrl);
+  const client = new AutogradeClient(transport, tokens);
+  const scope = {baseUrl: transport.baseUrl, generation: tokens.getSessionGeneration(), assignmentId: "a1", clientSessionId: "client-test001"};
+  const checks = {server: "ok", workspace: "ok", compiler: "not_checked", os: "macos", remote: "none", path: "/private/source"} as const;
+  for (let n = 0; n < 2; n++) await assert.rejects(client.respondClassroomCommand("cmd_test", {
+    status: "completed", result_code: "environment_checked", result: {checks},
+  }, scope, new AbortController().signal), /확인하지 못했습니다/);
+  assert.deepEqual(JSON.parse(String(transport.calls[0]?.init.body)).result.checks,
+    {server: "ok", workspace: "ok", compiler: "not_checked", os: "macos", remote: "none"});
+  await tokens.clear();
+  await assert.rejects(client.pollClassroomCommands(scope, new AbortController().signal), /세션이 변경/);
+  assert.equal(transport.calls.length, 2);
+});
+
+test("command network latency reduces rather than extends the local action deadline", async () => {
+  let now = Date.parse("2026-10-25T15:00:00Z"); const began = now, original = Date.now;
+  Date.now = () => now;
+  try {
+    class SlowTransport extends FakeTransport {
+      public override async request<T>(endpoint: string, init: RequestInit, token?: string, options?: RequestOptions): Promise<T> {
+        const result = await super.request<T>(endpoint, init, token, options); now += 4000; return result;
+      }
+    }
+    const transport = new SlowTransport([{commands: [{command_id: "cmd_test", kind: "notice", assignment_id: "a1", message: "hello",
+      status: "received", created_by: "teacher", expires_at: new Date(began + 10000).toISOString()}], server_time: new Date(began).toISOString()}]);
+    const tokens = new TokenManager(transport); await tokens.storeSession({access_token: "access", refresh_token: "refresh", expires_in: 3600}, transport.baseUrl);
+    const client = new AutogradeClient(transport, tokens);
+    const commands = await client.pollClassroomCommands({baseUrl: transport.baseUrl, generation: tokens.getSessionGeneration(), assignmentId: "a1", clientSessionId: "client-test001"}, new AbortController().signal);
+    assert.equal(now, began + 4000); assert.equal(commands[0]?.localDeadline, began + 10000);
+    assert.equal(commands[0]!.localDeadline! - now, 6000);
+  } finally {Date.now = original;}
+});
+
+test("classroom request waiting for access token cannot cross an account or service change", async () => {
+  let release: ((value: string) => void) | undefined;
+  class RacingTokens extends FakeTokens {
+    public generation = 1;
+    public getSessionGeneration(): number { return this.generation; }
+    public override async getAccessToken(): Promise<string> { return new Promise(resolve => { release = resolve; }); }
+  }
+  for (const change of ["account", "service"]) {
+    const transport = new FakeTransport([]); const tokens = new RacingTokens();
+    const client = new AutogradeClient(transport, tokens);
+    const event: ClassroomEvent = { client_session_id: "session", sequence: 1, kind: "heartbeat", assignment_id: "a1", environment: { os: "macos", ide: "vscode" } };
+    const operation = client.reportClassroomEvent(event, { baseUrl: transport.baseUrl, generation: 1, assignmentId: "a1" }, new AbortController().signal);
+    if (change === "account") tokens.generation += 1; else transport.baseUrl = "https://different.example.edu";
+    release?.("old-token");
+    await assert.rejects(operation, error => error instanceof ApiError && error.code === "login_required");
+    assert.equal(transport.calls.length, 0);
+  }
+});
+
+test("cancelled classroom requests do not ask for tokens or send a request", async () => {
+  const transport = new FakeTransport([]); const tokens = new TokenManager(transport);
+  const client = new AutogradeClient(transport, tokens); const controller = new AbortController(); controller.abort();
+  await assert.rejects(client.reportClassroomEvent({ client_session_id: "session", sequence: 1, kind: "heartbeat", assignment_id: "a1",
+    environment: { os: "linux", ide: "vscode" } }, { baseUrl: transport.baseUrl, generation: 0, assignmentId: "a1" }, controller.signal), /취소/);
+  assert.equal(transport.calls.length, 0);
+});
+
+test("classroom token rotation preserves client identity and retries the exact event only once", async () => {
+  const transport = new FakeTransport([new ApiError("expired", 401),
+    { access_token: "replacement-access", refresh_token: "replacement-refresh", expires_in: 3600 }, { accepted: true }]);
+  const tokens = new TokenManager(transport);
+  await tokens.storeSession({ access_token: "old-access", refresh_token: "old-refresh", expires_in: 3600 }, transport.baseUrl);
+  const identity = tokens.getSessionGeneration();
+  const client = new AutogradeClient(transport, tokens);
+  await client.reportClassroomEvent({ client_session_id: "same-client-session", sequence: 8, kind: "heartbeat", assignment_id: "a1",
+    environment: { os: "macos", ide: "autograde" } }, { baseUrl: transport.baseUrl, generation: identity, assignmentId: "a1" }, new AbortController().signal);
+  assert.deepEqual(transport.calls.map(call => call.endpoint), ["/v1/classroom/events", "/v1/tokens/refresh", "/v1/classroom/events"]);
+  assert.equal(transport.calls[0]?.init.body, transport.calls[2]?.init.body);
+  assert.equal(transport.calls[2]?.bearerToken, "replacement-access");
+  assert.equal(tokens.getSessionGeneration(), identity);
+});
 
 test("student assignment list uses accepted-only endpoint and never falls back to catalog", async () => {
   const transport = new FakeTransport([{ assignments: [] }, new ApiError("Missing endpoint", 404, "not_found")]);

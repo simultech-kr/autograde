@@ -29,6 +29,17 @@ MAX_BATCH_BYTES = 100 * 1024 * 1024
 MAX_BATCH_FILES = 200
 MAX_ZIP_ENTRIES = 1000
 _MATERIAL_ID = re.compile(r"mat_[0-9a-f]{32}\Z")
+_MATERIAL_SELECT = """
+SELECT m.*,v.series_id,v.edition,v.previous_material_id,v.change_note,
+ (SELECT count(*) FROM student_material_files f WHERE f.material_id=m.material_id) file_count,
+ (SELECT child.material_id FROM student_material_versions cv
+   JOIN student_materials child ON child.material_id=cv.material_id
+   WHERE cv.previous_material_id=m.material_id AND child.status='draft') revision_draft_id,
+ (SELECT child.material_id FROM student_material_versions cv
+   JOIN student_materials child ON child.material_id=cv.material_id
+   WHERE cv.previous_material_id=m.material_id AND child.published_at IS NOT NULL) superseded_by
+FROM student_materials m JOIN student_material_versions v ON v.material_id=m.material_id
+"""
 
 
 def _fields(title, instructions, opens_at, closes_at):
@@ -56,8 +67,7 @@ def _course(db, course_key, *, active=False, writable=False):
 
 
 def _material(db, course_key, material_id):
-    row = db.execute("SELECT m.*,(SELECT count(*) FROM student_material_files f WHERE f.material_id=m.material_id) file_count "
-                     "FROM student_materials m WHERE m.course_key=? AND m.material_id=?", (course_key, material_id)).fetchone()
+    row = db.execute(_MATERIAL_SELECT + " WHERE m.course_key=? AND m.material_id=?", (course_key, material_id)).fetchone()
     if row is None:
         raise PlatformNotFound("배포 자료를 찾을 수 없습니다.")
     return dict(row)
@@ -72,7 +82,14 @@ def _revision(material, revision):
 
 def _draft(material):
     if material["status"] != "draft" or material["published_at"] is not None:
-        raise PlatformConflict("공개하거나 보관한 자료는 수정할 수 없습니다. 새 자료를 등록하세요.")
+        raise PlatformConflict("이미 공개했거나 보관한 자료는 다시 공개할 수 없습니다. 공개 중인 자료는 안내·파일을 직접 수정하세요.")
+
+
+def _editable(material):
+    if material["status"] not in ("draft", "published") or material["superseded_by"]:
+        raise PlatformConflict("보관되거나 이전 배포본으로 대체된 자료는 수정할 수 없습니다. 현재 자료를 선택하세요.")
+    if material["revision_draft_id"]:
+        raise PlatformConflict("작성 중인 수정본이 있습니다. 수정본을 공개하거나 보관한 뒤 현재 배포 자료를 수정하세요.")
 
 
 def _student(db, course_key, student_id):
@@ -227,6 +244,7 @@ class StudentMaterialService:
             _course(db, course_key, writable=True)
             db.execute("INSERT INTO student_materials(material_id,course_key,title,instructions,opens_at,closes_at,created_at,updated_at) "
                        "VALUES(?,?,?,?,?,?,?,?)", (material_id, course_key, *fields.values(), now, now))
+            db.execute("INSERT INTO student_material_versions(material_id,series_id,edition) VALUES(?,?,1)", (material_id, material_id))
             material = _material(db, course_key, material_id)
             _audit(db, material, "created", actor, now)
             return material
@@ -239,9 +257,53 @@ class StudentMaterialService:
     def list_for_instructor(self, course_key):
         with self.state._connection() as db:
             _course(db, course_key)
-            return [dict(row) for row in db.execute(
-                "SELECT m.*,(SELECT count(*) FROM student_material_files f WHERE f.material_id=m.material_id) file_count "
-                "FROM student_materials m WHERE course_key=? ORDER BY created_at DESC,material_id DESC", (course_key,))]
+            return [dict(row) for row in db.execute(_MATERIAL_SELECT +
+                " WHERE m.course_key=? ORDER BY m.created_at DESC,m.material_id DESC", (course_key,))]
+
+    def history(self, course_key, material_id):
+        """Instructor-only, course-scoped history, including abandoned draft editions."""
+        with self.state._connection() as db:
+            db.execute("BEGIN")
+            material = _material(db, course_key, material_id)
+            return [dict(row) for row in db.execute(_MATERIAL_SELECT +
+                " WHERE m.course_key=? AND v.series_id=? ORDER BY v.edition DESC",
+                (course_key, material["series_id"]))]
+
+    def create_revision(self, course_key, source_material_id, *, revision, change_note, actor):
+        """Copy a current publication into one editable draft without interrupting access.
+
+        Private immutable blobs are copied, not linked: each edition owns its verified
+        files. A failed copy rolls back metadata; any orphan blob remains inaccessible.
+        """
+        note = _text(change_note, "수정 사유", 1000, multiline=True)
+        actor, now = _text(actor, "작업자", 200), self._now()
+        material_id = "mat_" + secrets.token_hex(16)
+        with self.state._write() as db:
+            _course(db, course_key, writable=True)
+            source = _material(db, course_key, source_material_id)
+            _revision(source, revision)
+            if source["status"] != "published" or source["superseded_by"]:
+                raise PlatformConflict("현재 공개 중인 최신 자료에서만 수정본을 만들 수 있습니다.")
+            if source["revision_draft_id"]:
+                raise PlatformConflict("이미 작성 중인 수정본이 있습니다. 기존 수정본을 열거나 보관한 뒤 다시 시도하세요.")
+            edition = db.execute("SELECT max(edition)+1 FROM student_material_versions WHERE series_id=?",
+                                 (source["series_id"],)).fetchone()[0]
+            db.execute("INSERT INTO student_materials(material_id,course_key,title,instructions,opens_at,closes_at,created_at,updated_at) "
+                       "VALUES(?,?,?,?,?,?,?,?)", (material_id, course_key, source["title"], source["instructions"],
+                                                   source["opens_at"], source["closes_at"], now, now))
+            db.execute("INSERT INTO student_material_versions(material_id,series_id,edition,previous_material_id,change_note) "
+                       "VALUES(?,?,?,?,?)", (material_id, source["series_id"], edition, source_material_id, note))
+            with self._directory() as descriptor:
+                for row in db.execute("SELECT * FROM student_material_files WHERE material_id=?", (source_material_id,)).fetchall():
+                    content = self._read_file(descriptor, row)
+                    file = dict(row) | {"material_id": material_id}
+                    self._store_file(file, content)
+                    db.execute("INSERT INTO student_material_files(material_id,student_id,filename,format,size_bytes,sha256) "
+                               "VALUES(?,?,?,?,?,?)", tuple(file[key] for key in
+                               ("material_id", "student_id", "filename", "format", "size_bytes", "sha256")))
+            material = _material(db, course_key, material_id)
+            _audit(db, material, "revision_created", actor, now)
+            return material
 
     def update(self, course_key, material_id, *, revision, title, instructions, opens_at, closes_at, actor):
         fields = _fields(title, instructions, opens_at, closes_at)
@@ -250,7 +312,7 @@ class StudentMaterialService:
             _course(db, course_key, writable=True)
             material = _material(db, course_key, material_id)
             _revision(material, revision)
-            _draft(material)
+            _editable(material)
             db.execute("UPDATE student_materials SET title=?,instructions=?,opens_at=?,closes_at=?,revision=revision+1,updated_at=? "
                        "WHERE material_id=?", (*fields.values(), now, material_id))
             material = _material(db, course_key, material_id)
@@ -285,6 +347,10 @@ class StudentMaterialService:
         return f"{mid}-{sid}-{digest}.{extension}"
 
     def _verify_file(self, descriptor, file):
+        self._read_file(descriptor, file)
+        return self.root / self._filename(file)
+
+    def _read_file(self, descriptor, file):
         filename = self._filename(file)
         try:
             handle = os.open(filename, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=descriptor)
@@ -299,7 +365,7 @@ class StudentMaterialService:
                     raise PlatformConflict("자료 파일 무결성 확인에 실패했습니다. 교수자에게 문의하세요.")
         except OSError as exc:
             raise PlatformConflict("자료 파일을 읽을 수 없습니다. 교수자에게 문의하세요.") from exc
-        return self.root / filename
+        return data
 
     def _store_file(self, file, data):
         filename, temporary = self._filename(file), ".upload-" + secrets.token_hex(16)
@@ -351,7 +417,7 @@ class StudentMaterialService:
             _course(db, course_key, writable=True)
             material = _material(db, course_key, material_id)
             _revision(material, revision)
-            _draft(material)
+            _editable(material)
             files = []
             # Resolve every recipient before writing anything, preserving exact string keys.
             for key, extension, filename, content in entries:
@@ -364,13 +430,37 @@ class StudentMaterialService:
                 files.append((file, content))
             for file, content in files:
                 self._store_file(file, content)
-                db.execute("INSERT INTO student_material_files(material_id,student_id,filename,format,size_bytes,sha256) VALUES(?,?,?,?,?,?) "
+                old = db.execute("SELECT * FROM student_material_files WHERE material_id=? AND student_id=?",
+                                 (material_id, file["student_id"])).fetchone()
+                if old is None:
+                    file["file_revision"] = db.execute(
+                        "SELECT COALESCE(max(file_revision),0)+1 FROM student_material_file_history "
+                        "WHERE material_id=? AND student_id=?", (material_id, file["student_id"])).fetchone()[0]
+                else:
+                    file["file_revision"] = old["file_revision"]
+                    if material["status"] == "published" and any(old[key] != file[key] for key in ("sha256", "format", "size_bytes")):
+                        self._archive_file(db, old, "replaced", actor, now)
+                        file["file_revision"] += 1
+                db.execute("INSERT INTO student_material_files(material_id,student_id,filename,format,size_bytes,sha256,file_revision) VALUES(?,?,?,?,?,?,?) "
                            "ON CONFLICT(material_id,student_id) DO UPDATE SET filename=excluded.filename,format=excluded.format,"
-                           "size_bytes=excluded.size_bytes,sha256=excluded.sha256", tuple(file.values()))
+                           "size_bytes=excluded.size_bytes,sha256=excluded.sha256,file_revision=excluded.file_revision",
+                           tuple(file[key] for key in ("material_id", "student_id", "filename", "format", "size_bytes", "sha256", "file_revision")))
             db.execute("UPDATE student_materials SET revision=revision+1,updated_at=? WHERE material_id=?", (now, material_id))
             material = _material(db, course_key, material_id)
             _audit(db, material, action, actor, now)
             return material
+
+    @staticmethod
+    def _archive_file(db, file, change_type, actor, now):
+        """Move the current request count into an immutable displaced-file snapshot."""
+        requests = db.execute("SELECT first_requested_at,last_requested_at,request_count FROM student_material_requests "
+                              "WHERE material_id=? AND student_id=?", (file["material_id"], file["student_id"])).fetchone()
+        db.execute("INSERT INTO student_material_file_history(material_id,student_id,file_revision,filename,format,size_bytes,sha256,"
+                   "first_requested_at,last_requested_at,request_count,changed_at,change_type,actor) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                   tuple(file[key] for key in ("material_id", "student_id", "file_revision", "filename", "format", "size_bytes", "sha256")) +
+                   ((requests["first_requested_at"], requests["last_requested_at"], requests["request_count"]) if requests else (None, None, 0)) +
+                   (now, change_type, actor))
+        db.execute("DELETE FROM student_material_requests WHERE material_id=? AND student_id=?", (file["material_id"], file["student_id"]))
 
     def publish(self, course_key, material_id, *, revision, actor):
         actor = _text(actor, "작업자", 200)
@@ -380,6 +470,13 @@ class StudentMaterialService:
             material = _material(db, course_key, material_id)
             _revision(material, revision)
             _draft(material)
+            previous = None
+            if material["previous_material_id"]:
+                previous = _material(db, course_key, material["previous_material_id"])
+                if previous["status"] != "published" or previous["superseded_by"]:
+                    raise PlatformConflict("원본 자료가 보관되거나 다른 수정본으로 대체되었습니다. 최신 자료를 확인하세요.")
+                if material["opens_at"] > now:
+                    raise PlatformConflict("수정본은 즉시 배포만 가능합니다. 배포 시작 시각을 현재 이전으로 설정하세요.")
             if material["closes_at"] <= now:
                 raise PlatformConflict("배포 종료 시각이 지났습니다. 기간을 수정한 뒤 공개하세요.")
             if not material["file_count"]:
@@ -394,17 +491,21 @@ class StudentMaterialService:
                        (now, now, material_id))
             material = _material(db, course_key, material_id)
             _audit(db, material, "published", actor, now)
+            if previous:
+                _audit(db, _material(db, course_key, previous["material_id"]), "superseded", actor, now)
             return material
 
     def remove_recipient(self, course_key, material_id, student_id, *, revision, actor):
-        """Remove a draft assignment only; retain immutable private file blobs."""
+        """Stop delivery to one student; published files and request snapshots remain."""
         actor, now = _text(actor, "작업자", 200), self._now()
         with self.state._write() as db:
             _course(db, course_key, writable=True)
             material = _material(db, course_key, material_id)
             _revision(material, revision)
-            _draft(material)
-            self._file(db, material_id, student_id)
+            _editable(material)
+            file = self._file(db, material_id, student_id)
+            if material["status"] == "published":
+                self._archive_file(db, file, "removed", actor, now)
             db.execute("DELETE FROM student_material_files WHERE material_id=? AND student_id=?", (material_id, student_id))
             db.execute("UPDATE student_materials SET revision=revision+1,updated_at=? WHERE material_id=?", (now, material_id))
             material = _material(db, course_key, material_id)
@@ -439,33 +540,80 @@ class StudentMaterialService:
             return self._file(db, material_id, student_id)
 
     def file_for_instructor(self, course_key, material_id, student_id):
+        return self.file_snapshot_for_instructor(course_key, material_id, student_id)[0]
+
+    @staticmethod
+    def _history_file(db, material_id, student_id, file_revision):
+        if (isinstance(student_id, bool) or not isinstance(student_id, int) or student_id <= 0 or
+                isinstance(file_revision, bool) or not isinstance(file_revision, int) or file_revision <= 0):
+            raise PlatformNotFound("이전 자료 파일을 찾을 수 없습니다.")
+        row = db.execute("SELECT * FROM student_material_file_history WHERE material_id=? AND student_id=? AND file_revision=?",
+                         (material_id, student_id, file_revision)).fetchone()
+        if row is None:
+            raise PlatformNotFound("이전 자료 파일을 찾을 수 없습니다.")
+        return dict(row)
+
+    def file_history(self, course_key, material_id):
         with self.state._connection() as db:
+            db.execute("BEGIN")
             _material(db, course_key, material_id)
-            file = self._file(db, material_id, student_id)
+            return [dict(row) for row in db.execute(
+                "SELECT h.*,s.student_key,COALESCE(p.name,'') name FROM student_material_file_history h "
+                "JOIN platform_students s ON s.id=h.student_id LEFT JOIN admin_student_profiles p ON p.student_id=s.id "
+                "WHERE h.material_id=? ORDER BY h.changed_at DESC,s.student_key,h.file_revision DESC", (material_id,))]
+
+    def file_revision_metadata(self, course_key, material_id, student_id, file_revision):
+        with self.state._connection() as db:
+            db.execute("BEGIN")
+            _material(db, course_key, material_id)
+            return self._history_file(db, material_id, student_id, file_revision)
+
+    def file_for_instructor_revision(self, course_key, material_id, student_id, file_revision):
+        return self.file_snapshot_for_instructor(course_key, material_id, student_id, file_revision)[0]
+
+    def file_snapshot_for_instructor(self, course_key, material_id, student_id, file_revision=None):
+        """Return verified immutable bytes and matching metadata from one DB snapshot."""
+        with self.state._connection() as db:
+            db.execute("BEGIN")
+            _material(db, course_key, material_id)
+            file = (self._file(db, material_id, student_id) if file_revision is None else
+                    self._history_file(db, material_id, student_id, file_revision))
             with self._directory() as descriptor:
-                return self._verify_file(descriptor, file)
+                return self._verify_file(descriptor, file), file
+
+    file_for_instructor_snapshot = file_snapshot_for_instructor
 
     def list_for_student(self, course_key, student_id):
         with self.state._connection() as db:
             db.execute("BEGIN")
             _student(db, course_key, student_id)
             now, result = self._now(), []
-            for row in db.execute("SELECT m.*,f.filename,f.format,f.size_bytes FROM student_materials m "
+            for row in db.execute("SELECT m.*,v.edition,v.change_note,f.filename,f.format,f.size_bytes,f.file_revision,"
+                                  "COALESCE(r.request_count,0) request_count FROM student_materials m "
+                                  "JOIN student_material_versions v ON v.material_id=m.material_id "
                                   "JOIN student_material_files f ON f.material_id=m.material_id "
+                                  "LEFT JOIN student_material_requests r ON r.material_id=m.material_id AND r.student_id=f.student_id "
                                   "WHERE m.course_key=? AND m.status='published' AND f.student_id=? ORDER BY m.opens_at,m.material_id",
                                   (course_key, student_id)):
                 material = dict(row)
                 availability = _availability(material, now)
                 result.append({key: material[key] for key in ("material_id", "course_key", "title", "opens_at", "closes_at", "status",
-                                                               "revision", "published_at", "filename", "format", "size_bytes")} |
+                                                               "revision", "published_at", "filename", "format", "size_bytes", "edition",
+                                                               "change_note", "request_count", "file_revision")} |
+                              dict(requested=material["request_count"] > 0, file_updated=material["file_revision"] > 1) |
                               dict(instructions=material["instructions"] if availability == "open" else "", availability=availability))
             return result
 
     def download(self, course_key, material_id, student_id):
+        return self.download_snapshot(course_key, material_id, student_id)[0]
+
+    def download_snapshot(self, course_key, material_id, student_id):
         with self.state._write() as db:
             _student(db, course_key, student_id)
             material = _material(db, course_key, material_id)
             file = self._file(db, material_id, student_id)
+            if material["superseded_by"]:
+                raise PlatformConflict("수정본이 배포되었습니다. 자료 목록을 새로고침한 뒤 최신 자료를 다운로드하세요.")
             if material["status"] != "published":
                 raise PlatformNotFound("수령 가능한 자료를 찾을 수 없습니다.")
             if _availability(material, self._now()) != "open":
@@ -478,14 +626,14 @@ class StudentMaterialService:
             db.execute("INSERT INTO student_material_requests(material_id,student_id,first_requested_at,last_requested_at,request_count) "
                        "VALUES(?,?,?,?,1) ON CONFLICT(material_id,student_id) DO UPDATE SET "
                        "last_requested_at=excluded.last_requested_at,request_count=request_count+1", (material_id, student_id, now, now))
-            return path
+            return path, file
 
     def recipients(self, course_key, material_id):
         with self.state._connection() as db:
             db.execute("BEGIN")
             _material(db, course_key, material_id)
             return [dict(row) for row in db.execute(
-                "SELECT f.material_id,s.id student_id,f.filename,f.format,f.size_bytes,f.sha256,"
+                "SELECT f.material_id,s.id student_id,f.filename,f.format,f.size_bytes,f.sha256,f.file_revision,"
                 "s.student_key,COALESCE(p.name,'') name,r.first_requested_at,r.last_requested_at,"
                 "COALESCE(r.request_count,0) request_count,CASE WHEN s.active=1 AND e.active=1 THEN 1 ELSE 0 END active "
                 "FROM platform_students s "

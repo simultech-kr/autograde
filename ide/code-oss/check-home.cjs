@@ -14,7 +14,7 @@ const [compiledHome, playwrightModule, executablePath, output] = args.map(value 
 const { renderLearningHome, learningHomeBlockedReason } = require(compiledHome);
 const { chromium } = require(playwrightModule);
 const widths = [320, 375, 768, 1440];
-const actions = ['configure', 'connection', 'claim', 'open', 'accepted', 'submit', 'result', 'history'];
+const baseActions = ['configure', 'connection', 'claim', 'open', 'accepted', 'materials', 'content', 'submit', 'result', 'history', 'exportLearning', 'exam'];
 const nonce = 'autograde-synthetic-browser-test';
 const themes = {
   light: {
@@ -76,7 +76,12 @@ function syntheticHtml(state, theme) {
           for (const trusted of [false, true]) {
             for (const hasWorkspace of [false, true]) {
               for (const busy of [false, true]) {
-                const state = { authenticated, trusted, hasWorkspace, busy };
+                const learningPolicy = authenticated ? 'restricted' : 'unmanaged';
+                // Cover a fresh/used shared session as well as ordinary personal profiles.
+                const sharedSession = hasWorkspace;
+                const sessionNeedsRestart = sharedSession && !authenticated;
+                const state = { authenticated, trusted, hasWorkspace, busy, learningPolicy, sharedSession, sessionNeedsRestart };
+                const actions = [...baseActions, ...(sharedSession ? ['endSession'] : [])];
                 const stateName = `${authenticated ? 'connected' : 'guest'}-${trusted ? 'trusted' : 'restricted'}-${hasWorkspace ? 'workspace' : 'empty'}-${busy ? 'busy' : 'idle'}`;
                 const label = `${themeName}/${width}/${stateName}`;
                 // A VS Code Webview HTML replacement creates a fresh document. Reset the JS realm too,
@@ -96,6 +101,8 @@ function syntheticHtml(state, theme) {
                 assert.equal(text.includes('제한 모드'), !trusted, `${label}: trust state`);
                 assert.equal(text.includes('작업 진행 중'), busy, `${label}: busy state`);
                 assert.ok(text.includes('생성형 AI나 외부 프로그램·네트워크 사용을 차단하지 않습니다'), `${label}: scope boundary`);
+                assert.ok(text.includes('OS 샌드박스가 아니며'), `${label}: isolation boundary`);
+                assert.ok(text.includes(authenticated ? 'IDE AI 제한 시작 설정' : '분리 학습 프로필 미확인'), `${label}: launch policy hint`);
 
                 const enabled = actions.filter(action => !learningHomeBlockedReason(action, state));
                 if (enabled.length) {

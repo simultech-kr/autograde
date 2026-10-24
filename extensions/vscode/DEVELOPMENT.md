@@ -349,14 +349,17 @@ Node.js 22 이상이 설치된 환경에서 실행합니다.
 ```bash
 npm ci
 npm test
-shasum -a 256 -c SHA256SUMS
-code --install-extension autograde-vscode-0.2.2.vsix
+npm run package:vsix
+shasum -a 256 autograde-vscode-0.5.12.vsix
+code --install-extension autograde-vscode-0.5.12.vsix
 ```
 
-이 저장소의 `SHA256SUMS`는 현재 배포 후보 VSIX의 SHA-256을 고정합니다. 배포자는
-`shasum -a 256 -c SHA256SUMS`가 성공한 같은 파일을 pilot 학생에게 전달합니다. Source를
-수정해 새 release를 만들 때는 lockfile에 고정된 Microsoft `@vscode/vsce`로
-`npm run package:vsix`를 실행한 다음 새 artifact hash로 release manifest를 갱신·재검증합니다.
+`SHA256SUMS`에는 배포용으로 만든 각 버전 파일의 SHA-256을 기록합니다. 받은 배포본은
+해당 파일명의 줄과 비교하며, 과거 버전 파일을 모두 내려받을 필요는 없습니다. 직접 다시 빌드한
+파일은 ZIP 생성 시각 등에 따라 배포본과 해시가 다를 수 있습니다. 배포자는 lockfile에 고정된
+Microsoft `@vscode/vsce`로 패키징한 후 실제 전달할 파일의 해시를 기록하고 같은 파일을 전달합니다.
+VSIX와 Code-OSS 빌드는 Git에 포함되지 않으므로 소스 갱신 후 위 패키징 또는
+[전용 IDE 준비·검증](../../docs/operations/autograde-ide-poc.md)을 수행합니다.
 
 ### Windows/WSL2에서 배포 VSIX 설치
 
@@ -369,7 +372,7 @@ Windows 탐색기에서 `.vsix` 파일을 더블클릭하지 않습니다. 파�
 (대소문자는 무관) 비교합니다.
 
 ```powershell
-Get-FileHash .\autograde-vscode-0.2.2.vsix -Algorithm SHA256
+Get-FileHash .\autograde-vscode-0.5.12.vsix -Algorithm SHA256
 Get-Content .\SHA256SUMS
 ```
 
@@ -380,11 +383,11 @@ CLI로 설치를 재현해야 할 때는 설치 유형에 맞는 정확한 경�
 
 ```powershell
 & "$env:LOCALAPPDATA\Programs\Microsoft VS Code\bin\code.cmd" --version
-& "$env:LOCALAPPDATA\Programs\Microsoft VS Code\bin\code.cmd" --install-extension .\autograde-vscode-0.2.2.vsix --force
+& "$env:LOCALAPPDATA\Programs\Microsoft VS Code\bin\code.cmd" --install-extension .\autograde-vscode-0.5.12.vsix --force
 
 # 모든 사용자용으로 설치된 경우
 & "$env:ProgramFiles\Microsoft VS Code\bin\code.cmd" --version
-& "$env:ProgramFiles\Microsoft VS Code\bin\code.cmd" --install-extension .\autograde-vscode-0.2.2.vsix --force
+& "$env:ProgramFiles\Microsoft VS Code\bin\code.cmd" --install-extension .\autograde-vscode-0.5.12.vsix --force
 ```
 
 `--force`는 기존 설치 갱신과 확인 prompt 처리용이며, 패키지 서명 검증을 끄거나 우회하는
