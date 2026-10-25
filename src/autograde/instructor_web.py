@@ -135,7 +135,8 @@ class InstructorWeb:
 
     def __init__(self, course_admin, enrollment_admin, assignment_admin, *, authorize,
                  secret, web_url, submissions=None, submission_review=None, submission_updates=None, rubrics=None, identities=None,
-                 next_ui_policy=None, exam_papers=None, student_materials=None, content_service=None):
+                 next_ui_policy=None, exam_papers=None, student_materials=None, content_service=None,
+                 extension_distribution=None):
         self.courses = course_admin
         self.students = enrollment_admin
         self.assignments = assignment_admin
@@ -150,6 +151,7 @@ class InstructorWeb:
         self.exam_papers = exam_papers
         self.student_materials = student_materials
         self.content_service = content_service
+        self.extension_distribution = extension_distribution
         self.principal = None
         self.next_ui_policy = next_ui_policy if next_ui_policy is not None else lambda: frozenset()
         self.catalog = InstructorAssignmentCatalog(assignment_admin.state) if assignment_admin else None
@@ -286,6 +288,8 @@ class InstructorWeb:
                 links.insert(3, (base + '/materials', '학생별 자료 배포'))
             if self.content_service is not None:
                 links.insert(3, (base + '/content', '콘텐츠'))
+            if self.extension_distribution is not None:
+                links.insert(3, (base + '/extensions', 'IDE 확장 배포'))
             context = f'{course["code"]} · {course.get("name") or "정보 확인 필요"} · {course.get("year") or "학년도 미설정"} / {course.get("semester") or "학기 미설정"} · {course.get("section") or "분반 미설정"}'
         if self.principal:
             identity = f'{self.principal.display_name} ({self.principal.username}) · ' + ('관리자' if self.principal.role == 'admin' else '담당 교수자')
@@ -497,6 +501,19 @@ class InstructorWeb:
         if route == 'classroom' and method == 'GET':
             from .instructor_classroom import page
             return page(self, course, session)
+        if route == 'extensions' or route.startswith('extensions/'):
+            from .extension_distribution import ExtensionStorageError
+            from .instructor_extensions import request
+            try:
+                return request(self, method, course, route, form, session,
+                               reauthorize=lambda: self._scoped(authorization).courses.get_course(course['course_key']))
+            except ExtensionStorageError:
+                return self._page('확장 저장소 확인 필요',
+                                  '<div class="notice error" role="alert">확장 파일 저장소를 사용할 수 없습니다. '
+                                  '서버 저장 공간·권한·파일 무결성을 운영자에게 확인해 주세요.</div>'
+                                  '<p>원본 VSIX를 보관하고 목록에서 등록·배포 상태를 확인한 뒤 다시 시도하세요.</p>'
+                                  f'<p><a href="{_e(base)}/extensions">IDE 확장 배포 다시 확인</a></p>',
+                                  course=course, status=503, current_path=base + '/extensions')
         if route == 'content' or route.startswith('content/'):
             from .content_store import ContentStorageError
             from .instructor_content import request

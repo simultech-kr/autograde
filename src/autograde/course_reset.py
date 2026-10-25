@@ -73,8 +73,8 @@ def _digest(connection, excluded=None):
 
 def _preflight(connection, course):
     version = connection.execute("SELECT MAX(version) FROM platform_schema_migrations").fetchone()[0]
-    if version not in (10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22):
-        raise ValueError("reset supports schema 10/11/12/13/14/15/16/17/18/19/20/21/22 only; do not modify the database manually")
+    if version not in (10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23):
+        raise ValueError("reset supports schema 10/11/12/13/14/15/16/17/18/19/20/21/22/23 only; do not modify the database manually")
     if version >= 11:
         if not connection.execute("SELECT 1 FROM admin_courses WHERE course_key=?", (course,)).fetchone():
             raise ValueError("course must already be registered")
@@ -124,6 +124,8 @@ def _preflight(connection, course):
     classroom = (("classroom_events", "course_key = ?"), ("classroom_clients", "course_key = ?")) if version >= 21 else ()
     if version >= 22:
         classroom = (("classroom_command_events", "course_key = ?"), ("classroom_commands", "course_key = ?")) + classroom
+    if version >= 23:
+        classroom = (("ide_extension_client_status", "client_session_id IN (SELECT client_session_id FROM classroom_clients WHERE course_key=?)"),) + classroom
     definitions = classroom + diagnostics + documents + TARGETS + ((('admin_roster_previews', 'course_key = ?'),) if version >= 11 else ())
     targets = {table: {row[0] for row in connection.execute(
         f"SELECT rowid FROM {_quote(table)} WHERE {where}", (course,)

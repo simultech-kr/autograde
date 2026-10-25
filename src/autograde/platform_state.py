@@ -40,6 +40,7 @@ from .student_material_edit_schema import SCHEMA as _STUDENT_MATERIAL_EDIT_SCHEM
 from .content_schema import SCHEMA as _CONTENT_SCHEMA
 from .classroom_schema import SCHEMA as _CLASSROOM_SCHEMA
 from .classroom_command_schema import SCHEMA as _CLASSROOM_COMMAND_SCHEMA
+from .extension_distribution_schema import SCHEMA as _EXTENSION_DISTRIBUTION_SCHEMA
 from .gitops import normalize_assignment_subpath
 from .platform_runner_image import (
     RunnerImageAvailabilityError,
@@ -1542,6 +1543,7 @@ _MIGRATIONS = {
     20: _CONTENT_SCHEMA,
     21: _CLASSROOM_SCHEMA,
     22: _CLASSROOM_COMMAND_SCHEMA,
+    23: _EXTENSION_DISTRIBUTION_SCHEMA,
 }
 _LATEST_SCHEMA_VERSION = max(_MIGRATIONS)
 

@@ -13,6 +13,7 @@ const expected = {
   exam: "autograde.openExamMode",
   materials: "autograde.studentMaterials",
   content: "autograde.syncContent",
+  extensions: "autograde.manageCourseExtensions",
   exportLearning: "autograde.exportLearning",
   endSession: "autograde.endLearningSession",
 };
@@ -48,10 +49,10 @@ test("session, trust, workspace and busy restrictions are rechecked independentl
     assert.equal(learningHomeBlockedReason(action, ready), undefined);
     assert.match(learningHomeBlockedReason(action, {...ready, busy: true})!, /이전 작업/);
   }
-  for (const action of ["open", "accepted", "submit", "result", "history", "materials", "content"] as const) {
+  for (const action of ["open", "accepted", "submit", "result", "history", "materials", "content", "extensions"] as const) {
     assert.match(learningHomeBlockedReason(action, {...ready, authenticated: false})!, /수령 코드/);
   }
-  for (const action of ["claim", "open", "submit", "exportLearning"] as const) {
+  for (const action of ["claim", "open", "submit", "exportLearning", "extensions"] as const) {
     assert.match(learningHomeBlockedReason(action, {...ready, trusted: false})!, /신뢰/);
   }
   assert.match(learningHomeBlockedReason("submit", {...ready, hasWorkspace: false})!, /작업 영역/);

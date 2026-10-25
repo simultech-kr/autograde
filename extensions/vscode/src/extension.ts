@@ -87,6 +87,9 @@ import { ClassroomActionError, ClassroomCommands, CLASSROOM_COMMAND_LABELS, type
 import { findSafeStarterPreview } from "./bundleWorkspace";
 import { SharedLearningSession, END_LEARNING_SESSION_COMMAND } from "./sharedLearningSession";
 import { LearningExportView, LEARNING_EXPORT_COMMAND } from "./learningExportView";
+import { ManagedExtensions, MANAGED_EXTENSIONS_COMMAND } from "./managedExtensions";
+import { ManagedExtensionsApi } from "./managedExtensionsApi";
+import { ManagedExtensionsInstaller } from "./managedExtensionsView";
 let diagnosticExtensionVersion = "0.5.8";
 
 const SUCCESSFUL_SUBMISSION_STATES = new Set(["accepted", "queued", "running", "graded", "published"]);
@@ -161,6 +164,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   let authenticationUiState = false;
   let classroomIdentity: number | undefined;
   let classroomCommands: ClassroomCommands | undefined;
+  let managedExtensions: ManagedExtensions | undefined;
   let classroomCommandStatus = "교수자 요청 대기 · 과제 연결 필요";
   let examAssignmentId: string | undefined;
   const examScope = (): ExamScope | undefined => {
@@ -219,7 +223,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       ...Array.from(assignmentWorkspaces.attached.values()).map(uri => uri.fsPath),
     ],
   });
-  assignmentWorkspaces.onSelected = id => { examAssignmentId = id; examMode.reconcile(); classroom.reconcile(); classroomCommands?.reconcile(); };
+  assignmentWorkspaces.onSelected = id => { examAssignmentId = id; examMode.reconcile(); classroom.reconcile(); classroomCommands?.reconcile(); managedExtensions?.reconcile(); };
   let classroomStatus: ClassroomSharingStatus = "inactive";
   let classroomDisclosureIdentity: number | undefined;
   const learningHome = new LearningHomeView(() => ({
@@ -242,6 +246,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   }, reportedEnvironment ?? { os: "linux", ide: "vscode" }, status => {
     classroomStatus = status; learningHome.refresh();
     classroomCommands?.reconcile();
+    managedExtensions?.reconcile();
     const identity = tokens.getSessionGeneration();
     if (status === "sharing" && classroomDisclosureIdentity !== identity) {
       classroomDisclosureIdentity = identity;
@@ -267,6 +272,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     classroomIdentity = authenticated ? tokens.getSessionGeneration() : undefined;
     classroom.reconcile();
     classroomCommands?.reconcile();
+    managedExtensions?.reconcile();
     learningHome.refresh();
     await Promise.all([
       vscode.commands.executeCommand(
@@ -498,6 +504,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     return response;
   }, message => {classroomCommandStatus = message; learningHome.refresh();});
   classroomCommands.reconcile();
+  managedExtensions = new ManagedExtensions(new ManagedExtensionsApi(client), () => classroom.getCommandContext(),
+    new ManagedExtensionsInstaller(sharedSession, environment, assignmentOperations, context.extension));
+  managedExtensions.reconcile();
   const redeemAssignmentClaim = async (): Promise<void> => {
     sharedSession?.assertCanAuthenticate();
     studentMaterials.clear();
@@ -540,6 +549,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push(
     classroom,
     classroomCommands,
+    managedExtensions,
+    vscode.commands.registerCommand(MANAGED_EXTENSIONS_COMMAND, () => managedExtensions!.check(true)),
     vscode.workspace.onDidSaveTextDocument(document => {
       // Never inspect or report unrelated workspaces, unsaved buffers, or non-file resources.
       const selected = assignmentWorkspaces.selected;
@@ -565,9 +576,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     learningHome,
     vscode.commands.registerCommand(LEARNING_HOME_COMMAND, () => learningHome.show()),
     vscode.commands.registerCommand(END_LEARNING_SESSION_COMMAND, () => runCommand(endSharedSession)),
-    vscode.workspace.onDidChangeWorkspaceFolders(() => { learningHome.refresh(); classroom.reconcile(); classroomCommands?.reconcile(); }),
+    vscode.workspace.onDidChangeWorkspaceFolders(() => { learningHome.refresh(); classroom.reconcile(); classroomCommands?.reconcile(); managedExtensions?.reconcile(); }),
     documentView,
-    treeProvider.onDidChangeTreeData(() => { documentView.reconcileAccepted(); classroom.reconcile(); classroomCommands?.reconcile(); }),
+    treeProvider.onDidChangeTreeData(() => { documentView.reconcileAccepted(); classroom.reconcile(); classroomCommands?.reconcile(); managedExtensions?.reconcile(); }),
     vscode.workspace.registerTextDocumentContentProvider(ASSIGNMENT_DOCUMENT_SCHEME, documentView),
     vscode.commands.registerCommand("autograde.viewAssignmentDocument", (item?: AssignmentTreeItem) => runAssignmentCommand(async () => {
       const candidates = treeProvider.getAssignments().filter(isBundleAssignment);

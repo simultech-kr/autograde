@@ -30,11 +30,12 @@ class CourseAPI:
         "poll_classroom_commands", "respond_classroom_command",
     })
 
-    def __init__(self, services: Mapping[str, StudentPlatformService], secret: bytes, *, courses=None, student_materials=None, content_service=None):
+    def __init__(self, services: Mapping[str, StudentPlatformService], secret: bytes, *, courses=None, student_materials=None, content_service=None, extension_distribution=None):
         self.services = services
         self.courses = courses
         self.student_materials = student_materials
         self.content_service = content_service
+        self.extension_distribution = extension_distribution
         self.secret = secret
         self.state = next(iter(services.values())).state
 
@@ -74,6 +75,18 @@ class CourseAPI:
     def get_content_context(self, access_token):
         from .content_api import context
         return context(self, access_token)
+
+    def list_ide_extensions(self, access_token):
+        from .extension_distribution_api import catalog
+        return catalog(self, access_token)
+
+    def get_ide_extension_package(self, access_token, release_id):
+        from .extension_distribution_api import download
+        return download(self, access_token, release_id)
+
+    def report_ide_extension_status(self, access_token, release_id, payload):
+        from .extension_distribution_api import report
+        return report(self, access_token, release_id, payload)
 
     def list_content_collections(self, access_token):
         from .content_api import collections

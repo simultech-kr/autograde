@@ -415,7 +415,7 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
                 from .classroom_stream import serve
                 serve(self, parameters["path"], query)
                 return
-            if route == "content_object":
+            if route in {"content_object", "ide_extension_package"}:
                 content_slot = self.platform_server.content_download_slots.acquire(blocking=False)
                 if not content_slot:
                     raise PlatformHTTPError(429, "content_transfer_busy", "자료 전송 중입니다. 잠시 후 다시 시도하세요.",
@@ -556,6 +556,7 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
             "/v1/materials": ("materials", frozenset({"GET"}), "list_materials"),
             "/v1/content/context": ("content_context", frozenset({"GET"}), "get_content_context"),
             "/v1/content/collections": ("content_collections", frozenset({"GET"}), "list_content_collections"),
+            "/v1/ide/extensions": ("ide_extensions", frozenset({"GET"}), "list_ide_extensions"),
             "/v1/me/sessions": (
                 "sessions",
                 frozenset({"GET"}),
@@ -638,11 +639,18 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
                 "poll_classroom_commands",
                 "get_content_context",
                 "list_content_collections",
+                "list_ide_extensions",
             } and not callable(getattr(facade, optional_method, None)):
                 return None, {}, frozenset()
             return route, {}, allowed
 
         parts = path.split("/")
+        if (len(parts) == 6 and parts[:4] == ["", "v1", "ide", "extensions"]
+                and re.fullmatch(r'er_[0-9a-f]{32}', parts[4])):
+            if parts[5] == 'package' and callable(getattr(facade, 'get_ide_extension_package', None)):
+                return 'ide_extension_package', {'release_id': parts[4]}, frozenset({'GET'})
+            if parts[5] == 'status' and callable(getattr(facade, 'report_ide_extension_status', None)):
+                return 'ide_extension_status', {'release_id': parts[4]}, frozenset({'POST'})
         if (len(parts) == 6 and parts[:4] == ["", "v1", "classroom", "commands"]
                 and parts[5] == 'responses' and self._identifier(parts[4]) is not None
                 and callable(getattr(facade, 'respond_classroom_command', None))):
@@ -796,12 +804,13 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
                     exam_upload = re.fullmatch(r"/courses/[a-z0-9_-]{1,96}/instructor/exam-papers/ep_[A-Za-z0-9_-]+/upload", path)
                     material_upload = re.fullmatch(r"/courses/[a-z0-9_-]{1,96}/instructor/materials/mat_[A-Za-z0-9_-]+/(upload|upload-batch)", path)
                     content_upload = re.fullmatch(r"/courses/[a-z0-9_-]{1,96}/instructor/content/cc_[0-9a-f]{32}/upload", path)
+                    extension_upload = re.fullmatch(r"/courses/[a-z0-9_-]{1,96}/instructor/extensions", path)
                     classroom_command = re.fullmatch(r'/instructor/api/v1/courses/[a-z0-9_-]{1,96}/classroom/students/[^/]{1,128}/commands', path)
                     if classroom_command:
                         # Narrow JSON mutation route; all other instructor API
                         # routes remain GET-only. CSRF checked by the facade.
                         form = self._read_json_object(max_bytes=8192)
-                    elif upload or csv_upload or exam_upload or material_upload or content_upload:
+                    elif upload or csv_upload or exam_upload or material_upload or content_upload or extension_upload:
                         if not facade.admin_upload_slots.acquire(blocking=False):
                             raise PlatformHTTPError(503, "upload_busy", "파일 처리 중입니다. 잠시 후 다시 시도하세요.")
                         try:
@@ -813,17 +822,20 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
                                 limit = MAX_BATCH_BYTES if material_upload[1] == 'upload-batch' else MAX_MATERIAL_BYTES
                             if content_upload:
                                 limit = 25 * 1024 * 1024
+                            if extension_upload:
+                                from .extension_distribution import MAX_VSIX_BYTES
+                                limit = MAX_VSIX_BYTES
                             body = self._read_body(expected_media_type="multipart/form-data", max_bytes=limit + 64 * 1024)
                             try:
                                 form = parse_instructor_upload(self.headers.get("Content-Type", ""), body, file_limit=limit,
-                                                               capture_filename=bool(material_upload or content_upload),
+                                                               capture_filename=bool(material_upload or content_upload or extension_upload),
                                                                allow_content_path=bool(content_upload))
                             except InstructorUploadUnavailable as exc:
                                 emit_operator_event("instructor_upload_unavailable", component="http", exception=exc.__cause__ or exc)
                                 raise PlatformHTTPError(503, "upload_unavailable", str(exc)) from exc
                             except ValueError as exc:
                                 raise PlatformHTTPError(400, "invalid_upload", str(exc)) from exc
-                            if material_upload or content_upload:
+                            if material_upload or content_upload or extension_upload:
                                 # Keep admission bounded through ZIP validation and storage,
                                 # not just parsing: each batch may retain up to 100 MiB.
                                 return facade.portal_request(
@@ -887,6 +899,16 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
         if route == "me":
             self._ensure_no_body()
             return facade.get_me(self._bearer_token()), 200
+        if route in {'ide_extensions', 'ide_extension_package', 'ide_extension_status'}:
+            if query:
+                raise PlatformHTTPError(400, 'invalid_request', 'Unexpected query parameter')
+            token = self._bearer_token()
+            if route == 'ide_extension_status':
+                return facade.report_ide_extension_status(token, parameters['release_id'], self._read_json_object(max_bytes=4096)), 200
+            self._ensure_no_body()
+            if route == 'ide_extensions':
+                return facade.list_ide_extensions(token), 200
+            return facade.get_ide_extension_package(token, parameters['release_id']), 200
         if route in {"content_context", "content_collections", "content_manifest", "content_object", "content_verify"}:
             if query:
                 raise PlatformHTTPError(400, "invalid_request", "Unexpected query parameter")

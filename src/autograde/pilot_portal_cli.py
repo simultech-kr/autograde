@@ -126,6 +126,7 @@ def run(config, *, isolated=False):
         exam_papers = None
         student_materials = None
         content_service = None
+        extension_distribution = None
         web_module_checks = {}
         if identities is not None:
             web_module_checks['instructor_identity'] = identities.check_ready
@@ -135,9 +136,11 @@ def run(config, *, isolated=False):
             from .exam_papers import ExamPaperService
             from .student_materials import StudentMaterialService
             from .content_store import ContentService
+            from .extension_distribution import ExtensionDistribution
             exam_papers = ExamPaperService(state, paths.root / 'exam-papers')
             student_materials = StudentMaterialService(state, paths.root / 'student-materials')
             content_service = ContentService(state, paths.root / 'content')
+            extension_distribution = ExtensionDistribution(state, paths.root / 'ide-extensions')
             assignments = AssignmentAdminService(state, paths, course_status=lambda key: courses.get_course(key)["status"])
             workers.append(assignments)
             rubrics = None
@@ -156,11 +159,13 @@ def run(config, *, isolated=False):
                 exam_papers=exam_papers,
                 student_materials=student_materials,
                 content_service=content_service,
+                extension_distribution=extension_distribution,
                 next_ui_policy=NextResultsPolicy(config),
                 submissions=lambda key, auth: services[key].instructor_dashboard_page(auth, portal=True),
                 submission_updates=lambda key, auth: services[key].instructor_dashboard_updates(auth, portal=True),
                 submission_review=lambda key, auth, sid, index, **options: services[key].instructor_submission_page(auth, sid, index, **options))
-        api = CourseAPI(services, secret, courses=courses, student_materials=student_materials, content_service=content_service)
+        api = CourseAPI(services, secret, courses=courses, student_materials=student_materials, content_service=content_service,
+                        extension_distribution=extension_distribution)
         web = CoursePortal(services, secret, values["web_public_base_url"], values["public_base_url"],
                            courses=courses, instructor=controller, exam_papers=exam_papers, student_materials=student_materials)
         servers = []

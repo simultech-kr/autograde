@@ -134,7 +134,7 @@ export function ClassroomDashboard() {
   const students = stableStudents(validData?.students || []).filter(s => (!search || `${s.student_key} ${s.student_name}`.includes(search)) && (!assignment || filter === "all" || (filter === "submitted" ? s.submission.submitted : !s.submission.submitted && s.submission.state !== "not_assigned")));
   return <AppShell testId="classroom-dashboard">
     <PageHeading eyebrow="수업 운영 / 실습 교실" title="학생 활동" description="IDE 연결·수업 활동·공식 제출을 확인하고 학생에게 IDE 작업을 요청합니다." label="실시간 · 학생 확인 후 실행" />
-    <nav className={styles.links}><a href={`/app${course ? `?course_key=${encodeURIComponent(course)}` : ""}`}>제출·채점 현황</a><a href={course ? `/courses/${encodeURIComponent(course)}/instructor` : "/instructor"}>수업 관리</a></nav>
+    <nav className={styles.links}><a href={`/app${course ? `?course_key=${encodeURIComponent(course)}` : ""}`}>제출·채점 현황</a><a href={course ? `/courses/${encodeURIComponent(course)}/instructor` : "/instructor"}>수업 관리</a>{course && <a href={`/courses/${encodeURIComponent(course)}/instructor/extensions`}>IDE 확장 배포</a>}</nav>
     {error && <div role="alert" className={styles.notice}><p>{error.message}</p>{error.terminal || !identity ? <a href={classroomEntry(course)}>교수자 인증</a> : <button onClick={() => setRefresh(n => n + 1)}>다시 연결</button>}{!identity && !error.terminal && <button onClick={() => setBoot(n => n + 1)}>다시 조회</button>}</div>}
     {!identity && !error && <p role="status">교수자 접근 권한 확인 중… <a href={classroomEntry(course)}>교수자 인증</a></p>}
     {identity && <>

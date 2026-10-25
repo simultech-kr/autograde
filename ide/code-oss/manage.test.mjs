@@ -339,6 +339,7 @@ test('fresh runtime seeds first-boot user settings privately before the workbenc
     'workbench.enableExperiments': false,
     'extensions.autoCheckUpdates': false,
     'extensions.autoUpdate': false,
+    'extensions.autoRestart': false,
     'update.mode': 'none',
   };
   assert.deepEqual(readJson(settings), expected);

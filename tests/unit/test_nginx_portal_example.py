@@ -85,3 +85,27 @@ def test_content_upload_limit_is_private_and_scoped():
     assert 'client_max_body_size 64k;' in web
     assert '/content/' not in api
     assert 'alias ' not in config
+
+
+def test_vsix_upload_limit_does_not_enlarge_general_or_student_api_bodies():
+    root = Path(__file__).resolve().parents[2]
+    route = 'location ~ ^/courses/[a-z0-9_-]+/instructor/extensions$ {'
+    portal = (root / 'config/nginx-autograde-portal.conf.example').read_text()
+    web, api = portal.split('server {')[1:]
+    before, rest = web.split(route)
+    location = rest.split('}', 1)[0]
+    assert 'client_max_body_size 64k;' in before
+    assert 'client_max_body_size 70m;' in location
+    assert 'proxy_request_buffering off;' in location
+    assert 'proxy_pass http://127.0.0.1:18081;' in location
+    assert 'access_log off;' in location
+    assert '/instructor/extensions' not in api
+    assert 'client_max_body_size 26m;' in api
+    pilot = (root / 'config/nginx-autograde-pilot.conf.example').read_text()
+    prefix, tail = pilot.split(route)
+    location = tail.split('}', 1)[0]
+    assert 'client_max_body_size 26m;' in prefix
+    assert 'client_max_body_size 70m;' in location
+    assert 'proxy_request_buffering off;' in location
+    assert 'proxy_pass http://autograde_loopback;' in location
+    assert 'alias ' not in portal + pilot

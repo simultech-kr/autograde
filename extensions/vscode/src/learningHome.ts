@@ -24,6 +24,7 @@ const actions = {
   accepted: { command: "autograde.acceptedAssignmentHistory", label: "수락 이력 · 과제 전환", session: true, trust: false, workspace: false },
   materials: { command: "autograde.studentMaterials", label: "내 배포 자료 · PDF / ZIP 받기", session: true, trust: false, workspace: false },
   content: { command: "autograde.syncContent", label: "강의자료 업데이트 · 변경분 받기 / 내 폴더에 저장", session: true, trust: false, workspace: false },
+  extensions: { command: "autograde.manageCourseExtensions", label: "수업 확장 설치·업데이트 확인", session: true, trust: true, workspace: true },
   submit: { command: "autograde.submitCurrentCommit", label: "현재 과제 제출", session: true, trust: true, workspace: true },
   result: { command: "autograde.viewLatestResult", label: "현재 제출 결과", session: true, trust: false, workspace: false },
   history: { command: "autograde.submissionHistory", label: "제출 이력 · 코드 복원", session: true, trust: false, workspace: false },
@@ -103,7 +104,7 @@ aside { margin-top: 28px; padding-top: 16px; border-top: 1px solid var(--vscode-
 <p class="status" role="status" aria-live="polite">${status} · ${state.hasWorkspace ? "작업 영역 열림" : "작업 영역 없음"}${state.trusted ? "" : " · 제한 모드"}${state.busy ? " · 작업 진행 중" : ""}</p>
 <div class="grid">
 <section aria-labelledby="connect"><h2 id="connect">1. 수업 연결</h2><p>교수자가 안내한 채점 서버 주소를 설정하세요. 학생 웹에서 받은 수령 코드를 입력합니다.</p><div class="actions">${button("configure")}${button("connection")}${button("claim", true)}</div></section>
-<section aria-labelledby="resume"><h2 id="resume">2. 실습과 배포 자료</h2><p>${state.sharedSession ? "이번 실습의 새 폴더에 과제를 받습니다. 이전 작업은 제출 이력에서 복원할 수 있습니다. 코드와 자료를 보관하려면 내 학습내용 내보내기를 사용하세요." : "IDE를 다시 열었다면 새 수령 코드로 연결한 뒤 기존 폴더를 여세요. 강의자료는 학생별 캐시에 변경분만 받고, 필요할 때 별도 폴더에 저장합니다. 과제 코드는 덮어쓰지 않습니다."}</p><div class="actions">${button("open")}${button("accepted")}${button("content")}${button("materials")}</div></section>
+<section aria-labelledby="resume"><h2 id="resume">2. 실습과 배포 자료</h2><p>${state.sharedSession ? "이번 실습의 새 폴더에 과제를 받습니다. 이전 작업은 제출 이력에서 복원할 수 있습니다. 코드와 자료를 보관하려면 내 학습내용 내보내기를 사용하세요." : "IDE를 다시 열었다면 새 수령 코드로 연결한 뒤 기존 폴더를 여세요. 강의자료는 학생별 캐시에 변경분만 받고, 필요할 때 별도 폴더에 저장합니다. 과제 코드는 덮어쓰지 않습니다."}</p><div class="actions">${button("open")}${button("accepted")}${button("content")}${button("materials")}${button("extensions")}</div></section>
 <section aria-labelledby="submit"><h2 id="submit">3. 제출과 피드백</h2><p>제출할 과제 폴더를 확인하세요. 제출 접수와 채점 완료는 별도이며, 현재 제출의 결과와 이전 이력을 확인할 수 있습니다.</p><div class="actions">${button("submit", true)}${button("result")}${button("history")}${button("exportLearning")}</div></section>
 </div>
 ${state.sharedSession ? `<aside aria-label="공용 실습 공간"><h2>공용 PC · 이번 실습만 보관</h2><p>Autograde IDE를 완전히 종료하면 이번 실행의 코드·자료·IDE 임시 기록을 정리합니다. 서버에 접수된 제출본과 별도로 내보낸 폴더·ZIP은 보존합니다. 제출하거나 내보내지 않은 코드도 삭제되므로 필요한 내용은 먼저 내보내세요. Mac에서는 창 닫기만으로 앱이 종료되지 않을 수 있습니다.</p>${state.sessionNeedsRestart ? '<p role="alert">이 학습 공간에서는 새 학생으로 다시 연결할 수 없습니다. 필요한 코드를 내보낸 뒤 실습을 종료하고 새로 실행하세요.</p>' : ''}<div class="actions">${button("endSession")}</div></aside>` : ''}

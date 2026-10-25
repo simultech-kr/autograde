@@ -68,6 +68,20 @@ server {
         proxy_set_header X-Forwarded-Proto https;
     }
 
+    # Course-authorized VS Code VSIX upload: 64 MiB plus multipart overhead.
+    # Packages stay private; all student downloads use authenticated API routes.
+    location ~ ^/courses/[a-z0-9_-]+/instructor/extensions$ {
+        client_max_body_size 70m;
+        proxy_request_buffering off;
+        limit_req zone=autograde_general burst=20 nodelay;
+        proxy_pass http://autograde_loopback;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto https;
+        access_log off;
+        proxy_read_timeout 120s;
+        proxy_send_timeout 120s;
+    }
+
     location / {
         limit_req zone=autograde_general burst=80 nodelay;
         proxy_pass http://autograde_loopback;

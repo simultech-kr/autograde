@@ -105,7 +105,7 @@ node ide/code-oss/manage.mjs run --source .cache/code-oss --workspace /absolute/
 개발 실행은 저장소의 `.cache/ide/` 아래 `user-data`, `extensions`, `shared-data`를 별도로
 사용한다. 작업 폴더는 이 프로필 밖에 보관한다. 별도 프로필은 기존 VS Code 설정과 섞이지
 않게 하는 기능이며, 학생 간 파일 접근을 격리하는 OS 보안 기능은 아니다.
-새 프로필에는 `runtime-settings.json`의 학습용 기본값 8개를 `user-data/User/settings.json`에
+새 프로필에는 `runtime-settings.json`의 학습용 기본값 9개를 `user-data/User/settings.json`에
 최초 한 번만 만든다. AI·자동 업데이트·사용량 수집 비활성 등의 초기값이며 사용자가 바꿀 수 있다.
 기존 설정 파일은 주석 있는 JSONC를 포함해 그대로 보존하며 덮어쓰지 않는다. 새 파일은
 배타적 생성과 소유자 읽기·쓰기 권한을 사용한다. 내장 프로필 확장은 창 수준 기본값 3개를 제공한다.
