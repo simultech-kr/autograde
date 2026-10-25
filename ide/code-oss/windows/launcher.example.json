@@ -1,0 +1,6 @@
+{
+  "schema": 1,
+  "distribution": "Ubuntu-24.04",
+  "user": "student",
+  "installRoot": "/opt/autograde-ide"
+}
