@@ -145,6 +145,7 @@ class HTTPFileResult:
     path: Path
     content_type: str = "application/octet-stream"
     headers: Mapping[str, str] = field(default_factory=dict)
+    retained_checkpoint: bool = False
 
 
 class PlatformHTTPError(RuntimeError):
@@ -682,6 +683,8 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
                 )
         if len(parts) == 5 and parts[:3] == ["", "v1", "assignments"]:
             identifier = self._identifier(parts[3])
+            if identifier is not None and parts[4] == "learning-checkpoints" and callable(getattr(facade, "save_learning_checkpoint", None)) and callable(getattr(facade, "list_learning_checkpoints", None)):
+                return ("learning_checkpoints", {"assignment_id": identifier}, frozenset({"GET", "POST"}))
             if identifier is not None and parts[4] == "document" and callable(getattr(facade, "get_assignment_document", None)):
                 return ("assignment_document", {"assignment_id": identifier}, frozenset({"GET"}))
             if identifier is not None and parts[4] == "download-diagnostics" and callable(getattr(facade, "report_download_diagnostic", None)):
@@ -714,6 +717,10 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
                     {"assignment_id": identifier},
                     frozenset({"POST"}),
                 )
+        if len(parts) == 7 and parts[:3] == ["", "v1", "assignments"] and parts[4] == "learning-checkpoints" and parts[6] == "bundle":
+            assignment_id, checkpoint_id = self._identifier(parts[3]), self._identifier(parts[5])
+            if assignment_id is not None and checkpoint_id is not None and callable(getattr(facade, "get_learning_checkpoint_bundle", None)):
+                return ("learning_checkpoint_bundle", {"assignment_id": assignment_id, "checkpoint_id": checkpoint_id}, frozenset({"GET"}))
         if len(parts) == 5 and parts[:4] == ["", "v1", "me", "sessions"]:
             identifier = self._identifier(parts[4])
             if identifier is not None:
@@ -981,6 +988,15 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
         if route == "bundle_history":
             self._ensure_no_body()
             return facade.get_bundle_history(self._bearer_token(), parameters["assignment_id"]), 200
+        if route == "learning_checkpoints":
+            token = self._bearer_token()
+            if self.command == "GET":
+                self._ensure_no_body()
+                return facade.list_learning_checkpoints(token, parameters["assignment_id"]), 200
+            return self._invoke_bundle_submission(facade, token, self._idempotency_key(), parameters["assignment_id"], checkpoint=True), 200
+        if route == "learning_checkpoint_bundle":
+            self._ensure_no_body()
+            return facade.get_learning_checkpoint_bundle(self._bearer_token(), parameters["assignment_id"], parameters["checkpoint_id"]), 200
         if route == "bundle_source":
             self._ensure_no_body()
             return facade.get_bundle_source(self._bearer_token(), parameters["submission_id"]), 200
@@ -1069,6 +1085,8 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
         access_token: str,
         idempotency_key: str,
         assignment_id: str,
+        *,
+        checkpoint: bool = False,
     ) -> Any:
         """Spool one bounded gzip request and keep its lifetime inside the call."""
 
@@ -1104,7 +1122,8 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
                 remaining -= len(chunk)
             upload.flush()
             upload.seek(0)
-            return facade.submit_bundle(
+            operation = facade.save_learning_checkpoint if checkpoint else facade.submit_bundle
+            return operation(
                 access_token,
                 idempotency_key,
                 assignment_id,
@@ -1438,13 +1457,24 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
             flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
             descriptor = os.open(path, flags)
             info = os.fstat(descriptor)
-            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+            allowed_links = (0, 1) if result.retained_checkpoint is True else (1,)
+            # A retained checkpoint may be pruned after open(). Its pinned
+            # descriptor still streams the exact validated inode safely.
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink not in allowed_links:
                 raise ValueError("file response must be one regular file")
             if info.st_size < 0 or info.st_size > self.platform_server.max_file_response_bytes:
                 raise ValueError("file response is too large")
         except Exception as exc:
             if descriptor is not None:
                 os.close(descriptor)
+            if isinstance(exc, FileNotFoundError) and result.retained_checkpoint is True:
+                if allow_fallback:
+                    self._send_error_result(PlatformHTTPError(
+                        410, "checkpoint_expired", "이 저장 버전은 보관 기간이 끝났습니다. 저장 목록을 새로 확인하세요.",
+                    ))
+                else:
+                    self.close_connection = True
+                return
             emit_operator_event(
                 "http_file_response_unexpected_exception",
                 component="http",
@@ -1544,7 +1574,8 @@ def _normalize_result(value: Any, default_status: int) -> HTTPResult | HTTPFileR
         for attribute in ("status", "path", "content_type", "headers")
     ):
         return HTTPFileResult(
-            value.status, Path(value.path), value.content_type, value.headers
+            value.status, Path(value.path), value.content_type, value.headers,
+            retained_checkpoint=getattr(value, "retained_checkpoint", False),
         )
     # Keep the application layer independent from the transport module while
     # still allowing a small response dataclass for HTML and redirects.

@@ -5,6 +5,8 @@ import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { execFileSync, spawn } from 'node:child_process';
+import { policySources } from './extension-install-policy.mjs';
+import { compilePolicyRuntime } from './policy-runtime.mjs';
 import { learnerEnvironment, learnerLayout, prepareLearner, validateLearningOptions, verifyRestrictedLaunch } from './learning-profile.mjs';
 import { sharedSessionLayout, prepareSharedSession, markSessionLaunching, recordSessionProcess,
   cleanupSharedSession, superviseSharedChild } from './shared-session.mjs';
@@ -171,8 +173,14 @@ export function checkSource(source, upstream) {
     throw new Error('Upstream version or Node requirement differs from the pinned version');
   }
   const dirty = git(source, 'diff', '--name-only', 'HEAD').split('\n').filter(Boolean);
-  if (dirty.some(file => file !== 'product.json')) throw new Error(`Refusing modified upstream source: ${dirty.join(', ')}`);
   const markerPath = path.join(source, markerName);
+  const previousPolicy = fs.existsSync(markerPath) ? readJson(markerPath).policySources ?? {} : {};
+  for (const file of Object.keys(previousPolicy)) {
+    requirePolicyPath(file);
+    requireRegular(path.join(source, file));
+    if (digest(fs.readFileSync(path.join(source, file))) !== previousPolicy[file]) throw new Error(`Managed IDE policy was modified: ${file}; preserve edits and use a clean checkout`);
+  }
+  if (dirty.some(file => file !== 'product.json' && !(file in previousPolicy))) throw new Error(`Refusing modified upstream source: ${dirty.join(', ')}`);
   if (!fs.existsSync(markerPath)) {
     if (dirty.length) throw new Error('Refusing an unowned modified product.json');
     for (const name of extensionNames) {
@@ -203,9 +211,33 @@ function writeTree(directory, files) {
   }
 }
 
+function requirePolicyPath(file) {
+  if (!/^src\/[A-Za-z0-9_./-]+\.ts$/.test(file) || file.split('/').some(part => part === '..' || part === '.' || !part)) throw new Error('Invalid managed policy source path');
+}
+
+function expectedPolicy(source, options) {
+  const files = (options.policySources ?? policySources)(file => git(source, 'show', `HEAD:${file}`) + '\n');
+  for (const [file, bytes] of files) {
+    requirePolicyPath(file);
+    files.set(file, Buffer.from(bytes));
+  }
+  return files;
+}
+
 export function prepare(source, options = {}) {
   const upstream = options.upstream ?? readJson(path.join(here, 'upstream.json'));
   source = checkSource(path.resolve(source), upstream);
+  const policy = expectedPolicy(source, options);
+  const previousPolicy = fs.existsSync(path.join(source, markerName)) ? readJson(path.join(source, markerName)).policySources ?? {} : {};
+  for (const file of policy.keys()) {
+    let parent = path.dirname(path.join(source, file));
+    while (parent !== source) { if (fs.existsSync(parent)) requireDirectory(parent); parent = path.dirname(parent); }
+    if (fs.existsSync(path.join(source, file)) && !(file in previousPolicy)) {
+      requireRegular(path.join(source, file));
+      const tracked = git(source, 'ls-files', '--', file);
+      if (!tracked) throw new Error(`Refusing unowned IDE policy source: ${file}`);
+    }
+  }
   const extensionRoot = path.resolve(options.extensionRoot ?? path.join(repoRoot, 'extensions/vscode'));
   const inputHash = sourceFingerprint(extensionRoot);
   (options.compile ?? compileExtension)(extensionRoot);
@@ -217,22 +249,26 @@ export function prepare(source, options = {}) {
   const bundles = { autograde: extension, 'autograde-ide-profile': profile };
   const marker = {
     schema: 1, commit: upstream.commit, productHash: digest(product), extensionInputsHash: inputHash,
+    policySources: hashes(policy),
     extensionVersion: JSON.parse(extension.get('package.json')).version,
     extensions: Object.fromEntries(Object.entries(bundles).map(([name, files]) => [name, hashes(files)])),
   };
   // Stage all bytes before changing the checkout. Keep previous generated bundles recoverable.
   const staging = fs.mkdtempSync(path.join(source, '.autograde-stage-'));
   for (const [name, files] of Object.entries(bundles)) writeTree(path.join(staging, name), files);
+  writeTree(path.join(staging, 'policy-source'), policy);
   fs.writeFileSync(path.join(staging, 'product.json'), product);
   fs.writeFileSync(path.join(staging, markerName), jsonBytes(marker));
   const moved = [];
   const installed = [];
   try {
-    for (const name of [...extensionNames.map(name => `extensions/${name}`), 'product.json', markerName]) {
+    for (const name of [...extensionNames.map(name => `extensions/${name}`), 'product.json', ...policy.keys(), markerName]) {
       const target = path.join(source, name);
-      const staged = path.join(staging, path.basename(name));
+      const staged = policy.has(name) ? path.join(staging, 'policy-source', name) : path.join(staging, path.basename(name));
+      fs.mkdirSync(path.dirname(target), { recursive: true });
       if (fs.existsSync(target)) {
-        const backup = path.join(staging, `previous-${path.basename(name)}`);
+        const backup = policy.has(name) ? path.join(staging, 'previous-policy-source', name) : path.join(staging, `previous-${path.basename(name)}`);
+        fs.mkdirSync(path.dirname(backup), { recursive: true });
         fs.renameSync(target, backup);
         moved.push([target, backup]);
       }
@@ -240,7 +276,11 @@ export function prepare(source, options = {}) {
       installed.push(target);
     }
   } catch (error) {
-    for (const target of installed.reverse()) fs.renameSync(target, path.join(staging, `failed-${path.basename(target)}`));
+    for (const target of installed.reverse()) {
+      const failed = path.join(staging, 'failed', path.relative(source, target));
+      fs.mkdirSync(path.dirname(failed), { recursive: true });
+      fs.renameSync(target, failed);
+    }
     for (const [target, backup] of moved.reverse()) fs.renameSync(backup, target);
     throw error;
   }
@@ -257,12 +297,13 @@ export function verify(source, options = {}) {
   const expected = extensionBundle(extensionRoot);
   const profile = walk(options.profileRoot ?? path.join(here, 'profile'));
   const marker = readJson(path.join(source, markerName));
+  if (!equal(marker.policySources, hashes(expectedPolicy(source, options)))) throw new Error('IDE installation policy is stale; run prepare');
   if (marker.extensionInputsHash !== sourceFingerprint(extensionRoot)) throw new Error('Extension sources changed; run prepare to compile and bundle again');
   if (!equal(marker.extensions.autograde, hashes(expected))
       || !equal(marker.extensions['autograde-ide-profile'], hashes(profile))) {
     throw new Error('Bundled extension/profile is stale; compile the extension and run prepare');
   }
-  return { source, commit: upstream.commit, extensionVersion: marker.extensionVersion, files: expected.size, database: 'unchanged-sqlite', enforcement: false };
+  return { source, commit: upstream.commit, extensionVersion: marker.extensionVersion, files: expected.size, database: 'unchanged-sqlite', enforcement: false, managedExtensionInstall: true };
 }
 
 export function launchSpec(source, runtime, workspace, platform = process.platform) {
@@ -354,6 +395,7 @@ export function main(args) {
   for (const required of [path.join(source, 'out/main.js'), spec.executable]) {
     if (!fs.existsSync(required)) throw new Error(`Code-OSS is not built: ${required}. Follow docs/operations/autograde-ide-poc.md`);
   }
+  compilePolicyRuntime(source);
   // No prelaunch downloads and no shared VS Code profile. No OS/network controls.
   if (learner) {
     learner = lifetime === 'shared'

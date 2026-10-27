@@ -1,6 +1,13 @@
 /** Keep related pickers from replacing a claim input or a folder choice in flight. */
 export class AssignmentOperationGate {
   private active = false;
+  public get isBusy(): boolean { return this.active; }
+
+  public async tryRun<T>(action: () => Promise<T>): Promise<T | undefined> {
+    if (this.active) return undefined;
+    this.active = true;
+    try { return await action(); } finally { this.active = false; }
+  }
 
   public async run(action: () => Promise<unknown>, onBusy: () => void): Promise<void> {
     if (this.active) {

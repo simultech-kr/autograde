@@ -6,9 +6,9 @@ import * as path from "node:path";
 import test from "node:test";
 import { SharedLearningSession, SHARED_AUTH_USED, SHARED_SESSION_MARKER } from "../sharedLearningSession";
 
-async function fixture() {
+async function fixture(legacy = false) {
   const parent = await mkdtemp(path.join(await realpath(os.tmpdir()), "ag-shared-extension-"));
-  const id = randomBytes(12).toString("hex"), root = path.join(parent, `e-${id}`);
+  const id = randomBytes(12).toString("hex"), root = path.join(parent, legacy ? `e-${id}` : "current");
   await mkdir(root, {mode: 0o700});
   const workspace = path.join(root, "workspace"), materials = path.join(root, "materials");
   await mkdir(workspace, {mode: 0o700}); await mkdir(materials, {mode: 0o700});
@@ -78,6 +78,7 @@ test("symlinked or corrupt authentication-used marker is never treated as an unu
     const file = path.join(f.root, SHARED_AUTH_USED), external = path.join(f.parent, "external.json");
     await writeFile(external, JSON.stringify({schema: 1, sessionId: f.id, authenticated: true}), {mode: 0o600});
     await symlink(external, file); await assert.rejects(f.read()); await rm(file);
+    await symlink(path.join(f.parent, "missing.json"), file); await assert.rejects(f.read(), /공용 실습/); await rm(file);
     await writeFile(file, JSON.stringify({schema: 1, sessionId: "other", authenticated: true}), {mode: 0o600});
     await assert.rejects(f.read(), /공용 실습/);
     assert.equal(JSON.parse(await readFile(external, "utf8")).authenticated, true);
@@ -101,4 +102,21 @@ test("nonprivate session or marker permissions fail closed", {skip: process.plat
     await chmod(f.root, 0o755); await assert.rejects(f.read(), /공용 실습/); await chmod(f.root, 0o700);
     await chmod(path.join(f.root, SHARED_SESSION_MARKER), 0o644); await assert.rejects(f.read(), /공용 실습/);
   } finally { await f.dispose(); }
+});
+
+
+test("a fixed path cannot reuse an old activated session identity", async () => {
+  const f = await fixture();
+  try {
+    const session = (await f.read())!;
+    await writeFile(path.join(f.root, SHARED_SESSION_MARKER), JSON.stringify({...f.marker, sessionId: "a".repeat(24)}), {mode: 0o600});
+    await assert.rejects(session.assertWorkspacePath(f.workspace), /공용 실습/);
+    await assert.rejects(session.markAuthenticated(), /공용 실습/);
+  } finally { await f.dispose(); }
+});
+
+test("legacy session roots remain readable during launcher migration", async () => {
+  const f = await fixture(true);
+  try { await (await f.read())!.assertWorkspacePath(f.workspace); }
+  finally { await f.dispose(); }
 });

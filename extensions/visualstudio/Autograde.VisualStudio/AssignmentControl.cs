@@ -66,6 +66,8 @@ namespace Autograde.VisualStudio
         readonly CancellationTokenSource lifetime = new CancellationTokenSource();
         readonly JoinableTaskCollection pendingTasks = ThreadHelper.JoinableTaskContext.CreateCollection();
         readonly JoinableTaskFactory jobs;
+        readonly ExamModeControl examMode;
+        bool updatingAssignmentList;
         CancellationTokenSource operation;
         ServiceClient client;
         bool busy, probing, disposed;
@@ -92,6 +94,8 @@ namespace Autograde.VisualStudio
             ThemeResources.Label(receiptStatus);
             ThemeResources.Tabs(pages);
             jobs = ThreadHelper.JoinableTaskContext.CreateFactory(pendingTasks);
+            examMode = new ExamModeControl(jobs);
+            address.TextChanged += (_, __) => { if (client != null && address.Text != client.BaseUrl) examMode.SetScope(null, null, null); };
             // Fixed chrome/actions, only the active tab scrolls. Never put all commands above the results.
             var layout = new Grid { Margin = new Thickness(8) };
             layout.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
@@ -137,6 +141,7 @@ namespace Autograde.VisualStudio
             diagPanel.Children.Add(copy); diagnosticDetails.Visibility = Visibility.Collapsed;
             settingsExpander.Content = settingsPanel; taskPanel.Children.Add(settingsExpander);
             taskPanel.Children.Add(loginPanel);
+            taskPanel.Children.Add(new Expander { Header = "시험 모드 · 별도 Agent 상태", Content = examMode });
             var panel = settingsPanel;
             AddLabel(panel, "API 서버 주소 (HTTPS 또는 localhost HTTP)"); panel.Children.Add(address);
             AddButton(panel, "주소 적용 / 연결 확인", async ct =>
@@ -184,6 +189,7 @@ namespace Autograde.VisualStudio
             AddButton(panel, "과제 새로고침", ct => ReloadAsync(null, ct));
             panel.Children.Add(assignments);
             assignments.SelectionChanged += (_, __) => {
+                ThreadHelper.ThrowIfNotOnUIThread();
                 history.Items.Clear(); inspectedResult.Clear();
                 documentSelection.Select((string)(assignments.SelectedItem as AssignmentItem)?.Value["assignment_id"]);
                 RestoreWorkspace();
@@ -233,12 +239,14 @@ namespace Autograde.VisualStudio
             });
             submitButton = AddButton(footerActions, "파일 확인 후 제출", async ct =>
             {
+                await jobs.SwitchToMainThreadAsync(ct);
                 RequireClient(); string id = Id, root = folder.Text;
                 if (!CanSubmitSelected()) throw new InvalidOperationException("이 과제는 현재 제출할 수 없습니다. 마감·공개 상태를 수락 이력에서 새로 확인하거나 교수자에게 문의하세요.");
                 if (string.IsNullOrWhiteSpace(root)) throw new InvalidOperationException("제출 폴더를 선택하세요.");
                 WorkspaceBinding.VerifyActive(root, WorkspaceOpener.CurrentDirectory(), client.BaseUrl, id);
                 if (MessageBox.Show("VS에서 모두 저장(Ctrl+Shift+S)했나요? 저장된 디스크 파일만 제출합니다.", "Autograde", MessageBoxButton.OKCancel) != MessageBoxResult.OK) return;
                 var snapshot = await Task.Run(() => { Bundle.VerifyWorkspace(root, client.BaseUrl, id); return Bundle.CreateSubmission(root, ct); }, ct);
+                await jobs.SwitchToMainThreadAsync(ct);
                 if (!SubmissionReviewDialog.Confirm(this, (string)Selected["title"], root, snapshot))
                 {
                     output.Text = "제출을 취소했습니다. 서버로 파일을 보내지 않았습니다.";
@@ -396,6 +404,9 @@ namespace Autograde.VisualStudio
             ((TabItem)pages.Items[1]).IsEnabled = ((TabItem)pages.Items[2]).IsEnabled = authenticated;
             if (!authenticated) pages.SelectedIndex = 0;
             var selected = (assignments.SelectedItem as AssignmentItem)?.Value;
+            if (!updatingAssignmentList)
+                examMode.SetScope(authenticated && address.Text == client.BaseUrl ? client : null,
+                    authenticated ? client.BaseUrl : null, authenticated ? (string)selected?["assignment_id"] : null);
             identity.Text = selected == null ? "수령 코드로 과제를 시작하거나 기존 과제 폴더를 여세요." :
                 "현재 제출 과제: " + (string)selected["course_key"] + " · " + (string)selected["title"] +
                 (string.IsNullOrWhiteSpace(folder.Text) ? "\n연결된 제출 폴더 없음" : "\n제출 폴더: " + folder.Text);
@@ -453,6 +464,7 @@ namespace Autograde.VisualStudio
                 return;
             }
             Selected["document"] = document.Metadata.ToJson();
+            await jobs.SwitchToMainThreadAsync(ct);
             AssignmentDocumentDialog.Open(this, title, document);
             if (!IsDocumentCurrent(current, generation, id)) return;
             documentSelection.MarkRead(generation, document); UpdateDocumentNotice();
@@ -563,6 +575,7 @@ namespace Autograde.VisualStudio
         }
         void RestoreWorkspace()
         {
+            ThreadHelper.ThrowIfNotOnUIThread();
             folder.Clear();
             var id = (string)(assignments.SelectedItem as AssignmentItem)?.Value["assignment_id"];
             if (id == null || client == null) return;
@@ -618,6 +631,7 @@ namespace Autograde.VisualStudio
         }
         void ClearScreen(bool clearResults = true)
         {
+            examMode.SetScope(null, null, null);
             workspacePaths.Clear(); // Never reuse another login's remembered local targets.
             documentSelection.Reset();
             PauseGradingWatch(); receiptWatch = null;
@@ -695,12 +709,17 @@ namespace Autograde.VisualStudio
         void ApplyAssignments(JArray items, string id)
         {
             var selected = AssignmentSelection.Select(items, id);
-            assignments.Items.Clear();
-            foreach (var item in items.OfType<JObject>().Where(a => (string)a["delivery_mode"] == "bundle"))
+            updatingAssignmentList = true;
+            try
             {
-                var row = new AssignmentItem { Value = item }; assignments.Items.Add(row);
+                assignments.Items.Clear();
+                foreach (var item in items.OfType<JObject>().Where(a => (string)a["delivery_mode"] == "bundle"))
+                {
+                    var row = new AssignmentItem { Value = item }; assignments.Items.Add(row);
+                }
+                assignments.SelectedItem = assignments.Items.Cast<AssignmentItem>().FirstOrDefault(row => ReferenceEquals(row.Value, selected));
             }
-            assignments.SelectedItem = assignments.Items.Cast<AssignmentItem>().FirstOrDefault(row => ReferenceEquals(row.Value, selected));
+            finally { updatingAssignmentList = false; UpdateCompactState(); }
         }
         void ShowResult(JObject result, TextBox destination = null, string context = null)
         {
@@ -734,7 +753,7 @@ namespace Autograde.VisualStudio
         public void Dispose()
         {
             if (disposed) return;
-            disposed = true; documentSelection.Reset(); health.Stop(); PauseGradingWatch(); lifetime.Cancel();
+            disposed = true; examMode.Dispose(); documentSelection.Reset(); health.Stop(); PauseGradingWatch(); lifetime.Cancel();
             ThreadHelper.JoinableTaskFactory.Run(async () => await pendingTasks.JoinTillEmptyAsync());
             client?.Dispose(); lifetime.Dispose();
         }

@@ -29,7 +29,7 @@ function fixture(t) {
   write(path.join(resources, manifest.node), 'fixture runtime', 0o700);
   return { root, base, resources, manifest, load: () => loadMacBundle(resources, { platform: 'darwin' }) };
 }
-const sessionRoots = base => fs.readdirSync(base).filter(name => /^e-[0-9a-f]{24}$/.test(name)).map(name => path.join(base, name));
+const sessionRoots = base => fs.readdirSync(base).filter(name => name === 'current' || /^e-[0-9a-f]{24}$/.test(name)).map(name => path.join(base, name));
 const fixtureStart = (_executable, _args, options) => spawn(process.execPath, ['-e', 'setTimeout(() => {}, 120)'], options);
 
 test('relocated Unicode app loads only bundled files without Git, npm or system Node', t => {
@@ -112,7 +112,7 @@ test('icon runtime removes code, materials, profiles and temp files after real c
   await runMacSession(bundle, { runtimeBase: f.base, start: fixtureStart, report: event => {
     if (event.event !== 'ide-started') return;
     const [newRoot] = sessionRoots(f.base);
-    assert.notEqual(newRoot, oldRoot);
+    assert.equal(newRoot, oldRoot);
     assert.deepEqual(fs.readdirSync(path.join(newRoot, 'workspace')), []);
   } });
   assert.deepEqual(sessionRoots(f.base), []);

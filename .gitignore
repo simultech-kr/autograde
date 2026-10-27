@@ -47,6 +47,7 @@ coverage/
 artifacts/
 workspace/
 submissions/
+*.learning-checkpoints/
 .autograde-data/
 .platform-data/
 .data/

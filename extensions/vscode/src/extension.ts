@@ -90,6 +90,8 @@ import { LearningExportView, LEARNING_EXPORT_COMMAND } from "./learningExportVie
 import { ManagedExtensions, MANAGED_EXTENSIONS_COMMAND } from "./managedExtensions";
 import { ManagedExtensionsApi } from "./managedExtensionsApi";
 import { ManagedExtensionsInstaller } from "./managedExtensionsView";
+import { LearningCheckpointView, SAVE_LEARNING_CHECKPOINT_COMMAND, RESTORE_LEARNING_CHECKPOINT_COMMAND } from "./learningCheckpointView";
+import { learningCheckpointLabel, type LearningCheckpointStatus } from "./learningCheckpoint";
 let diagnosticExtensionVersion = "0.5.8";
 
 const SUCCESSFUL_SUBMISSION_STATES = new Set(["accepted", "queued", "running", "graded", "published"]);
@@ -165,6 +167,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   let classroomIdentity: number | undefined;
   let classroomCommands: ClassroomCommands | undefined;
   let managedExtensions: ManagedExtensions | undefined;
+  let learningCheckpoints: LearningCheckpointView | undefined;
+  let checkpointStatus: LearningCheckpointStatus = {state: "inactive"};
   let classroomCommandStatus = "교수자 요청 대기 · 과제 연결 필요";
   let examAssignmentId: string | undefined;
   const examScope = (): ExamScope | undefined => {
@@ -223,7 +227,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       ...Array.from(assignmentWorkspaces.attached.values()).map(uri => uri.fsPath),
     ],
   });
-  assignmentWorkspaces.onSelected = id => { examAssignmentId = id; examMode.reconcile(); classroom.reconcile(); classroomCommands?.reconcile(); managedExtensions?.reconcile(); };
+  assignmentWorkspaces.onSelected = id => { examAssignmentId = id; examMode.reconcile(); classroom.reconcile(); classroomCommands?.reconcile(); managedExtensions?.reconcile(); learningCheckpoints?.reconcile(); };
   let classroomStatus: ClassroomSharingStatus = "inactive";
   let classroomDisclosureIdentity: number | undefined;
   const learningHome = new LearningHomeView(() => ({
@@ -233,6 +237,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     learningPolicy: environment.policy,
     classroomStatus,
     classroomCommandStatus,
+    checkpointStatus: learningCheckpointLabel(checkpointStatus),
     sharedSession: Boolean(sharedSession),
     sessionNeedsRestart: Boolean(sharedSession?.authenticationUsed && !authenticationUiState),
   }));
@@ -246,12 +251,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   }, reportedEnvironment ?? { os: "linux", ide: "vscode" }, status => {
     classroomStatus = status; learningHome.refresh();
     classroomCommands?.reconcile();
-    managedExtensions?.reconcile();
+    managedExtensions?.reconcile(); learningCheckpoints?.reconcile();
     const identity = tokens.getSessionGeneration();
     if (status === "sharing" && classroomDisclosureIdentity !== identity) {
       classroomDisclosureIdentity = identity;
       void vscode.window.showInformationMessage(
-        "수업 상태 공유: 연결된 과제의 IDE 연결·저장 발생·제출 요청을 교수자에게 전달합니다. 코드 내용이나 다른 프로그램 활동은 수집하지 않습니다.",
+        "수업 상태 공유: 연결된 과제의 IDE 연결·저장 발생·제출 요청을 교수자에게 전달합니다. 활동 공유 자체는 코드 내용이나 다른 프로그램 활동을 수집하지 않습니다. 별도로 연결된 과제 코드는 변경 시 30초마다 서버에 저장하며, 공식 제출·채점은 별도입니다.",
         "공유 범위 보기",
       ).then(action => { if (action && identity === tokens.getSessionGeneration()) learningHome.show(); });
     }
@@ -272,7 +277,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     classroomIdentity = authenticated ? tokens.getSessionGeneration() : undefined;
     classroom.reconcile();
     classroomCommands?.reconcile();
-    managedExtensions?.reconcile();
+    managedExtensions?.reconcile(); learningCheckpoints?.reconcile();
     learningHome.refresh();
     await Promise.all([
       vscode.commands.executeCommand(
@@ -426,6 +431,25 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       void vscode.window.showInformationMessage("수령 코드 입력 또는 과제 작업이 진행 중입니다. 열린 입력창이나 진행 알림에서 완료·취소한 뒤 다시 선택하세요.");
     }),
   );
+  learningCheckpoints = new LearningCheckpointView(client, {
+    currentScope: () => {
+      const selected = assignmentWorkspaces.selected;
+      const uri = selected && assignmentWorkspaces.attached.get(path.resolve(selected.rootPath));
+      if (!authenticationUiState || !studentState.isActive() || !vscode.workspace.isTrusted || !selected || !uri
+        || classroomIdentity !== tokens.getSessionGeneration() || !["file", "vscode-remote"].includes(uri.scheme)
+        || !treeProvider.getAssignments().some(item => item.id === selected.assignment.id && isBundleAssignment(item))) return undefined;
+      return {baseUrl: transport.getBaseUrl(), generation: tokens.getSessionGeneration(), assignmentId: selected.assignment.id,
+        rootPath: selected.rootPath, scheme: uri.scheme, authority: uri.authority ?? ""};
+    },
+    isBusy: () => assignmentOperations.isBusy || submitting,
+    withCaptureLock: action => assignmentOperations.tryRun(action),
+    sharedSession,
+    connect: async (uri, scope, current) => {
+      const assignment = treeProvider.getAssignments().find(item => item.id === scope.assignmentId);
+      if (assignment && current()) await connectAssignmentFolder(assignmentWorkspaces, uri, assignment, current);
+    },
+    onStatus: status => { checkpointStatus = status; learningHome.refresh(); },
+  });
   classroomCommands = new ClassroomCommands(client, () => {
     const scope = classroom.getCommandContext();
     return scope && assignmentWorkspaces.selected ? {...scope, workspaceKey: assignmentWorkspaces.selected.rootPath} : undefined;
@@ -531,10 +555,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     endingSharedSession = true;
     try {
     const action = await vscode.window.showWarningMessage("공용 실습을 종료하면 이번 세션의 코드·자료·IDE 기록을 정리합니다.", {
-      modal: true, detail: "서버에 접수된 제출본과 세션 밖에 내보낸 파일은 보존됩니다. 제출하지 않은 코드가 필요하면 먼저 내보내세요. 종료를 취소하면 파일이 남아 있으므로 다음 학생에게 자리를 넘기지 마세요.",
+      modal: true, detail: "서버 저장이 확인된 작업본·공식 제출본과 세션 밖에 내보낸 파일은 보존됩니다. 종료 전에 현재 작업의 서버 저장을 잠시 시도합니다. 저장을 확인하지 못한 코드는 먼저 내보내세요. 종료를 취소하면 파일이 남아 있으므로 다음 학생에게 자리를 넘기지 마세요.",
     }, "먼저 내보내기", "실습 종료");
     if (action === "먼저 내보내기") { await vscode.commands.executeCommand("autograde.exportLearning"); return; }
     if (action !== "실습 종료") return;
+    const saved = await learningCheckpoints?.flushBeforeExit();
+    if (!saved && assignmentWorkspaces.selected) {
+      const decision = await vscode.window.showWarningMessage("최신 작업의 서버 저장을 확인하지 못했습니다.",
+        {modal: true, detail: "종료 후와 다음 시작 시 로컬 실습 파일이 정리됩니다. 서버에 저장되지 않은 코드는 복구할 수 없으므로 필요한 파일은 먼저 내보내세요."},
+        "먼저 내보내기", "저장 없이 종료");
+      if (decision === "먼저 내보내기") { await vscode.commands.executeCommand("autograde.exportLearning"); return; }
+      if (decision !== "저장 없이 종료") return;
+    }
     // Revoke best-effort; local exit/cleanup must remain available when offline.
     try { if (await tokens.hasSession()) await client.revokeCurrentSession(); } catch { /* The server session expires independently. */ }
     await tokens.clear();
@@ -548,10 +580,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   context.subscriptions.push(
     classroom,
+    learningCheckpoints,
+    vscode.commands.registerCommand(SAVE_LEARNING_CHECKPOINT_COMMAND, () => runCommand(() => learningCheckpoints!.saveNow())),
+    vscode.commands.registerCommand(RESTORE_LEARNING_CHECKPOINT_COMMAND, () => runAssignmentCommand(() => learningCheckpoints!.restore())),
     classroomCommands,
     managedExtensions,
     vscode.commands.registerCommand(MANAGED_EXTENSIONS_COMMAND, () => managedExtensions!.check(true)),
+    vscode.workspace.onDidChangeTextDocument(event => { if (event.contentChanges.length) learningCheckpoints?.recordEdit(event.document.uri); }),
     vscode.workspace.onDidSaveTextDocument(document => {
+      learningCheckpoints?.recordEdit(document.uri);
       // Never inspect or report unrelated workspaces, unsaved buffers, or non-file resources.
       const selected = assignmentWorkspaces.selected;
       if (classroomSaveCheckPending || !selected || !authenticationUiState
@@ -576,9 +613,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     learningHome,
     vscode.commands.registerCommand(LEARNING_HOME_COMMAND, () => learningHome.show()),
     vscode.commands.registerCommand(END_LEARNING_SESSION_COMMAND, () => runCommand(endSharedSession)),
-    vscode.workspace.onDidChangeWorkspaceFolders(() => { learningHome.refresh(); classroom.reconcile(); classroomCommands?.reconcile(); managedExtensions?.reconcile(); }),
+    vscode.workspace.onDidChangeWorkspaceFolders(() => { learningHome.refresh(); classroom.reconcile(); classroomCommands?.reconcile(); managedExtensions?.reconcile(); learningCheckpoints?.reconcile(); }),
     documentView,
-    treeProvider.onDidChangeTreeData(() => { documentView.reconcileAccepted(); classroom.reconcile(); classroomCommands?.reconcile(); managedExtensions?.reconcile(); }),
+    treeProvider.onDidChangeTreeData(() => { documentView.reconcileAccepted(); classroom.reconcile(); classroomCommands?.reconcile(); managedExtensions?.reconcile(); learningCheckpoints?.reconcile(); }),
     vscode.workspace.registerTextDocumentContentProvider(ASSIGNMENT_DOCUMENT_SCHEME, documentView),
     vscode.commands.registerCommand("autograde.viewAssignmentDocument", (item?: AssignmentTreeItem) => runAssignmentCommand(async () => {
       const candidates = treeProvider.getAssignments().filter(isBundleAssignment);
@@ -694,7 +731,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.workspace.onDidGrantWorkspaceTrust(() => {
       treeProvider.setAssignments(treeProvider.getAssignments());
       learningHome.refresh();
-      classroom.reconcile();
+      classroom.reconcile(); learningCheckpoints?.reconcile();
     }),
     vscode.workspace.onDidChangeConfiguration((event) => {
       if (event.affectsConfiguration("autograde.examControlBaseUrl")) examMode.clear();
@@ -1637,7 +1674,7 @@ async function pathExists(candidate: string): Promise<boolean> {
 
 function ensureSupportedWorkspacePlatform(operation: string): void {
   if (!isSupportedWorkspacePlatform(process.platform, vscode.env.remoteName)) {
-    throw new Error(`${operation}은 Windows에서 VS Code Remote WSL2 workspace로 실행하세요.`);
+    throw new Error(`${operation}은 Windows, macOS 또는 Linux 작업 영역에서 실행하세요. Linux 실습은 Windows에서 WSL2를 선택할 수 있습니다.`);
   }
 }
 

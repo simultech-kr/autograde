@@ -8,6 +8,9 @@ import { restrictedSettings, validateLearningOptions } from './learning-profile.
 export const SESSION_MARKER = '.autograde-session.json';
 const LOCK = '.autograde-shared-lock.json';
 const sessionPattern = /^e-[0-9a-f]{24}$/;
+export const CURRENT_SESSION_DIRECTORY = 'current';
+const cleanupPattern = /^\.autograde-cleanup-([0-9a-f]{24})\.json$/;
+const ownedName = name => name === CURRENT_SESSION_DIRECTORY || sessionPattern.test(name);
 export const sharedSettings = Object.freeze({
   'files.hotExit': 'off',
   'workbench.localHistory.enabled': false,
@@ -63,7 +66,7 @@ export function sharedSessionLayout(base, learner, policy = 'standard', id = ran
   validateLearningOptions(learner, policy);
   if (!learner || !/^[0-9a-f]{24}$/.test(id)) throw new Error('Shared session requires a learner alias and a fresh session identifier');
   base = path.resolve(base);
-  const root = path.join(base, `e-${id}`), workspace = path.join(root, 'workspace');
+  const root = path.join(base, CURRENT_SESSION_DIRECTORY), workspace = path.join(root, 'workspace');
   return { base, root, sessionId: id, lifetime: 'shared', policy,
     learnerHash: createHash('sha256').update(`autograde-local-learner-v1\0${learner}`).digest('hex'),
     workspaceRoot: workspace, workspace, materials: path.join(root, 'materials'), runtime: path.join(root, 'r') };
@@ -71,9 +74,10 @@ export function sharedSessionLayout(base, learner, policy = 'standard', id = ran
 
 function readSession(base, root) {
   chain(base);
-  if (path.dirname(root) !== base || !sessionPattern.test(path.basename(root))) throw new Error('Invalid shared session root');
+  if (path.dirname(root) !== base || !ownedName(path.basename(root))) throw new Error('Invalid shared session root');
   const info = directory(root, true), marker = privateJson(path.join(root, SESSION_MARKER));
-  if (marker.schema !== 1 || marker.sessionId !== path.basename(root).slice(2) || marker.root !== root ||
+  if (marker.schema !== 1 || !/^[0-9a-f]{24}$/.test(marker.sessionId ?? '') ||
+      (path.basename(root) !== CURRENT_SESSION_DIRECTORY && marker.sessionId !== path.basename(root).slice(2)) || marker.root !== root ||
       marker.rootDev !== info.dev || marker.rootIno !== info.ino || !validPid(marker.launcherPid) ||
       !['prepared', 'launching', 'running'].includes(marker.phase) ||
       !['standard', 'restricted'].includes(marker.policy) ||
@@ -87,8 +91,61 @@ function readLock(base) {
   const lock = privateJson(path.join(base, LOCK));
   const info = directory(base);
   if (lock.schema !== 1 || !/^[0-9a-f]{24}$/.test(lock.sessionId ?? '') || !validPid(lock.launcherPid) ||
+      (lock.rootName !== undefined && lock.rootName !== CURRENT_SESSION_DIRECTORY) ||
+      (lock.phase !== undefined && !['recovering', 'active'].includes(lock.phase)) ||
       lock.baseDev !== info.dev || lock.baseIno !== info.ino) throw new Error('Shared session launch lock is invalid; refusing to start');
   return lock;
+}
+const lockRoot = (base, lock) => path.join(base, lock.rootName ?? `e-${lock.sessionId}`);
+function cleanupTicket(base, marker) { return path.join(base, `.autograde-cleanup-${marker.sessionId}.json`); }
+
+// Claims are never replaced or unlinked: a late contender must not remove a
+// newer owner's lease. If a claimant dies, contenders exclusively create its
+// successor instead; only the winner can reach the old-lease recheck.
+function claimRecovery(base, sessionId, isAlive) {
+  let file = path.join(base, `.autograde-recovered-${sessionId}.json`);
+  for (let depth = 0; depth < 64; depth++) {
+    try {
+      writeJson(file, {schema: 2, sessionId, recoveringPid: process.pid, claimId: randomBytes(12).toString('hex')});
+      return;
+    } catch (error) { if (error.code !== 'EEXIST') throw error; }
+    const claim = privateJson(file);
+    if (![1, 2].includes(claim.schema) || claim.sessionId !== sessionId || !validPid(claim.recoveringPid) ||
+        (claim.schema === 2 && !/^[0-9a-f]{24}$/.test(claim.claimId ?? ''))) {
+      throw new Error('Invalid session recovery claim; operator recovery is required');
+    }
+    if (isAlive(claim.recoveringPid)) throw new Error('Another launcher is recovering this session; wait for it to finish');
+    file = path.join(base, `.autograde-recovery-${sessionId}-${claim.claimId ?? sessionId}.json`);
+  }
+  throw new Error('Too many interrupted recovery attempts; operator recovery is required');
+}
+
+// A parent receipt survives interruption between unlink(marker) and rmdir(root).
+// It authorizes removing only that same EMPTY inode, never adopting old files.
+function recoverFinishedRemovals(base, { isAlive, isGroupAlive }, onlyId) {
+  const recovered = [];
+  for (const name of fs.readdirSync(base).filter(name => cleanupPattern.test(name))) {
+    const id = cleanupPattern.exec(name)[1];
+    if (onlyId && id !== onlyId) continue;
+    const file = path.join(base, name), ticket = privateJson(file), marker = ticket.marker;
+    if (ticket.schema !== 1 || !marker || marker.sessionId !== id || !ownedName(ticket.rootName) ||
+        marker.root !== path.join(base, ticket.rootName) ||
+        (ticket.rootName !== CURRENT_SESSION_DIRECTORY && ticket.rootName !== `e-${id}`) ||
+        !validPid(marker.launcherPid) || !(marker.idePid === null || validPid(marker.idePid)) ||
+        !Number.isSafeInteger(marker.rootDev) || !Number.isSafeInteger(marker.rootIno) ||
+        !['prepared', 'launching', 'running'].includes(marker.phase)) throw new Error('Invalid cleanup receipt; operator recovery is required');
+    if (isAlive(marker.launcherPid) || isAlive(marker.idePid) || isGroupAlive(marker.idePid)) throw new Error('A previous shared process is still active; cleanup is blocked');
+    const root = marker.root;
+    if (present(root)) {
+      const info = directory(root, true);
+      if (info.dev !== marker.rootDev || info.ino !== marker.rootIno) throw new Error('Cleanup root identity changed; no files were removed');
+      if (present(path.join(root, SESSION_MARKER))) continue;
+      if (fs.readdirSync(root).length) throw new Error('Unmarked cleanup root is not empty; no files were removed');
+      fs.rmdirSync(root);
+    }
+    fs.unlinkSync(file); recovered.push(id);
+  }
+  return recovered;
 }
 function removeSession(base, root, marker) {
   const current = readSession(base, root);
@@ -107,54 +164,58 @@ function removeSession(base, root, marker) {
     fs.rmSync(path.join(root, name), { recursive: true, force: false, maxRetries: 2, retryDelay: 100 });
   }
   readSession(base, root);
+  const ticket = cleanupTicket(base, marker), receipt = { schema: 1, rootName: path.basename(root), marker };
+  if (present(ticket)) {
+    if (JSON.stringify(privateJson(ticket)) !== JSON.stringify(receipt)) throw new Error('Cleanup receipt ownership changed');
+  } else writeJson(ticket, receipt);
   fs.unlinkSync(path.join(root, SESSION_MARKER));
   fs.rmdirSync(root);
   if (present(root)) throw new Error('Shared session cleanup did not finish');
+  fs.unlinkSync(ticket);
 }
 
 /** Recover only verifiably stopped sessions, before creating any new workbench. */
 export function prepareSharedSession(layout, defaults, { isAlive = processAlive, isGroupAlive = processGroupAlive } = {}) {
+  if (layout.root !== path.join(layout.base, CURRENT_SESSION_DIRECTORY)) throw new Error('Shared workspace root must be the owned fixed current directory');
   chain(layout.base, true);
   const baseInfo = directory(layout.base);
   if (process.platform !== 'win32' && (baseInfo.uid !== process.getuid() || (baseInfo.mode & 0o022))) {
     throw new Error('Shared runtime base must be owned by this OS user and not writable by other users');
   }
   const lockPath = path.join(layout.base, LOCK);
+  const recovered = [];
   if (present(lockPath)) {
     const old = readLock(layout.base);
     if (isAlive(old.launcherPid)) throw new Error('Another shared IDE session is active. End that session before the next student starts.');
-    const oldRoot = path.join(layout.base, `e-${old.sessionId}`);
+    recovered.push(...recoverFinishedRemovals(layout.base, {isAlive, isGroupAlive}));
+    const oldRoot = lockRoot(layout.base, old);
     if (present(oldRoot)) {
       const oldSession = readSession(layout.base, oldRoot);
-      if (oldSession.launcherPid !== old.launcherPid || isAlive(oldSession.idePid) || isGroupAlive(oldSession.idePid)) {
+      if ((old.phase !== 'recovering' && (oldSession.launcherPid !== old.launcherPid || oldSession.sessionId !== old.sessionId))
+          || isAlive(oldSession.launcherPid) || isAlive(oldSession.idePid) || isGroupAlive(oldSession.idePid)) {
         throw new Error('The previous IDE is still active or its ownership changed. Close it before starting a new session.');
       }
       if (oldSession.phase === 'launching' && oldSession.idePid === null) {
         throw new Error('The previous IDE launch was interrupted before its process was recorded. Operator cleanup is required; no new student session was started.');
       }
     }
-    // A one-time recovery ticket serializes competing launchers recovering the
-    // same dead lease. Keep the tiny ticket (no student data) as a tombstone;
-    // removing it would reopen the stale-lock unlink race. An interrupted ticket
-    // fails closed if the old lease is still present.
-    writeJson(path.join(layout.base, `.autograde-recovered-${old.sessionId}.json`), {
-      schema: 1, sessionId: old.sessionId, recoveringPid: process.pid,
-    });
+    claimRecovery(layout.base, old.sessionId, isAlive);
     // Recheck the exact lease immediately before replacing it.
     const again = readLock(layout.base);
     if (again.sessionId !== old.sessionId || again.launcherPid !== old.launcherPid) throw new Error('Shared session launch lock changed');
     fs.unlinkSync(lockPath);
   }
-  writeJson(lockPath, { schema: 1, sessionId: layout.sessionId, launcherPid: process.pid, baseDev: baseInfo.dev, baseIno: baseInfo.ino });
+  writeJson(lockPath, { schema: 1, sessionId: layout.sessionId, rootName: CURRENT_SESSION_DIRECTORY, phase: 'recovering',
+    launcherPid: process.pid, baseDev: baseInfo.dev, baseIno: baseInfo.ino });
   // Any unrecognized owned-root-shaped path is an error, never adopted/deleted.
-  const recovered = [];
-  for (const name of fs.readdirSync(layout.base).filter(name => sessionPattern.test(name)).sort()) {
+  recovered.push(...recoverFinishedRemovals(layout.base, {isAlive, isGroupAlive}));
+  for (const name of fs.readdirSync(layout.base).filter(ownedName).sort()) {
     const root = path.join(layout.base, name), marker = readSession(layout.base, root);
     if (isAlive(marker.launcherPid) || isAlive(marker.idePid) || isGroupAlive(marker.idePid)) throw new Error('A shared IDE process is still active. Refusing concurrent student access.');
     if (marker.phase === 'launching' && marker.idePid === null) throw new Error('Interrupted IDE launch has an unknown process; operator cleanup is required');
     removeSession(layout.base, root, marker); recovered.push(marker.sessionId);
   }
-  if (present(layout.root)) throw new Error('Shared session directory already exists; refusing to reuse it');
+  if (present(layout.root)) throw new Error('Shared workspace cleanup did not finish');
   fs.mkdirSync(layout.root, { mode: 0o700 });
   const info = directory(layout.root, true);
   writeJson(path.join(layout.root, SESSION_MARKER), { schema: 1, sessionId: layout.sessionId, root: layout.root,
@@ -166,6 +227,10 @@ export function prepareSharedSession(layout, defaults, { isAlive = processAlive,
   writeJson(path.join(layout.runtime, 'user-data/User/settings.json'), {
     ...defaults, ...sharedSettings, ...(layout.policy === 'restricted' ? restrictedSettings : {}),
   });
+  const readyLock = readLock(layout.base);
+  if (readyLock.sessionId !== layout.sessionId || readyLock.launcherPid !== process.pid) throw new Error('Shared session lease changed');
+  const readyPath = path.join(layout.base, `.autograde-ready-${layout.sessionId}.json`);
+  writeJson(readyPath, {...readyLock, phase: 'active'}); fs.renameSync(readyPath, lockPath);
   return { ...layout, recovered,
     preservedLegacyProfiles: fs.readdirSync(layout.base).filter(name => /^l-[0-9a-f]{16}$/.test(name)).length };
 }
@@ -193,35 +258,61 @@ export function cleanupSharedSession(layout, { isAlive = processAlive, isGroupAl
   fs.unlinkSync(path.join(layout.base, LOCK));
 }
 
-/** Observe the real detached Electron main process, not the short-lived CLI. */
-export function superviseSharedChild(child, layout, { shutdownTimeoutMs = 3000 } = {}) {
-  let spawnError;
-  const signalGroup = signal => {
-    try { if (child.pid) process.kill(-child.pid, signal); }
-    catch (error) { if (error.code !== 'ESRCH') throw error; }
+/** Observe the real detached Electron process and bound requested shutdown.
+ * A close event is not a prerequisite for escalation: Electron can ignore TERM.
+ * An AbortSignal requests the same shutdown used by launcher signal forwarding.
+ */
+export function superviseSharedChild(child, layout, { shutdownTimeoutMs = 3000, shutdownSignal } = {}) {
+  if (!Number.isFinite(shutdownTimeoutMs) || shutdownTimeoutMs < 1 || shutdownTimeoutMs > 60_000) {
+    throw new Error('Shared shutdown timeout must be between 1 and 60000 milliseconds');
+  }
+  let spawnError, closeResult, stopping;
+  const signals = ['SIGINT', 'SIGTERM', 'SIGHUP'];
+  const stopped = () => !processAlive(child.pid) && !processGroupAlive(child.pid);
+  const stopGroup = async () => {
+    if (!validPid(child.pid)) {
+      if (spawnError) return; // Known failed spawn; never guess an unknown outcome.
+      throw new Error('IDE process ownership is unknown; session cleanup is blocked');
+    }
+    for (const signal of ['SIGTERM', 'SIGKILL']) {
+      if (stopped()) return;
+      try { process.kill(-child.pid, signal); }
+      catch (error) { if (error.code !== 'ESRCH') throw error; }
+      const deadline = Date.now() + shutdownTimeoutMs;
+      while (!stopped() && Date.now() < deadline) {
+        await new Promise(done => setTimeout(done, Math.min(25, Math.max(1, deadline - Date.now()))));
+      }
+    }
+    if (!stopped()) throw new Error('IDE processes did not stop after SIGKILL; session and lease were retained');
   };
-  const forward = () => {
-    try { signalGroup('SIGTERM'); }
-    catch (error) { console.error(`Unable to stop shared IDE: ${error.message}`); }
-  };
-  for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(signal, forward);
-  return new Promise((resolve, reject) => {
-    child.once('error', error => { spawnError = error; });
-    child.once('close', async (code, signal) => {
+  let resolveCompletion, rejectCompletion;
+  const completion = new Promise((resolve, reject) => { resolveCompletion = resolve; rejectCompletion = reject; });
+  const finish = () => {
+    if (stopping) return;
+    // One task owns escalation and cleanup. Repeated signals cannot restart the
+    // deadline, and close racing with a forwarded signal cannot delete twice.
+    stopping = (async () => {
       try {
-        // Terminals normally exit with Electron. A surviving process in its
-        // private process group must stop before files can safely be removed.
-        for (const stopSignal of ['SIGTERM', 'SIGKILL']) {
-          if (!processGroupAlive(child.pid)) break;
-          signalGroup(stopSignal);
-          const until = Date.now() + shutdownTimeoutMs;
-          while (processGroupAlive(child.pid) && Date.now() < until) await new Promise(done => setTimeout(done, 25));
-        }
+        await stopGroup();
         cleanupSharedSession(layout, { spawnFailed: Boolean(spawnError && !child.pid) });
         if (spawnError) throw spawnError;
-        resolve({ code: code ?? (signal ? 1 : 0), signal });
-      } catch (error) { reject(error); }
-      finally { for (const name of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.removeListener(name, forward); }
-    });
-  });
+        const signal = closeResult?.signal ?? child.signalCode ?? null;
+        resolveCompletion({ code: closeResult?.code ?? child.exitCode ?? (signal ? 1 : 0), signal });
+      } catch (error) { rejectCompletion(error); }
+      finally {
+        for (const name of signals) process.removeListener(name, finish);
+        shutdownSignal?.removeEventListener('abort', finish);
+        child.removeListener('close', closed);
+        child.removeListener('error', failed);
+      }
+    })();
+  };
+  const failed = error => { spawnError = error; };
+  const closed = (code, signal) => { closeResult = { code, signal }; finish(); };
+  child.once('error', failed);
+  child.once('close', closed);
+  for (const signal of signals) process.on(signal, finish);
+  shutdownSignal?.addEventListener('abort', finish, { once: true });
+  if (shutdownSignal?.aborted) finish();
+  return completion;
 }

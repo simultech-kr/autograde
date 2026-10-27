@@ -233,7 +233,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Linux 사용자 확인 실패' }
 $linuxUid = ($uidOutput | Out-String).Trim()
 if ($linuxUid -notmatch '^\d+$') { throw 'Linux 사용자 번호 확인 실패' }
 $labRoot = "/tmp/ag-wsl-lab-$linuxUid"
-$sessionOutput = & wsl.exe -d $distro -u $linuxUser --exec /usr/bin/find $labRoot -mindepth 1 -maxdepth 1 -type d -name 'e-*'
+$sessionOutput = & wsl.exe -d $distro -u $linuxUser --exec /usr/bin/find $labRoot -mindepth 1 -maxdepth 1 -type d -name 'current'
 if ($LASTEXITCODE -ne 0) { throw '실습 폴더 확인 실패' }
 $sessionPaths = @($sessionOutput | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 if ($sessionPaths.Count -ne 1) { throw '실행 중인 시험 세션이 정확히 한 개여야 합니다' }
@@ -257,3 +257,5 @@ Write-Output '확인 완료: 시험 세션과 실행 잠금이 없습니다'
 그대로 남아야 한다. 아이콘으로 다시 실행하여 이전 시험 파일과 로그인 정보가 없는 새 학습
 공간이 열리는지도 확인한다. 종료 후 폴더가 남았다고 수동 삭제로 시험을 통과시키지 않는다.
 실행기 오류와 남은 프로세스를 확인하고 해당 좌석의 다음 학생 사용을 보류한다.
+
+고정 경로와 30초 주기 작업 저장·복원은 [공용 작업 폴더 안내](shared-workspace-checkpoints.md)를 참고한다.

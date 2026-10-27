@@ -14,15 +14,15 @@ const loader = require("node:module") as Loader, original = loader._load;
 class FileUri {readonly scheme = "file"; constructor(public readonly fsPath: string) {}}
 const state = {trusted: true, remote: undefined as string | undefined, picked: true,
   extensions: new Map<string, {extensionPath: string; packageJSON: {version: string}}>(),
-  calls: [] as {name: string; argument: unknown}[], checkedToken: false,
-  execute: async (_name: string, _argument: unknown) => {},
+  calls: [] as {name: string; arguments: unknown[]}[], checkedToken: false,
+  execute: async (_name: string, ..._arguments: unknown[]) => {},
 };
 const stub = {
   version: "1.143.0", Uri: {file: (file: string) => new FileUri(file)},
   env: {get remoteName() {return state.remote;}}, workspace: {get isTrusted() {return state.trusted;}},
   extensions: {getExtension: (id: string) => state.extensions.get(id)},
   CancellationTokenSource: class {token = {isCancellationRequested: false}; cancel() {this.token.isCancellationRequested = true;} dispose() {}},
-  commands: {executeCommand: async (name: string, argument: unknown) => {state.calls.push({name, argument}); await state.execute(name, argument);}},
+  commands: {executeCommand: async (name: string, ...args: unknown[]) => {state.calls.push({name, arguments: args}); await state.execute(name, ...args);}},
   window: {
     showQuickPick: async (items: {approved: boolean}[], _options: unknown, token: {isCancellationRequested: boolean}) => {
       state.checkedToken = token.isCancellationRequested; return token.isCancellationRequested ? undefined : items.find(item => item.approved === state.picked);
@@ -51,7 +51,7 @@ async function fixture(t: TestContext) {
     AUTOGRADE_LEARNING_LIFETIME: "shared", AUTOGRADE_SESSION_ROOT: root, AUTOGRADE_SESSION_ID: id,
     AUTOGRADE_LEARNER_WORKSPACE: path.join(root, "workspace"), AUTOGRADE_LEARNER_MATERIALS: path.join(root, "materials"),
   }))!;
-  const own = {id: "autograde.autograde-vscode", packageJSON: {version: "0.5.13"}, extensionPath: "/app/extensions/autograde"} as vscode.Extension<unknown>;
+  const own = {id: "autograde.autograde-vscode", packageJSON: {version: "0.5.14"}, extensionPath: "/app/extensions/autograde"} as vscode.Extension<unknown>;
   const operations = new AssignmentOperationGate();
   const environment: LearningEnvironment = {policy: "standard"};
   const make = (env = environment, selected: SharedLearningSession | undefined = session) => new ManagedExtensionsInstaller(selected, env, operations, own);
@@ -59,10 +59,13 @@ async function fixture(t: TestContext) {
   return {base, root, session, operations, make, installer: make()};
 }
 
-test("adapter installs a local URI from disposable staging and removes the VSIX after success", async t => {
+test("adapter passes the staged local URI and release hash to the private bridge and cleans up", async t => {
   const f = await fixture(t); let staged = "";
-  state.execute = async (name, argument) => {
-    assert.equal(name, "workbench.extensions.installExtension"); assert.ok(argument instanceof FileUri);
+  state.execute = async (name, ...args) => {
+    assert.equal(name, "_autograde.installCourseExtension");
+    assert.equal(args.length, 2);
+    const [argument, hash] = args;
+    assert.ok(argument instanceof FileUri); assert.equal(hash, release.sha256);
     staged = argument.fsPath; assert.equal(argument.scheme, "file");
     assert.ok(staged.startsWith(path.join(f.root, "r", "extension-install-")));
     assert.deepEqual(await readFile(staged), bytes);
@@ -73,12 +76,21 @@ test("adapter installs a local URI from disposable staging and removes the VSIX 
   assert.deepEqual(await readdir(path.join(f.root, "r")), ["extensions"]);
 });
 
-test("failed built-in installer command removes staged bytes without deleting student code", async t => {
+test("private bridge rejection removes staged bytes and never invokes a public fallback", async t => {
   const f = await fixture(t); await writeFile(path.join(f.session.workspace, "answer.cpp"), "student answer");
-  state.execute = async () => {throw new Error("installer rejected VSIX");};
-  await assert.rejects(f.installer.install(release, bytes, () => {}), /installer rejected/);
+  state.execute = async () => {throw new Error("course extension installation denied");};
+  await assert.rejects(f.installer.install(release, bytes, () => {}), /course extension installation denied/);
+  assert.deepEqual(state.calls.map(call => call.name), ["_autograde.installCourseExtension"]);
   assert.deepEqual(await readdir(path.join(f.root, "r")), ["extensions"]);
   assert.equal(await readFile(path.join(f.session.workspace, "answer.cpp"), "utf8"), "student answer");
+});
+
+test("an older IDE without the private bridge fails closed as unsupported without a fallback", async t => {
+  const f = await fixture(t);
+  state.execute = async name => {throw new Error(`command '${name}' not found`);};
+  await assert.rejects(f.installer.install(release, bytes, () => {}), {code: "unsupported_client"});
+  assert.deepEqual(state.calls.map(call => call.name), ["_autograde.installCourseExtension"]);
+  assert.deepEqual(await readdir(path.join(f.root, "r")), ["extensions"]);
 });
 
 test("guard cancellation after staging prevents the command and cleans temporary bytes", async t => {
@@ -125,7 +137,7 @@ test("built-in/outside paths are protected while disposable user extensions are 
   assert.equal(f.installer.installedVersion("teacher.cpp-lab"), "1.0.0");
   state.extensions.set("teacher.cpp-lab", {extensionPath: path.join(f.root, "r/extensions-other/plugin"), packageJSON: {version: "1.0.0"}});
   assert.equal(f.installer.isBuiltin("teacher.cpp-lab"), true);
-  assert.equal(f.installer.installedVersion("autograde.autograde-vscode"), "0.5.13");
+  assert.equal(f.installer.installedVersion("autograde.autograde-vscode"), "0.5.14");
 });
 
 test("cancelled confirmation is not an install approval", async t => {

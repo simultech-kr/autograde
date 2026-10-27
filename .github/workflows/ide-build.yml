@@ -1,0 +1,182 @@
+name: Institution IDE candidates
+
+on:
+  workflow_dispatch:
+    inputs:
+      include_wsl:
+        description: Also build the optional Windows WSL2 payload and launcher
+        type: boolean
+        required: false
+        default: false
+      macos_runner:
+        description: Native ARM64 macOS runner label (use a provisioned larger runner if needed)
+        type: string
+        default: macos-15
+      linux_runner:
+        description: Native x64 Ubuntu 22.04 runner label
+        type: string
+        default: ubuntu-22.04
+      windows_runner:
+        description: Native x64 Windows runner label with MSVC and SDK
+        type: string
+        default: windows-2022
+
+# This workflow never creates a release or pushes artifacts into the repository.
+permissions:
+  contents: read
+
+concurrency:
+  group: institution-ide-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    outputs:
+      node: ${{ steps.pins.outputs.node }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Read the checked-in runtime pin
+        id: pins
+        run: |
+          node -e 'const fs=require("fs"); const p=require("./ide/code-oss/upstream.json"); if (!/^\d+\.\d+\.\d+$/.test(p.node)) throw Error("Invalid Node pin"); fs.appendFileSync(process.env.GITHUB_OUTPUT, `node=${p.node}\n`);'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ steps.pins.outputs.node }}
+      - name: Verify pipeline validation and institutional definition
+        env:
+          PYTHONPATH: src
+        run: |
+          node --test scripts/ide/*.test.mjs
+          python -m autograde.institution_product validate --profile config/products/institution.example.json
+
+  native:
+    needs: preflight
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: macos-arm64
+            runner: ${{ inputs.macos_runner }}
+            architecture: arm64
+          - target: linux-x64
+            runner: ${{ inputs.linux_runner }}
+            architecture: x64
+          - target: windows-x64
+            runner: ${{ inputs.windows_runner }}
+            architecture: x64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ needs.preflight.outputs.node }}
+          architecture: ${{ matrix.architecture }}
+          # Never cache node_modules or reuse another platform's native addons.
+      - name: Install Linux native build and Electron libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential clang-15 python3 pkg-config libx11-dev libxkbfile-dev libsecret-1-dev libkrb5-dev libgtk-3-0 libgbm1 libnss3 libasound2 libxss1 libxtst6 libxshmfence1 libdrm2 ca-certificates git curl tar xz-utils
+      - name: Check macOS native build tools
+        if: runner.os == 'macOS'
+        run: |
+          xcrun --find clang
+          python3 --version
+          test "$(uname -m)" = arm64
+      - name: Verify administrator-provisioned Windows C++ build tools
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+          if (-not (Test-Path -LiteralPath $vswhere)) { throw 'Visual Studio Installer / MSVC tools missing from runner.' }
+          $installation = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $installation) { throw 'MSVC x64 build tools missing from runner.' }
+          if (-not (Test-Path (Join-Path $installation 'VC/Auxiliary/Build/vcvarsall.bat'))) { throw 'MSVC environment setup is missing.' }
+          # Ephemeral CI runner only: allow link fixtures so Windows export,
+          # shared-session and installation-policy tests cover link rejection.
+          $developerMode = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock'
+          New-Item -Path $developerMode -Force | Out-Null
+          New-ItemProperty -Path $developerMode -Name AllowDevelopmentWithoutDevLicense -Value 1 -PropertyType DWord -Force | Out-Null
+          # NativeLauncherChecks later discovers and verifies the Windows SDK,
+          # then actually compiles and runs C17 and C++17 Windows programs.
+      - name: Compile native Code-OSS, enforce policy, package and check
+        shell: bash
+        env:
+          BUILD_TARGET: ${{ matrix.target }}
+          INCLUDE_WSL: ${{ inputs.include_wsl }}
+        run: |
+          optional=()
+          if [ "$BUILD_TARGET" = linux-x64 ] && [ "$INCLUDE_WSL" = true ]; then optional+=(--include-wsl); fi
+          node scripts/ide/build-runtime.mjs --target "$BUILD_TARGET" --source "$RUNNER_TEMP/code-oss-$BUILD_TARGET" --output "$RUNNER_TEMP/ide-artifacts" "${optional[@]}"
+      - name: Retain candidate build outputs (repository visibility applies)
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-${{ matrix.target }}
+          path: |
+            ${{ runner.temp }}/ide-artifacts/*.zip
+            ${{ runner.temp }}/ide-artifacts/*.tar.gz
+            ${{ runner.temp }}/ide-artifacts/*.sha256
+            ${{ runner.temp }}/ide-artifacts/build-*.json
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+  windows-launcher:
+    needs: preflight
+    if: inputs.include_wsl == true
+    runs-on: windows-2022
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Compile the versioned native Windows launcher and run checks
+        shell: pwsh
+        run: ./scripts/ide/build-windows.ps1 -OutputDirectory (Join-Path $env:RUNNER_TEMP 'ide-artifacts')
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-windows-launcher
+          path: |
+            ${{ runner.temp }}/ide-artifacts/*.zip
+            ${{ runner.temp }}/ide-artifacts/*.sha256
+            ${{ runner.temp }}/ide-artifacts/build-*.json
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+  candidate:
+    needs: [preflight, native, windows-launcher]
+    if: always() && needs.preflight.result == 'success' && needs.native.result == 'success' && (needs.windows-launcher.result == 'success' || needs.windows-launcher.result == 'skipped')
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ needs.preflight.outputs.node }}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: native-*
+          path: ${{ runner.temp }}/native-builds
+          merge-multiple: false
+      - name: Verify matched versions and checksums; pair both Windows parts
+        run: node scripts/ide/finalize-artifacts.mjs "$RUNNER_TEMP/native-builds" "$RUNNER_TEMP/institution-candidate"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: institution-ide-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/institution-candidate/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+      - name: Record the release-candidate limitation
+        run: |
+          echo 'Release candidate only. Native packages and build checks passed; institutional desktop teaching workflows and production signing remain pending. Windows native is the default; WSL2 is optional. Artifact access follows repository visibility.' >> "$GITHUB_STEP_SUMMARY"

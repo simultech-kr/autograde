@@ -6,6 +6,8 @@ import type { SharedLearningSession } from "./sharedLearningSession";
 import type { LearningEnvironment } from "./learningEnvironment";
 import type { AssignmentOperationGate } from "./assignmentOperation";
 
+const INSTALL_COURSE_EXTENSION_COMMAND = "_autograde.installCourseExtension";
+
 export class ManagedExtensionsInstaller implements ExtensionInstaller {
   public readonly target = extensionTarget(process.platform, process.arch);
   public readonly editorVersion = vscode.version;
@@ -56,9 +58,16 @@ export class ManagedExtensionsInstaller implements ExtensionInstaller {
         const file = path.join(temporary, `${release.release_id}.vsix`);
         await writeFile(file, bytes, {flag: "wx", mode: 0o600}); guard();
         if (this.restriction()) throw new ExtensionInstallError(this.restriction()!);
-        // URI invokes local VSIX installation. String IDs would consult Marketplace.
-        // URI options are ignored by pinned Code-OSS; the server rejects dependency/pack manifests.
-        await vscode.commands.executeCommand("workbench.extensions.installExtension", vscode.Uri.file(file));
+        // Code-OSS authenticates this built-in caller and rechecks the staged file's hash.
+        // Never fall back to the public VSIX installer, including on an older IDE.
+        try {
+          await vscode.commands.executeCommand(INSTALL_COURSE_EXTENSION_COMMAND, vscode.Uri.file(file), release.sha256);
+        } catch (error) {
+          if (error instanceof Error && error.message === `command '${INSTALL_COURSE_EXTENSION_COMMAND}' not found`) {
+            throw new ExtensionInstallError("unsupported_client");
+          }
+          throw error;
+        }
       } finally {await rm(temporary, {recursive: true, force: true});}
     }, () => {throw new ExtensionInstallError("install_failed");});
   }

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Build-time tool only. The resulting app runs without a checkout, npm or installed Node.
 import * as fs from 'node:fs';
+import { compilePolicyRuntime } from './policy-runtime.mjs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
@@ -165,6 +166,7 @@ export function packageMacos({ source, node, output, zip = true }) {
   if (!output.endsWith('.app') || fs.existsSync(output) || fs.existsSync(`${output}.zip`) || fs.existsSync(`${output}.zip.sha256`)) throw new Error('Choose a new .app output path; existing artifacts are never overwritten');
   if (isInside(source, output)) throw new Error('Output must be outside the Code-OSS source');
   const checked = verify(source);
+  compilePolicyRuntime(source);
   const upstream = readJson(path.join(here, 'upstream.json'));
   const nodeInfo = JSON.parse(execFileSync(node, ['-p', 'JSON.stringify({version:process.versions.node,arch:process.arch,platform:process.platform})'], { encoding: 'utf8', env: sanitizedEnvironment() }));
   if (nodeInfo.version !== upstream.node || nodeInfo.arch !== process.arch || nodeInfo.platform !== 'darwin') throw new Error(`Bundle Node ${upstream.node} for this Mac architecture (${process.arch})`);

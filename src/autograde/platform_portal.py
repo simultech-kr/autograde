@@ -28,6 +28,7 @@ class CourseAPI:
         "get_bundle_history", "get_bundle_source", "list_accepted_assignments", "list_accepted_assignment_catalog",
         "report_download_diagnostic", "get_assignment_document", "report_classroom_event",
         "poll_classroom_commands", "respond_classroom_command",
+        "save_learning_checkpoint", "list_learning_checkpoints", "get_learning_checkpoint_bundle",
     })
 
     def __init__(self, services: Mapping[str, StudentPlatformService], secret: bytes, *, courses=None, student_materials=None, content_service=None, extension_distribution=None):

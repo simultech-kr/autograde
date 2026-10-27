@@ -2,7 +2,7 @@
   "name": "autograde-vscode",
   "displayName": "Autograde",
   "description": "C/C++ 실습 과제 수령·다운로드·제출·채점 피드백을 VS Code에서. Linux, macOS, Windows WSL2 수업용 Autograde 확장.",
-  "version": "0.5.13",
+  "version": "0.5.15",
   "private": true,
   "publisher": "autograde",
   "repository": {
@@ -55,7 +55,9 @@
     "onCommand:autograde.viewAssignmentDocument",
     "onCommand:autograde.exportLearning",
     "onCommand:autograde.endLearningSession",
-    "onCommand:autograde.manageCourseExtensions"
+    "onCommand:autograde.manageCourseExtensions",
+    "onCommand:autograde.saveLearningCheckpoint",
+    "onCommand:autograde.restoreLearningCheckpoint"
   ],
   "contributes": {
     "commands": [
@@ -208,6 +210,18 @@
         "shortTitle": "공용 실습 종료 · 임시 파일 정리",
         "enablement": "autograde.sharedSession",
         "icon": "$(sign-out)"
+      },
+      {
+        "command": "autograde.saveLearningCheckpoint",
+        "title": "Autograde: Save Current Learning Work",
+        "shortTitle": "지금 작업 서버 저장 · 공식 제출 아님",
+        "enablement": "autograde.authenticated && isWorkspaceTrusted"
+      },
+      {
+        "command": "autograde.restoreLearningCheckpoint",
+        "title": "Autograde: Restore Server Learning Work",
+        "shortTitle": "서버 작업 저장본 · 새 폴더로 복원",
+        "enablement": "autograde.authenticated && isWorkspaceTrusted"
       }
     ],
     "configuration": {

@@ -48,7 +48,7 @@ const vscode = {
   workspace: {isTrusted: true, workspaceFile: undefined,
     get workspaceFolders() {return [{uri: uri(ui.workspace), name: "공용 실습", index: 0}];},
     getConfiguration: () => ({get: (_name: string, fallback: unknown) => typeof fallback === "string" ? "https://test.invalid" : fallback}),
-    onDidSaveTextDocument: disposable, onDidChangeWorkspaceFolders: disposable, onDidGrantWorkspaceTrust: disposable,
+    onDidChangeTextDocument: disposable, onDidSaveTextDocument: disposable, onDidChangeWorkspaceFolders: disposable, onDidGrantWorkspaceTrust: disposable,
     onDidChangeConfiguration: disposable, registerTextDocumentContentProvider: disposable},
   languages: {createDiagnosticCollection: () => ({dispose: noOp, clear: noOp})},
   window: {activeTextEditor: undefined, tabGroups: {all: []},

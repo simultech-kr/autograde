@@ -27,6 +27,7 @@
   "urlProtocol": "autograde-ide",
   "reportIssueUrl": "https://github.com/simultech-kr/autograde/issues",
   "enableTelemetry": false,
+  "autogradeManagedExtensions": true,
   "builtInExtensions": [],
   "webBuiltInExtensions": [],
   "onboardingKeymaps": [],

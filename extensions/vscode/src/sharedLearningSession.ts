@@ -29,12 +29,18 @@ async function noLinkedAncestors(candidate: string): Promise<void> {
 }
 
 async function readPrivateObject(file: string): Promise<Record<string, unknown>> {
+  // Windows has no O_NOFOLLOW. A dangling link is not an unused marker.
+  const before = await lstat(file);
+  if (!before.isFile() || before.isSymbolicLink()) throw new Error(message);
   const handle = await open(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
   try {
     const info = await handle.stat();
-    if (!info.isFile() || info.nlink !== 1 || info.size > 8192 ||
+    if (!info.isFile() || info.dev !== before.dev || info.ino !== before.ino || info.nlink !== 1 || info.size > 8192 ||
       (process.getuid && info.uid !== process.getuid()) || (process.platform !== "win32" && (info.mode & 0o077) !== 0)) throw new Error(message);
     const value: unknown = JSON.parse(await handle.readFile("utf8"));
+    const after = await lstat(file);
+    if (!after.isFile() || after.isSymbolicLink() || after.dev !== info.dev || after.ino !== info.ino
+      || after.size !== info.size || after.mtimeMs !== info.mtimeMs) throw new Error(message);
     if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(message);
     return value as Record<string, unknown>;
   } finally { await handle.close(); }
@@ -50,7 +56,7 @@ export class SharedLearningSession {
     if (!["Autograde IDE", "Autograde IDE Dev"].includes(appName) || environment.AUTOGRADE_LEARNING_LIFETIME !== "shared") return undefined;
     const root = environment.AUTOGRADE_SESSION_ROOT, id = environment.AUTOGRADE_SESSION_ID;
     if (!root || !path.isAbsolute(root) || root.includes("\0") || !id || !/^[a-f0-9]{24}$/.test(id)
-      || path.basename(root) !== `e-${id}` || path.resolve(root) !== root
+      || !["current", `e-${id}`].includes(path.basename(root)) || path.resolve(root) !== root
       || environment.AUTOGRADE_LEARNER_WORKSPACE !== path.join(root, "workspace")
       || environment.AUTOGRADE_LEARNER_MATERIALS !== path.join(root, "materials")) throw new Error(message);
     await noLinkedAncestors(root);
@@ -101,5 +107,8 @@ export class SharedLearningSession {
     await regularDirectory(this.root, true);
     const info = await lstat(this.root);
     if (info.ino !== this.rootIdentity.ino || info.dev !== this.rootIdentity.dev) throw new Error(message);
+    const marker = await readPrivateObject(path.join(this.root, SHARED_SESSION_MARKER));
+    if (marker.sessionId !== this.id || marker.root !== this.root || marker.rootDev !== info.dev || marker.rootIno !== info.ino
+      || !["launching", "running"].includes(String(marker.phase))) throw new Error(message);
   }
 }

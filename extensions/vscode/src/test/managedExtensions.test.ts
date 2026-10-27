@@ -123,6 +123,18 @@ test("an old running version remains reload-required until the runtime exposes t
   assert.equal(state.installs, 1);
 });
 
+test("a missing IDE install bridge reports failure and requests the latest IDE app", async t => {
+  const {state, runner} = fixture(t);
+  state.beforeInstall = async () => {throw new ExtensionInstallError("unsupported_client");};
+  await runner.check();
+  assert.deepEqual(state.reports.map(item => item.report.status), ["offered", "installing", "failed"]);
+  assert.deepEqual(state.reports.at(-1)?.report, {status: "failed", result_code: "unsupported_client"});
+  assert.equal(state.installed, undefined);
+  assert.match(state.notifications.join(" "), /최신.*Autograde IDE 앱으로 교체/);
+  await runner.check();
+  assert.equal(state.installs, 1); assert.equal(state.confirmations, 1);
+});
+
 test("decline avoids download/install and periodic checks do not repeatedly prompt", async t => {
   const {state, runner} = fixture(t); state.allowed = false;
   await runner.check(); await runner.check();

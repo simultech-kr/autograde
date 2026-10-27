@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { lstat, mkdir, open, readdir, realpath, rename, rm, rmdir, unlink } from "node:fs/promises";
+import { lstat, mkdir, open, readdir, realpath, rm, unlink } from "node:fs/promises";
 import * as path from "node:path";
 import { deflateRawSync } from "node:zlib";
 
@@ -128,13 +128,19 @@ export function learningExportZip(files: readonly LearningExportFile[], assertCu
   assertCurrent(); return Buffer.concat([...entries, directory, end]);
 }
 
-/** Only paths exclusively created by this operation are ever removed. No destination is overwritten. */
+/** Only an output tree exclusively created by this operation is removed. No destination is overwritten. */
 export async function saveLearningExport(directory: string, format: "folder" | "zip", groups: readonly LearningExportGroup[], options: LearningExportOptions): Promise<LearningExportResult> {
   const guard = options.assertCurrent; guard(); const files = flatten(groups);
   const parent = await learningExportDirectory(directory, options.excludedDestinations ?? []); guard();
   const nonce = randomUUID(), name = `autograde-learning-${new Date().toISOString().slice(0, 10)}-${nonce.slice(0, 8)}`;
-  const stage = path.join(parent, `.autograde-export-${nonce}`), destination = path.join(parent, name + (format === "zip" ? ".zip" : ""));
-  await mkdir(stage, {mode: 0o700}); const identity = await lstat(stage); let reserved: Awaited<ReturnType<typeof lstat>> | undefined, zipIdentity: Awaited<ReturnType<typeof lstat>> | undefined, published = false;
+  const destination = path.join(parent, name + (format === "zip" ? ".zip" : ""));
+  let reserved: Awaited<ReturnType<typeof lstat>> | undefined, zipIdentity: Awaited<ReturnType<typeof lstat>> | undefined, published = false;
+  const assertOwnedFolder = async (): Promise<void> => {
+    const current = await lstat(destination);
+    if (!reserved || !current.isDirectory() || current.isSymbolicLink() || current.dev !== reserved.dev || current.ino !== reserved.ino) {
+      throw new Error("내보내기 대상 폴더가 변경되었습니다. 다른 폴더를 선택하여 다시 내보내세요.");
+    }
+  };
   try {
     guard();
     if (format === "zip") {
@@ -144,23 +150,26 @@ export async function saveLearningExport(directory: string, format: "folder" | "
       guard(); const handle = await open(destination, "wx", 0o600); zipIdentity = await handle.stat();
       try {await handle.writeFile(archive); await handle.sync(); guard(); published = true;} finally {await handle.close();}
     } else {
-      for (const file of files) {
-        guard(); const target = path.join(stage, ...file.path.split("/"));
-        await mkdir(path.dirname(target), {recursive: true, mode: 0o700});
-        const handle = await open(target, "wx", 0o600); try {await handle.writeFile(file.bytes);} finally {await handle.close();}
-      }
       guard(); await learningExportDirectory(parent, options.excludedDestinations ?? []);
-      // Reserve our own empty target; never rename over a user's pre-existing folder.
-      await mkdir(destination, {mode: 0o700}); reserved = await lstat(destination); guard();
-      await rename(stage, destination); published = true;
+      // Windows cannot rename a directory over even an empty reserved directory.
+      // Create our output exclusively, write exclusive files, and acknowledge
+      // completion only after all writes succeed. Cancelled partial output is
+      // removed only while the directory still has our original identity.
+      await mkdir(destination, {mode: 0o700}); reserved = await lstat(destination);
+      for (const file of files) {
+        guard(); await assertOwnedFolder(); const target = path.join(destination, ...file.path.split("/"));
+        await mkdir(path.dirname(target), {recursive: true, mode: 0o700});
+        const handle = await open(target, "wx", 0o600); try {await handle.writeFile(file.bytes); await handle.sync();} finally {await handle.close();}
+      }
+      guard(); await assertOwnedFolder(); published = true;
     }
     return {destination, files: files.length - 1, bytes: files.reduce((sum, file) => sum + file.bytes.byteLength, 0), skipped: groups.reduce((sum, group) => sum + (group.skipped ?? 0), 0)};
   } finally {
-    const info = await lstat(stage).catch(() => undefined);
-    if (info?.dev === identity.dev && info.ino === identity.ino) await rm(stage, {recursive: true, force: true});
     if (!published && reserved) {
       const target = await lstat(destination).catch(() => undefined);
-      if (target?.dev === reserved.dev && target.ino === reserved.ino) await rmdir(destination).catch(() => undefined);
+      if (target?.isDirectory() && !target.isSymbolicLink() && target.dev === reserved.dev && target.ino === reserved.ino) {
+        await rm(destination, {recursive: true, force: false, maxRetries: 2});
+      }
     }
     if (!published && zipIdentity) {
       const target = await lstat(destination).catch(() => undefined);

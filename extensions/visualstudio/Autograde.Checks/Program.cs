@@ -19,6 +19,20 @@ internal static class Program
     { try { action(); } catch (Exception ex) when (ex is ArgumentException || ex is IOException || ex is InvalidDataException) { checks++; return; } throw new Exception(name); }
     static async Task Main(string[] args)
     {
+        if (args.Length > 0 && args[0] == "exam-self")
+        { Console.WriteLine(await ExamControlChecks.Run() + " exam mode checks passed"); return; }
+        if (args.Length > 0 && args[0] == "exam-live")
+        {
+            // Synthetic test code only, passed on stdin, never command line/logs.
+            var setup = JObject.Parse(Console.ReadLine());
+            using var exam = new ExamControlClient((string)setup["url"], (string)setup["autograde_origin"], (string)setup["assignment_id"]);
+            var connected = await exam.ConnectAsync((string)setup["code"], None);
+            var current = await exam.StatusAsync(None);
+            Check(current.SeatId == connected.SeatId && current.ExamId == connected.ExamId, "live exam seat scope");
+            Check(current.Mode == "simulation", "live smoke must use simulation");
+            await exam.DisconnectAsync(None); Check(!exam.HasSession, "live exam disconnect");
+            Console.WriteLine("EXAM LIVE PASS"); return;
+        }
         if (args.Length > 0 && args[0] == "pack")
         { File.WriteAllBytes(args[2], Bundle.CreateSubmission(args[1]).Archive); return; }
         if (args.Length > 0 && args[0] == "extract")
@@ -61,6 +75,7 @@ internal static class Program
         checks += AssignmentSelectionChecks.Run();
         checks += await AssignmentDocumentChecks.Run();
         checks += await WorkspaceBindingChecks.Run();
+        checks += await ExamControlChecks.Run();
         Console.WriteLine(checks + " checks passed");
     }
 

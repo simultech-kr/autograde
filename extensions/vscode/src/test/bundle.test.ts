@@ -77,8 +77,10 @@ test("submission bundle is deterministic and excludes metadata and build trees",
       assert.equal(extracted.fileCount, 2);
       assert.equal(await readFile(path.join(target, "README.md"), "utf8"), "answer\n");
       assert.equal(await readFile(path.join(target, "src", "run.sh"), "utf8"), "#!/bin/sh\necho ok\n");
-      assert.equal((await lstat(path.join(target, "src", "run.sh"))).mode & 0o777, 0o700);
-      assert.equal((await lstat(path.join(target, "README.md"))).mode & 0o777, 0o600);
+      if (process.platform !== "win32") {
+        assert.equal((await lstat(path.join(target, "src", "run.sh"))).mode & 0o777, 0o700);
+        assert.equal((await lstat(path.join(target, "README.md"))).mode & 0o777, 0o600);
+      }
       await assert.rejects(lstat(path.join(target, ".git")), { code: "ENOENT" });
       await assert.rejects(lstat(path.join(target, "build")), { code: "ENOENT" });
     } finally {

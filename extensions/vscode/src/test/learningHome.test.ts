@@ -15,6 +15,7 @@ const expected = {
   content: "autograde.syncContent",
   extensions: "autograde.manageCourseExtensions",
   exportLearning: "autograde.exportLearning",
+  checkpointSave: "autograde.saveLearningCheckpoint", checkpointRestore: "autograde.restoreLearningCheckpoint",
   endSession: "autograde.endLearningSession",
 };
 
@@ -49,10 +50,10 @@ test("session, trust, workspace and busy restrictions are rechecked independentl
     assert.equal(learningHomeBlockedReason(action, ready), undefined);
     assert.match(learningHomeBlockedReason(action, {...ready, busy: true})!, /이전 작업/);
   }
-  for (const action of ["open", "accepted", "submit", "result", "history", "materials", "content", "extensions"] as const) {
+  for (const action of ["open", "accepted", "submit", "result", "history", "materials", "content", "extensions", "checkpointSave", "checkpointRestore"] as const) {
     assert.match(learningHomeBlockedReason(action, {...ready, authenticated: false})!, /수령 코드/);
   }
-  for (const action of ["claim", "open", "submit", "exportLearning", "extensions"] as const) {
+  for (const action of ["claim", "open", "submit", "exportLearning", "extensions", "checkpointSave", "checkpointRestore"] as const) {
     assert.match(learningHomeBlockedReason(action, {...ready, trusted: false})!, /신뢰/);
   }
   assert.match(learningHomeBlockedReason("submit", {...ready, hasWorkspace: false})!, /작업 영역/);
@@ -73,6 +74,8 @@ test("rendered home is theme-aware, responsive, nonce-protected and never reques
   assert.match(html, /차단하지 않습니다/);
   assert.match(html, /로그인 정보는 저장하지 않습니다/);
   assert.match(html, /파일명·경로·코드 내용·다른 프로그램·브라우저 활동은 이 기능으로 수집하지 않습니다/);
+  assert.match(html, /변경된 코드를 30초마다/);
+  assert.match(html, /자동 저장은 공식 제출이나 채점을 시작하지 않습니다/);
   assert.match(html, /공식 제출 여부와 점수는 서버의 제출 접수·채점 기록으로만/);
   assert.match(renderLearningHome({ ...ready, classroomStatus: "retrying" }, "safe"), /연결 지연 · 재시도 대기/);
   const requests = renderLearningHome({...ready, classroomCommandStatus: '<img src=x onerror=evil>'}, "safe");

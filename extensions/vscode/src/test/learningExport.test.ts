@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { mkdtemp, mkdir, writeFile, readFile, readdir, rm, symlink, link, truncate } from "node:fs/promises";
+import { existsSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { inflateRawSync } from "node:zlib";
@@ -118,4 +119,20 @@ test("cancellation removes only newly created output and never deletes pre-exist
       assert.deepEqual(await readdir(f.output), ["keep.txt"]); assert.equal(await readFile(path.join(f.output, "keep.txt"), "utf8"), "keep");
     } finally {await f.close();}
   }
+});
+
+test("cancelling a populated folder export removes the partial output and preserves other exports", async () => {
+  const f = await fixture();
+  try {
+    const groups = [{directory: "code", title: "code", files: [{path: "main.c", bytes: Buffer.from("int main(){}")}, {path: "README.md", bytes: Buffer.from("notes")}]}];
+    const completed = await saveLearningExport(f.output, "folder", groups, {assertCurrent: guard});
+    let observedPartial = false;
+    await assert.rejects(saveLearningExport(f.output, "folder", groups, {assertCurrent: () => {
+      const partial = readdirSync(f.output).find(name => path.join(f.output, name) !== completed.destination && existsSync(path.join(f.output, name, "code", "main.c")));
+      if (partial) {observedPartial = true; throw new Error("cancelled after first file");}
+    }}), /cancelled after first file/);
+    assert.equal(observedPartial, true);
+    assert.deepEqual(await readdir(f.output), [path.basename(completed.destination)]);
+    assert.equal(await readFile(path.join(completed.destination, "code/main.c"), "utf8"), "int main(){}");
+  } finally {await f.close();}
 });

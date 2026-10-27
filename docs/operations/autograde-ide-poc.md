@@ -10,8 +10,11 @@
 환경을 포함한 `.app`을 배포하면 학생은 Node.js 설치나 터미널 명령 없이 아이콘으로 실행한다.
 아래 소스 준비·빌드 절차는 개발자·배포 담당자용이다.
 
-Windows 학생용 실행은 [Windows WSL2 실습실 앱 안내](autograde-windows-wsl-app.md)를 따른다.
+기관 설치형의 Windows 기본 대상은 네이티브 IDE이며, Linux 실습에는 WSL2를 선택한다.
+[기관 IDE 빌드 안내](institution-ide-builds.md)에서 대상별 패키지와 검증 상태를 확인한다.
+WSL2 선택 구성은 [Windows WSL2 실습실 앱 안내](autograde-windows-wsl-app.md)를 따른다.
 담당자가 Linux 실행 묶음과 Windows 바로가기를 설치하면 학생은 WSL2 편집기를 아이콘으로 연다.
+기관 제품의 서버 전환 범위는 [기관 설치형 제품 정의](../architecture/institution-product.md)에 기록한다.
 
 1단계는 수업 연결·과제 열기·다운로드·제출·결과 확인을 한곳에 모으는 개념연구다.
 2단계 MVP는 본인 배포 자료 수령, 로컬 학습자별 프로필·폴더 분리와 선택적인 IDE 제한 시작
@@ -67,18 +70,20 @@ node ide/code-oss/manage.mjs verify --source .cache/code-oss
 
 준비 도구는 확장을 빌드하고 Code-OSS의 `extensions/` 아래에 내장 확장과 제품 프로필을
 준비한다. 제품 설정에는 Autograde 이름·독립 데이터 경로와 학습용 기본값을 반영한다.
+또한 고정 Code-OSS 소스에 교수자 배포 전용 확장 설치 정책을 적용한다. 직접 VSIX·CLI·폴더
+설치는 거절하며, 내장 Autograde 확장의 전용 통신 경로만 수업 확장을 설치한다.
 Microsoft Marketplace·Microsoft 업데이트 서비스 연결은 설정하지 않는다.
 기존 VS Code 설치 폴더, 기존 사용자 프로필, Autograde 서버 DB는 변경하지 않는다.
 TypeScript 컴파일은 이미 설치한 도구를 사용하며 다운로드하지 않는다. 소스 입력 지문과 내장
 파일 해시를 기록하므로 준비 후 소스·내장 파일이 바뀌면 다시 검증해야 한다.
 
 Code-OSS 소스 안의 `.autograde-ide-overlay.json`은 준비 도구의 소유·검증 정보다.
-이전 생성본은 같은 소스 아래 `.autograde-stage-*` 경로에 보존한다. 임의로 편집하거나
+수정한 본체 소스도 파일별 해시로 검증한다. 이전 생성본은 같은 소스 아래 `.autograde-stage-*` 경로에 보존한다. 임의로 편집하거나
 삭제하지 말고 문제가 있으면 변경 파일을 보존한 뒤 새 소스 폴더에서 준비한다.
 
 소스 버전 불일치나 관리되지 않는 대상 파일 때문에 거절되면 오류에 표시된 파일을 확인한다.
 강제 덮어쓰기로 우회하지 말고 지정한 버전의 새 개발 소스 폴더에서 다시 진행한다.
-`verify` 성공은 제품 설정과 내장 확장 검사 통과이며 전체 편집기의 빌드·GUI 실행 성공을 뜻하지 않는다.
+`verify` 성공은 제품 설정·내장 확장·설치 정책 소스 검사 통과이며 전체 편집기의 빌드·GUI 실행 성공을 뜻하지 않는다.
 
 ## Code OSS 빌드와 실행
 
@@ -91,6 +96,11 @@ npm --prefix .cache/code-oss run electron
 node ide/code-oss/manage.mjs verify --source .cache/code-oss
 node ide/code-oss/manage.mjs run --source .cache/code-oss
 ```
+
+실행 및 Mac·WSL2 패키징 도구는 정상 본체 빌드 이후 검증된 설치 정책 소스를 고정 TypeScript
+컴파일러로 다시 컴파일한다. 오래된 `out/` 파일 때문에 설치 차단이 빠진 패키지를 만들지 않도록
+하는 절차이며, 정책 소스가 변경되었거나 컴파일러가 없으면 중지한다. 생성 전 파일은
+`.autograde-policy-build-*` 안에 보존한다.
 
 첫 빌드에는 native 모듈과 Electron 다운로드가 필요하다. 빌드 오류가 나면 해당 단계에서
 중지하고 Node 버전·플랫폼 빌드 도구·다운로드 접근 여부를 확인한다. 준비 도구만 성공한 상태를
@@ -117,7 +127,9 @@ node ide/code-oss/manage.mjs run --source .cache/code-oss --workspace /absolute/
 같은 OS 계정에서도 과제·자료·IDE 설정을 우발적으로 섞지 않도록 로컬 별칭을 사용한다.
 학번·비밀번호·수령 코드 대신 `learner-a` 같은 비민감 별칭을 지정한다. 이 별칭은 서버의 학생
 인증을 대신하지 않는다. 아래 runtime 경로는 운영 계정이 소유한 짧은 절대 경로로 바꾼다.
-공용 모드는 매번 새 임시 세션을 사용한다. 보관할 자료는 세션 밖에 내보낸다.
+공용 모드는 고정된 작업 폴더에 매번 새 세션을 만든다. 보관할 자료는 세션 밖에 내보낸다.
+OS별 기본 경로·주기적 서버 저장·다음 실행 시 정리 절차는
+[고정 작업 폴더와 서버 작업 저장 안내](shared-workspace-checkpoints.md)를 따른다.
 
 ```sh
 node ide/code-oss/manage.mjs run --source .cache/code-oss \
@@ -125,10 +137,10 @@ node ide/code-oss/manage.mjs run --source .cache/code-oss \
   --learning-lifetime shared --learning-policy standard
 ```
 
-생성 구조는 다음과 같다. 별칭이 같아도 새 실행에서는 세션을 재사용하지 않는다.
+생성 구조는 다음과 같다. 폴더 위치는 같지만 새 실행에서는 이전 파일·인증을 재사용하지 않는다.
 
 ```text
-autograde-learners/e-<세션 식별자>/
+autograde-learners/current/
 ├─ workspace/          # 과제와 C/C++ 소스
 ├─ materials/          # 자료와 콘텐츠 캐시 (제출 폴더와 분리)
 └─ r/                  # 이번 세션의 IDE 설정·백업·공유 데이터
@@ -215,8 +227,9 @@ CPLUS_INCLUDE_PATH=/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/inclu
 5. 제출 대상·파일을 확인하고 제출한다. **접수됨 → 채점 대기·진행 → 현재 제출 결과**가 구분되어야 한다.
 6. 코드를 고쳐 재제출한다. 새 제출이 채점 중이면 이전 점수가 현재 결과로 표시되면 안 된다.
    이전 최고점·제출 이력은 별도로 확인한다.
-7. IDE를 종료한 뒤 기존 폴더를 열고 새 코드로 재인증한다. 파일은 남고 이전 세션 정보는
-   자동 복원되지 않아야 한다.
+7. 공용 모드에서는 IDE 종료·재실행 후 작업 폴더가 비워지고 새 수령 코드가 필요한지 확인한다.
+   이전 작업은 서버 작업 저장본에서 새 폴더로 복원한다. 개인·개발 모드는 기존 파일을 보존하지만
+   이전 인증 정보를 자동 복원하지 않아야 한다.
 8. 로그아웃한다. 공용 PC라면 학교의 작업 파일·브라우저 정리 절차를 별도로 수행한다.
 
 ### 교수자가 배포한 개인 자료 받기

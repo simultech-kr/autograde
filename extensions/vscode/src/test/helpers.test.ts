@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import * as path from "node:path";
 import test from "node:test";
 
 import { shouldDiscardTokensAfterRefreshError } from "../authPolicy";
@@ -120,12 +121,13 @@ test("claim codes canonicalize case, hyphens and ASCII whitespace only", () => {
   assert.equal(normalizeClaimCode("AK1-2345-6789-ABC\u017f"), undefined);
 });
 
-test("workspace platform policy allows Linux, macOS and Windows WSL2", () => {
+test("workspace platform policy allows native Windows and optional WSL2 alongside macOS and Linux", () => {
   assert.equal(isSupportedWorkspacePlatform("linux", undefined), true);
   assert.equal(isSupportedWorkspacePlatform("darwin", undefined), true);
   assert.equal(isSupportedWorkspacePlatform("linux", "wsl"), true);
   assert.equal(isSupportedWorkspacePlatform("win32", "wsl"), true);
-  assert.equal(isSupportedWorkspacePlatform("win32", undefined), false);
+  assert.equal(isSupportedWorkspacePlatform("win32", undefined), true);
+  assert.equal(isSupportedWorkspacePlatform("win32", "ssh-remote"), true);
   assert.equal(isSupportedWorkspacePlatform("freebsd", undefined), false);
 });
 
@@ -199,18 +201,20 @@ test("clone URL falls back to SSH when HTTPS clone URL is absent or invalid", ()
 });
 
 test("diagnostic paths cannot escape the repository", () => {
-  assert.equal(resolveRepositoryRelativePath("/work/repo", "src/main.py"), "/work/repo/src/main.py");
-  assert.equal(resolveRepositoryRelativePath("/work/repo", "../secret"), undefined);
-  assert.equal(resolveRepositoryRelativePath("/work/repo", "/etc/passwd"), undefined);
+  const root = path.resolve("work/repo");
+  assert.equal(resolveRepositoryRelativePath(root, "src/main.py"), path.join(root, "src", "main.py"));
+  assert.equal(resolveRepositoryRelativePath(root, "../secret"), undefined);
+  assert.equal(resolveRepositoryRelativePath(root, "/etc/passwd"), undefined);
 });
 
 test("diagnostic paths are resolved below an assignment subpath", () => {
+  const root = path.resolve("work/repo");
   assert.equal(
-    resolveAssignmentDiagnosticPath("/work/repo", "assignments/lab01", "src/main.py"),
-    "/work/repo/assignments/lab01/src/main.py",
+    resolveAssignmentDiagnosticPath(root, "assignments/lab01", "src/main.py"),
+    path.join(root, "assignments", "lab01", "src", "main.py"),
   );
   assert.equal(
-    resolveAssignmentDiagnosticPath("/work/repo", "../outside", "answer.txt"),
+    resolveAssignmentDiagnosticPath(root, "../outside", "answer.txt"),
     undefined,
   );
 });

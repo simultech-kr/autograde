@@ -39,7 +39,7 @@ function fixture(t) {
     start: (_exe, _args, opts) => spawn(process.execPath, ['-e', 'setTimeout(() => {}, 90)'], opts) };
   return { root, base, install, manifest, load, options };
 }
-const roots = base => fs.readdirSync(base).filter(name => /^e-[0-9a-f]{24}$/.test(name)).map(name => path.join(base, name));
+const roots = base => fs.readdirSync(base).filter(name => name === 'current' || /^e-[0-9a-f]{24}$/.test(name)).map(name => path.join(base, name));
 const wslHost = { platform: 'linux', release: '6.6.87.2-microsoft-standard-WSL2', uid: 1000,
   env: { DISPLAY: ':0', WSL_DISTRO_NAME: 'Ubuntu-24.04' }, socketExists: file => file === '/tmp/.X11-unix/X0' };
 
@@ -141,7 +141,7 @@ test('actual child exit erases code, materials, IDE state and XDG/temp data but 
   assert.equal(fs.existsSync(previous), false); assert.equal(fs.readFileSync(exported, 'utf8'), 'independent export');
   await runWslSession(bundle, { ...f.options, report: event => {
     if (event.event !== 'ide-started') return;
-    const [current] = roots(f.base); assert.notEqual(current, previous);
+    const [current] = roots(f.base); assert.equal(current, previous);
     assert.deepEqual(fs.readdirSync(path.join(current, 'workspace')), []);
   } });
   assert.deepEqual(roots(f.base), []);
@@ -177,7 +177,10 @@ test('previous stopped session is cleaned before the next student, without touch
     write(file, { ...JSON.parse(fs.readFileSync(file)), launcherPid: 99999999 });
   }
   await runWslSession(f.load(), { ...f.options, report: event => {
-    if (event.event === 'ide-started') assert.equal(fs.existsSync(old.root), false);
+    if (event.event === 'ide-started') {
+      assert.equal(fs.existsSync(path.join(old.workspace, 'old.c')), false);
+      assert.notEqual(JSON.parse(fs.readFileSync(path.join(old.root, SESSION_MARKER))).sessionId, old.sessionId);
+    }
   } });
   assert.deepEqual(roots(f.base), []);
 });

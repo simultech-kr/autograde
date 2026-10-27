@@ -118,6 +118,7 @@ class PlatformFileResponse:
     path: Path
     content_type: str = "application/octet-stream"
     headers: Mapping[str, str] = field(default_factory=dict)
+    retained_checkpoint: bool = False
 
 
 class SubmissionNotifier(Protocol):
@@ -353,6 +354,7 @@ class StudentPlatformService:
         self.submission_pinner = submission_pinner
         self.notify_submission = notify_submission
         self.bundle_store = bundle_store
+        self._learning_checkpoint_store = None
         self.notify_bundle_submission = notify_bundle_submission
         self._instructor_token = (
             _required_string(instructor_token, "instructor_token", maximum=512)
@@ -374,6 +376,70 @@ class StudentPlatformService:
         )
 
     # Public JSON API -------------------------------------------------
+
+    def _checkpoint_owner(self, access_token: str, assignment_id: str):
+        safe_id = self._safe_identifier(assignment_id, "assignment_id")
+        scope = self.require_assignment_acceptance(access_token, touch=False)
+        if scope != ("bundle", safe_id):
+            raise PlatformAPIError(403, "access_denied", "this session is restricted to another assignment")
+        self._owned_bundle_assignment(access_token, safe_id)
+        _session, student = self._authorize(access_token, touch=False)
+        identity = json.dumps([student.id, student.auth_subject, student.created_at], separators=(",", ":"))
+        return {"course_key": self.course_key,
+                "student_identity": self._digest("learning-checkpoint-owner", identity), "assignment_id": safe_id}
+
+    def _checkpoint_store(self):
+        from .learning_checkpoints import LearningCheckpointStore
+        if self.bundle_store is None:
+            raise PlatformAPIError(503, "checkpoint_unavailable", "학습내용 저장소가 준비되지 않았습니다.")
+        if self._learning_checkpoint_store is None:
+            # Kept outside the submission artifact store so its garbage collector
+            # cannot remove unfinished work. Each platform database is isolated.
+            root = self.state.database.parent / (self.state.database.name + ".learning-checkpoints")
+            self._learning_checkpoint_store = LearningCheckpointStore(root, self.bundle_store)
+        return self._learning_checkpoint_store
+
+    @staticmethod
+    def _checkpoint_call(operation, **arguments):
+        from .learning_checkpoints import CheckpointError
+        try:
+            return operation(**arguments)
+        except CheckpointError as exc:
+            headers = {"Retry-After": str(exc.retry_after)} if exc.retry_after is not None else None
+            raise PlatformAPIError(exc.status, exc.code, str(exc), headers=headers) from exc
+        except BundleLimitError as exc:
+            raise PlatformAPIError(413, "payload_too_large", "학습내용이 저장 한도를 초과했습니다.") from exc
+        except UnsafeBundleError as exc:
+            raise PlatformAPIError(422, "invalid_bundle", "학습내용 파일 형식 또는 경로가 올바르지 않습니다.") from exc
+        except (BundleStorageError, OSError) as exc:
+            emit_operator_event("learning_checkpoint_storage_unavailable", component="learning_checkpoint",
+                                exception=exc.__cause__ or exc)
+            raise PlatformAPIError(503, "checkpoint_storage_unavailable", "학습내용을 서버에 보관하지 못했습니다. 다시 시도해 주세요.", headers={"Retry-After": "10"}) from exc
+
+    def save_learning_checkpoint(self, access_token, idempotency_key, assignment_id, upload, content_length):
+        owner = self._checkpoint_owner(access_token, assignment_id)
+        key = _required_string(idempotency_key, "idempotency_key", maximum=128)
+        if not isinstance(content_length, int) or isinstance(content_length, bool) or content_length <= 0:
+            raise PlatformAPIError(400, "invalid_request", "학습내용 크기가 올바르지 않습니다.")
+        store = self._checkpoint_store()
+        if content_length > store.bundle_limits["max_compressed_bytes"]:
+            raise PlatformAPIError(413, "payload_too_large", "학습내용이 저장 한도를 초과했습니다.")
+        return self._checkpoint_call(store.save, **owner, idempotency_key=key, source=upload,
+                                     content_length=content_length, clock=self._aware_now,
+                                     authorize=lambda: self._checkpoint_owner(access_token, assignment_id))
+
+    def list_learning_checkpoints(self, access_token, assignment_id):
+        owner = self._checkpoint_owner(access_token, assignment_id)
+        return self._checkpoint_call(self._checkpoint_store().history, **owner)
+
+    def get_learning_checkpoint_bundle(self, access_token, assignment_id, checkpoint_id):
+        owner = self._checkpoint_owner(access_token, assignment_id)
+        safe_id = self._safe_identifier(checkpoint_id, "checkpoint_id")
+        path, checkpoint = self._checkpoint_call(self._checkpoint_store().download, **owner, checkpoint_id=safe_id)
+        return PlatformFileResponse(200, path, "application/gzip", {
+            "Content-Disposition": f'attachment; filename="{safe_id}.tar.gz"',
+            "X-Autograde-SHA256": checkpoint["archive_sha256"],
+        }, retained_checkpoint=True)
 
     def create_device_authorization(
         self, payload: Mapping[str, Any], base_url: str | None = None

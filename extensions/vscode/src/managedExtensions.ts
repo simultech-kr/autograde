@@ -194,7 +194,7 @@ export function extensionFailureLabel(code: string): string {
   const labels: Record<string, string> = {
     restricted_policy: "현재 IDE 제한 정책에서는 추가 확장을 설치할 수 없습니다.",
     untrusted_workspace: "현재 실습 폴더를 신뢰한 뒤 수업 확장 확인을 다시 실행하세요.",
-    unsupported_client: "공용 실습실용 Autograde IDE에서 수업 확장을 설치할 수 있습니다.",
+    unsupported_client: "현재 IDE에서는 수업 확장을 설치할 수 없습니다. 담당자에게 최신 공용 실습실용 Autograde IDE 앱으로 교체를 요청하세요.",
     built_in_extension: "내장 확장은 IDE 앱 업데이트로 변경해야 합니다. 담당자에게 앱 업데이트를 요청하세요.",
     incompatible_platform: "현재 운영체제·프로세서에 맞는 확장 파일이 없습니다. 교수자에게 알려 주세요.",
     incompatible_engine: "현재 IDE 버전과 호환되지 않는 확장입니다. 담당자에게 확인하세요.",

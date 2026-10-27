@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Build on Linux/WSL2. The installed payload needs neither npm nor a Node install.
 import * as fs from 'node:fs';
+import { compilePolicyRuntime } from './policy-runtime.mjs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
@@ -175,6 +176,7 @@ export function packageWsl({ source, node, output, archive = true }) {
   if (present(output) || present(`${output}.tar.gz`) || present(`${output}.tar.gz.sha256`)) throw new Error('Choose a new package output; existing artifacts are never overwritten');
   if (isInside(source, output)) throw new Error('Output must be outside the Code-OSS source');
   const checked = verify(source), upstream = readJson(path.join(here, 'upstream.json'));
+  compilePolicyRuntime(source);
   if (elfArchitecture(node) !== process.arch) throw new Error('Bundled Node architecture must match this Linux build host');
   const nodeInfo = JSON.parse(execFileSync(node, ['-p', 'JSON.stringify({version:process.versions.node,platform:process.platform,arch:process.arch})'],
     { encoding: 'utf8', env: cleanBuildEnvironment() }));

@@ -724,3 +724,63 @@ for (const [name, transientError] of [
     }
   });
 }
+
+test("learning checkpoint API sends only scoped authenticated bytes and validates the receipt", async () => {
+  const archive = Buffer.from("sample bundle"), digest = sha256Hex(archive);
+  const checkpoint = {checkpoint_id: "cp_one", assignment_id: "a1", archive_sha256: digest,
+    created_at: "2026-10-26T10:00:00Z", file_count: 1, source_bytes: 12, version: 1};
+  const transport = new FakeTransport([{checkpoint, replayed: false}, {checkpoints: [checkpoint], latest: checkpoint},
+    {checkpoint: {...checkpoint, archive_sha256: "a".repeat(64)}}]);
+  const tokens = new TokenManager(transport); await tokens.storeSession({access_token: "access", refresh_token: "refresh", expires_in: 3600}, transport.baseUrl);
+  const client = new AutogradeClient(transport, tokens), signal = new AbortController().signal;
+  const scope = {baseUrl: transport.baseUrl, generation: tokens.getSessionGeneration(), assignmentId: "a1",
+    rootPath: "/private/local", scheme: "file", authority: ""};
+  assert.deepEqual(await client.saveLearningCheckpoint(scope, archive, digest, signal), checkpoint);
+  const call = transport.calls[0]!;
+  assert.equal(call.endpoint, "/v1/assignments/a1/learning-checkpoints"); assert.equal(call.init.method, "POST");
+  assert.equal(new Headers(call.init.headers).get("Idempotency-Key")?.startsWith("learning-"), true);
+  assert.equal(new Headers(call.init.headers).get("Content-Type"), "application/gzip");
+  assert.deepEqual(Buffer.from(call.init.body as ArrayBuffer), archive);
+  assert.equal(call.bearerToken, "access"); assert.equal(call.options?.signal, signal);
+  assert.equal(call.options?.timeoutMs, 20_000); assert.equal(call.options?.expectedBaseUrl, transport.baseUrl);
+  assert.deepEqual(await client.getLearningCheckpoints(scope, signal), [checkpoint]);
+  await assert.rejects(client.saveLearningCheckpoint(scope, archive, digest, signal), /지문/);
+  await tokens.clear();
+  await assert.rejects(client.getLearningCheckpoints(scope, signal), /세션이 변경/);
+  assert.equal(transport.calls.length, 3);
+});
+
+test("learning checkpoint restore checks archive digest and does not follow an advertised URL", async () => {
+  const archive = Buffer.from("restore bytes");
+  const checkpoint = {checkpoint_id: "cp_one", assignment_id: "a1", archive_sha256: sha256Hex(archive),
+    created_at: "2026-10-26T10:00:00Z", file_count: 1, source_bytes: 12, version: 1, download_url: "https://untrusted.invalid/"};
+  class CheckpointTransport extends FakeTransport {
+    override async requestBytes(endpoint: string, init: RequestInit, bearerToken?: string, options?: RequestOptions): Promise<Uint8Array> {
+      this.calls.push({endpoint, init, bearerToken, options}); return archive;
+    }
+  }
+  const transport = new CheckpointTransport([]), tokens = new TokenManager(transport);
+  await tokens.storeSession({access_token: "access", refresh_token: "refresh", expires_in: 3600}, transport.baseUrl);
+  const client = new AutogradeClient(transport, tokens), signal = new AbortController().signal;
+  const scope = {baseUrl: transport.baseUrl, generation: tokens.getSessionGeneration(), assignmentId: "a1", rootPath: "/work", scheme: "file", authority: ""};
+  assert.deepEqual(await client.getLearningCheckpointBundle(scope, checkpoint, signal), archive);
+  assert.equal(transport.calls[0]?.endpoint, "/v1/assignments/a1/learning-checkpoints/cp_one/bundle");
+  assert.equal(transport.calls[0]?.options?.maxResponseBytes, 25 * 1024 * 1024);
+  await assert.rejects(client.getLearningCheckpointBundle(scope, {...checkpoint, archive_sha256: "a".repeat(64)}, signal), /지문/);
+  await assert.rejects(client.getLearningCheckpointBundle(scope, {...checkpoint, assignment_id: "other"}, signal));
+  assert.equal(transport.calls.length, 2);
+});
+
+test("checkpoint semantic dedup validates the received digest while retaining stored digest for restore", async () => {
+  const archive = Buffer.from("new compression"), digest = sha256Hex(archive), oldDigest = "a".repeat(64);
+  const checkpoint = {checkpoint_id: "cp_same_content", assignment_id: "a1", archive_sha256: oldDigest,
+    created_at: "2026-10-26T10:00:00Z", file_count: 1, source_bytes: 12, version: 1};
+  const transport = new FakeTransport([{checkpoint, received_archive_sha256: digest, replayed: true}]);
+  const tokens = new TokenManager(transport); await tokens.storeSession({access_token: "access", refresh_token: "refresh", expires_in: 3600}, transport.baseUrl);
+  const client = new AutogradeClient(transport, tokens), controller = new AbortController();
+  const scope = {baseUrl: transport.baseUrl, generation: tokens.getSessionGeneration(), assignmentId: "a1", rootPath: "/work", scheme: "file", authority: ""};
+  const saved = await client.saveLearningCheckpoint(scope, archive, digest, controller.signal);
+  assert.equal(saved.archive_sha256, oldDigest); assert.equal(saved.received_archive_sha256, digest);
+  controller.abort(); await assert.rejects(client.getLearningCheckpoints(scope, controller.signal), /취소/);
+  assert.equal(transport.calls.length, 1);
+});

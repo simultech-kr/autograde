@@ -346,9 +346,11 @@ export function isBundleAssignment(assignment: Assignment): boolean {
 
 export function isSupportedWorkspacePlatform(
   platform: NodeJS.Platform,
-  remoteName: string | undefined,
+  _remoteName: string | undefined,
 ): boolean {
-  return platform === "linux" || platform === "darwin" || (platform === "win32" && remoteName === "wsl");
+  // File delivery and server-side grading also work on native Windows. A
+  // Windows host must not be forced into WSL for Windows system exercises.
+  return platform === "linux" || platform === "darwin" || platform === "win32";
 }
 
 export function isAssignmentDownloadable(assignment: Assignment): boolean {

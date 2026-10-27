@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
   isInsecureHttpPilotUrl,
   normalizeAssignments,
@@ -14,6 +15,8 @@ import { parseSubmissionHistory, verifySubmissionSource, type SubmissionVersion 
 import { parseAcceptedAssignments, type AcceptedAssignmentEntry } from "./acceptedAssignmentCatalog";
 import { MAX_STUDENT_MATERIAL_BYTES, MAX_STUDENT_MATERIALS, parseStudentMaterials, verifyStudentMaterial,
   type StudentMaterial, type StudentMaterialsCatalog } from "./studentMaterials";
+import { parseLearningCheckpoint, parseLearningCheckpoints, type LearningCheckpoint, type LearningCheckpointReceipt, type LearningCheckpointScope } from "./learningCheckpoint";
+import { sha256Hex } from "./bundle";
 import type {
   Assignment,
   AssignmentClaim,
@@ -821,6 +824,46 @@ export class AutogradeClient {
       if (error instanceof ApiError && error.status === 404) return undefined;
       throw error;
     }
+  }
+
+  private checkLearningScope(scope: LearningCheckpointScope, signal: AbortSignal): void {
+    if (signal.aborted) throw new RequestCancelledError();
+    if (scope.baseUrl !== this.transport.getBaseUrl() || scope.generation !== this.tokens.getSessionGeneration?.()) {
+      throw new ApiError("인증 세션이 변경되었습니다. 다시 연결하세요.", 401, "login_required");
+    }
+  }
+
+  public async saveLearningCheckpoint(scope: LearningCheckpointScope, archive: Uint8Array, digest: string, signal: AbortSignal, idempotencyKey = `learning-${randomUUID()}`): Promise<LearningCheckpointReceipt> {
+    this.checkLearningScope(scope, signal);
+    if (!/^[A-Za-z0-9_-]{1,128}$/.test(idempotencyKey)) throw new Error("서버 저장 요청 키가 올바르지 않습니다.");
+    if (!/^[a-f0-9]{64}$/.test(digest) || sha256Hex(archive) !== digest) throw new Error("저장할 코드 묶음이 올바르지 않습니다.");
+    const response = await this.authorizedRequest<{checkpoint: unknown; received_archive_sha256?: unknown}>(
+      `/v1/assignments/${encodeURIComponent(scope.assignmentId)}/learning-checkpoints`,
+      {method: "POST", headers: {Accept: "application/json", "Content-Type": "application/gzip", "Idempotency-Key": idempotencyKey}, body: ownedArrayBuffer(archive)},
+      {signal, timeoutMs: 20_000},
+    );
+    this.checkLearningScope(scope, signal);
+    const receipt = parseLearningCheckpoint(response?.checkpoint, scope.assignmentId);
+    if ((response.received_archive_sha256 ?? receipt.archive_sha256) !== digest) throw new Error("서버 저장본의 코드 지문이 일치하지 않습니다.");
+    return {...receipt, ...(response.received_archive_sha256 ? {received_archive_sha256: digest} : {})};
+  }
+
+  public async getLearningCheckpoints(scope: LearningCheckpointScope, signal: AbortSignal): Promise<LearningCheckpoint[]> {
+    this.checkLearningScope(scope, signal);
+    const response = await this.authorizedRequest<unknown>(`/v1/assignments/${encodeURIComponent(scope.assignmentId)}/learning-checkpoints`, {method: "GET"}, {signal});
+    this.checkLearningScope(scope, signal);
+    return parseLearningCheckpoints(response, scope.assignmentId);
+  }
+
+  public async getLearningCheckpointBundle(scope: LearningCheckpointScope, checkpoint: LearningCheckpoint, signal: AbortSignal): Promise<Uint8Array> {
+    this.checkLearningScope(scope, signal);
+    const checked = parseLearningCheckpoint(checkpoint, scope.assignmentId);
+    const bytes = await this.authorizedBytesRequest(`/v1/assignments/${encodeURIComponent(scope.assignmentId)}/learning-checkpoints/${encodeURIComponent(checked.checkpoint_id)}/bundle`,
+      {method: "GET", headers: {Accept: "application/gzip"}},
+      {signal, timeoutMs: 20_000, maxResponseBytes: MAX_STARTER_RESPONSE_BYTES, acceptedContentTypes: ["application/gzip", "application/x-gzip"]});
+    this.checkLearningScope(scope, signal);
+    if (sha256Hex(bytes) !== checked.archive_sha256) throw new Error("서버 저장본의 코드 지문이 일치하지 않습니다.");
+    return bytes;
   }
 
   public async getSubmissionHistory(assignmentId: string) {
