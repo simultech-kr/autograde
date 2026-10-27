@@ -49,15 +49,16 @@ async function fixture() {
   messages.length = 0; trusted = true; pickCount = 0; action = "sync"; directory = ""; dialogCount = 0; afterPick = () => {};
   const root = await mkdtemp(path.join(tmpdir(), "autograde-content-view-"));
   const tokens = new Tokens();
-  const state = {reads: 0, requests: 0, empty: false, unsupported: false, verifyConflict: false, afterObject: () => {}};
-  const transport = new HttpTransport(() => "https://test.invalid", async (input) => {
+  const state = {reads: 0, requests: 0, empty: false, unsupported: false, verifyConflict: false, afterObject: () => {},
+    afterCatalog: () => {}, base: "https://test.invalid", collections: [manifest], manifestRequests: [] as string[]};
+  const transport = new HttpTransport(() => state.base, async (input) => {
     state.requests++; const endpoint = new URL(String(input)).pathname;
     if (tokens.expired) return new Response(JSON.stringify({error: {code: "invalid_token"}}), {status: 401, headers: {"Content-Type": "application/json"}});
     if (state.unsupported) return new Response("{}", {status: 404, headers: {"Content-Type": "application/json"}});
     let payload: unknown;
     if (endpoint.endsWith("/context")) payload = context;
-    else if (endpoint.endsWith("/collections")) payload = {...context, collections: state.empty ? [] : [manifest]};
-    else if (endpoint.endsWith("/manifest")) payload = manifest;
+    else if (endpoint.endsWith("/collections")) {state.afterCatalog(); payload = {...context, collections: state.empty ? [] : state.collections};}
+    else if (endpoint.endsWith("/manifest")) {state.manifestRequests.push(endpoint); payload = manifest;}
     else if (endpoint.endsWith("/verify")) {
       if (state.verifyConflict) return new Response("{}", {status: 409, headers: {"Content-Type": "application/json"}});
       payload = {verified: true, manifest_id: manifest.manifest_id};
@@ -192,4 +193,49 @@ test("content export revalidates exclusions after receipt instead of retaining f
     assert.deepEqual(await readdir(directory), []);
     assert.doesNotMatch(messages.join(" "), /저장 위치:/);
   } finally {view.dispose(); await f.close();}
+});
+
+
+test("targeted course download reloads exact collection and skips only the collection picker", async () => {
+  const f = await fixture();
+  try {
+    f.state.collections = [{...manifest, collection_id: `cc_${"3".repeat(32)}`, release_id: `cr_${"4".repeat(32)}`}, manifest];
+    assert.equal(await f.view.show(undefined, undefined, manifest.collection_id), "synced");
+    assert.equal(pickCount, 1); assert.equal(f.state.reads, 1); assert.equal(dialogCount, 0);
+    assert.deepEqual(f.state.manifestRequests, [`/v1/content/releases/${manifest.release_id}/manifest`]);
+    f.state.collections = f.state.collections.slice(0, 1);
+    assert.equal(await f.view.show(undefined, undefined, manifest.collection_id), "unavailable");
+    assert.equal(pickCount, 1); assert.equal(f.state.reads, 1);
+    assert.equal(f.state.manifestRequests.length, 1);
+    assert.match(messages.join(" "), /철회.*새로고침/);
+  } finally {await f.close();}
+});
+
+test("targeted course download never uses an address or a missing item as a release", async () => {
+  for (const id of ["https://other.invalid/manifest", "../manifest", `cc_${"f".repeat(32)}`]) {
+    const f = await fixture();
+    try {
+      assert.notEqual(await f.view.show(undefined, undefined, id), "synced");
+      assert.equal(f.state.reads, 0); assert.equal(pickCount, 0); assert.equal(dialogCount, 0);
+      assert.equal(f.state.manifestRequests.length, 0); assert.deepEqual(await readdir(f.root), []);
+      if (!id.startsWith("cc_")) assert.equal(f.state.requests, 0);
+    } finally {await f.close();}
+  }
+});
+
+test("targeted course download preserves trust, cancellation and catalog-session boundaries", async () => {
+  for (const situation of ["untrusted", "account", "server", "aborted"]) {
+    const f = await fixture();
+    try {
+      if (situation === "untrusted") trusted = false;
+      if (situation === "account") f.state.afterCatalog = () => {f.tokens.generation++;};
+      if (situation === "server") f.state.afterCatalog = () => {f.state.base = "https://other.invalid";};
+      const controller = new AbortController(); if (situation === "aborted") controller.abort();
+      assert.notEqual(await f.view.show(undefined, controller.signal, manifest.collection_id), "synced");
+      assert.equal(f.state.reads, 0); assert.deepEqual(await readdir(f.root), []);
+      if (situation === "account" || situation === "server") {
+        assert.equal(f.state.manifestRequests.length, 0); assert.deepEqual(messages, []);
+      }
+    } finally {await f.close();}
+  }
 });

@@ -6,6 +6,7 @@ import { LEARNING_HOME_COMMAND, learningHomeAction, learningHomeBlockedReason, l
 
 const ready = { authenticated: true, trusted: true, hasWorkspace: true };
 const expected = {
+  downloads: "autograde.openServerDownloads",
   configure: "autograde.configureServiceAddress", connection: "autograde.checkServerConnection",
   claim: "autograde.redeemAssignmentClaim", open: "autograde.openAssignment",
   accepted: "autograde.acceptedAssignmentHistory", submit: "autograde.submitCurrentCommit",
@@ -58,14 +59,16 @@ test("session, trust, workspace and busy restrictions are rechecked independentl
   }
   assert.match(learningHomeBlockedReason("submit", {...ready, hasWorkspace: false})!, /작업 영역/);
   assert.equal(learningHomeBlockedReason("materials", {...ready, trusted: false, hasWorkspace: false}), undefined);
-  for (const action of ["configure", "connection"] as const) {
+  for (const action of ["configure", "connection", "downloads"] as const) {
     assert.equal(learningHomeBlockedReason(action, {authenticated: false, trusted: false, hasWorkspace: false}), undefined);
   }
 });
 
 test("rendered home is theme-aware, responsive, nonce-protected and never requests or persists credentials", () => {
   const html = renderLearningHome(ready, "safe-nonce");
-  for (const action of Object.keys(expected).filter(action => action !== "endSession")) assert.ok(html.includes(`data-action="${action}"`));
+  for (const action of Object.keys(expected).filter(action => !["endSession", "materials", "content"].includes(action))) assert.ok(html.includes(`data-action="${action}"`));
+  assert.match(html, /data-action="downloads" class="primary"/);
+  assert.doesNotMatch(html, /data-action="(?:materials|content)"/);
   assert.match(html, /var\(--vscode-editor-background\)/);
   assert.match(html, /var\(--vscode-focusBorder\)/);
   assert.match(html, /@media \(max-width: 420px\)/);

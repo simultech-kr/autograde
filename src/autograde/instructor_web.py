@@ -52,6 +52,7 @@ table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:12px;bor
 .instructor-header{display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap}
 .course-switch{max-width:100%;min-width:0}.course-switch label{margin:0}.course-switch .actions{align-items:center}
 .course-switch select{width:auto;max-width:min(440px,100%);min-width:0}.course-switch button{margin:0}
+.download-list{display:grid;gap:0}.download-item{display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap;border-top:1px solid var(--border,#cbd5e1);padding:16px 0}.download-item>div{flex:1 1 220px;min-width:0;overflow-wrap:anywhere}.download-item .button{margin:0}.download-item p{margin:4px 0 0}
 .shell nav a[aria-current=page]{background:var(--soft);color:var(--link);border-radius:6px;font-weight:600}
 .catalog-tools{display:flex;gap:12px;flex-wrap:wrap;align-items:end}.catalog-tools>div{flex:1 1 180px;min-width:0}
 .catalog-tools button{margin:0}.status-badge{display:inline-block;background:var(--soft);color:var(--text);padding:3px 8px;border-radius:5px}
@@ -136,7 +137,7 @@ class InstructorWeb:
     def __init__(self, course_admin, enrollment_admin, assignment_admin, *, authorize,
                  secret, web_url, submissions=None, submission_review=None, submission_updates=None, rubrics=None, identities=None,
                  next_ui_policy=None, exam_papers=None, student_materials=None, content_service=None,
-                 extension_distribution=None):
+                 extension_distribution=None, bundle_store=None):
         self.courses = course_admin
         self.students = enrollment_admin
         self.assignments = assignment_admin
@@ -152,6 +153,7 @@ class InstructorWeb:
         self.student_materials = student_materials
         self.content_service = content_service
         self.extension_distribution = extension_distribution
+        self.bundle_store = bundle_store
         self.principal = None
         self.next_ui_policy = next_ui_policy if next_ui_policy is not None else lambda: frozenset()
         self.catalog = InstructorAssignmentCatalog(assignment_admin.state) if assignment_admin else None
@@ -542,6 +544,11 @@ class InstructorWeb:
             except sqlite3.Error:
                 return self._page('루브릭 저장소 확인 필요', '<p>저장소를 사용할 수 없습니다. 입력 원본을 보관하고 잠시 후 목록에서 등록 여부를 확인하세요. 반복되면 서버 운영자에게 문의하세요.</p>',
                                   course=course, status=503, current_path=base + '/rubrics')
+        from .instructor_download_web import request as download_request
+        download = download_request(self, method, course, route,
+            reauthorize=lambda: self._scoped(authorization).courses.get_course(key))
+        if download is not None:
+            return download
         comparison = re.fullmatch(r'submissions/(bsub_[A-Za-z0-9_-]+)/compare/(bsub_[A-Za-z0-9_-]+)(?:/files/([0-9]{1,5}))?', route)
         if comparison and method == 'GET' and self.submission_review:
             return self.submission_review(key, authorization, comparison[1], int(comparison[3]) if comparison[3] else None, compare_id=comparison[2])
@@ -1044,7 +1051,8 @@ class InstructorWeb:
                 selection = (f'<label class="assignment-selection"><input type="checkbox" name="selected_{_e(item["assignment_id"])}" '
                              f'value="yes" data-assignment-select data-archived="{archived}" '
                              f'aria-label="{_e(item["title"])} 선택"> 선택</label>')
-            rows.append((selection + f'<a href="{_e(target)}">{_e(item["title"])}</a><div class="meta">{_e(origin)}</div>',
+            rows.append((selection + f'<a href="{_e(target)}">{_e(item["title"])}</a><div class="meta">{_e(origin)}</div>'
+                         + f'<a href="{_e(target)}/downloads">등록 파일·제출물 다운로드</a>',
                          f'<span class="status-badge">{_e(_VISIBILITY[item["visibility"]])}</span><div class="meta">{_e(check)}</div>',
                          _e(_timestamp(item['deleted_at']) if trash else _timestamp(item['due_at']) or '마감 없음'), counts))
         headers = ('삭제된 과제', '상태', '삭제 시각 (KST)', '보존된 학생 이력') if trash else ('과제', '공개·검증', '마감 (KST)', '학생 현황')
@@ -1106,6 +1114,7 @@ class InstructorWeb:
         deadline = _timestamp(item['due_at']) + ' KST (UTC+09:00)' if item['due_at'] else '마감 없음'
         body += f'<p>마감: <strong>{_e(deadline)}</strong></p>'
         body += f'<p>수락 {item["accepted_students"]}명 · 제출 {item["submitted_students"]}명 · 접수 {item["submission_count"]}건 (재제출 포함)</p>'
+        body += f'<p><a class="button" href="{base}/assignments/{quote(assignment_id, safe="")}/downloads">등록 파일·제출물 다운로드</a></p>'
         body += '<p class="hint">마감은 서버 접수 시각 기준입니다. 업로드 중 마감을 넘으면 새 제출은 거절될 수 있습니다.</p>'
         body += f'<a class="button" href="{base}/submissions">수업의 학생 제출·결과 확인</a>'
         if item['active'] and (item['ready'] or item['submission_count']):
@@ -1211,6 +1220,8 @@ class InstructorWeb:
         body = '<div class="notice"><strong>통합 과제·채점 작성</strong> · 문제부터 검증과 공개까지 이 화면에서 처리합니다. 각 저장 후 화면이 갱신되며 저장 버전이 증가합니다.</div>'
         body += f'<p><strong>{_e(draft["title"])}</strong> · 저장 버전 {draft["revision"]} · {_e(draft["language"])} · {"예제" if draft["mode"] == "template" else "직접 만들기"}</p>'
         body += f'<p class="meta">마지막 저장: {_e(_timestamp(draft.get("updated_at")))} KST · 각 영역의 저장 버튼을 누른 내용만 보존됩니다.</p>'
+        download_path = base + ('/assignments/' + draft['published_assignment_id'] if draft.get('published_assignment_id') else '/drafts/' + draft['draft_id'])
+        body += f'<p><a class="button secondary" href="{_e(download_path)}/downloads">등록 파일·제출물 다운로드</a></p>'
         uploads = {item['role']: item for item in draft.get('uploads', [])}
         template = draft['mode'] == 'template'
         missing_materials = self.assignments.missing_materials(draft, uploads)

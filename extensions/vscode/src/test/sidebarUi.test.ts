@@ -195,7 +195,7 @@ test("sidebar title exposes direct signed-out and signed-in actions", async () =
     assert.ok(menu, `${command} must be reachable from the Assignments title`);
     assert.match(menu.when ?? "", /view\s*==\s*autograde\.assignments/);
     assert.match(menu.when ?? "", /autograde\.authenticated/);
-    assert.match(menu.group ?? "", command === "autograde.cloneAssignment" ? /^1_assignment/ : /^navigation/);
+    assert.match(menu.group ?? "", command === "autograde.signOut" ? /^navigation/ : /^1_assignment/);
   }
 
   const download = titleMenus.find((item) => item.command === "autograde.cloneAssignment");
@@ -214,6 +214,9 @@ test("sidebar title exposes direct signed-out and signed-in actions", async () =
 test("compact toolbar keeps at most two persistent navigation buttons and exposes diagnostics", async () => {
   const menus = (await readManifest()).contributes?.menus?.["view/title"] ?? [];
   assert.ok(menus.filter(item => item.group?.startsWith("navigation")).length <= 2);
+  const downloads = menus.find(item => item.command === "autograde.openServerDownloads");
+  assert.ok(downloads?.group?.startsWith("navigation"));
+  assert.doesNotMatch(downloads?.when ?? "", /authenticated/);
   assert.ok(menus.some(item => item.command === "autograde.downloadDiagnostics" && item.when?.includes("authenticated")));
 });
 

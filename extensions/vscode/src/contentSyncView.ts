@@ -29,7 +29,7 @@ export class ContentSyncView implements vscode.Disposable {
     this.api = new ContentApi(client);
   }
 
-  public async show(requestGuard?: () => void, signal?: AbortSignal): Promise<ContentSyncOutcome> {
+  public async show(requestGuard?: () => void, signal?: AbortSignal, collectionId?: string): Promise<ContentSyncOutcome> {
     this.clear();
     const generation = this.generation, origin = this.client.getBaseUrl(), identity = this.client.tokens.getSessionGeneration?.();
     const initialExcluded = [...(this.options.excludedExportDirectories?.() ?? [])];
@@ -52,21 +52,33 @@ export class ContentSyncView implements vscode.Disposable {
       finally { cancellation.dispose(); if (this.pickerCancellation === cancellation) this.pickerCancellation = undefined; }
     };
     try {
+      if (collectionId !== undefined && (typeof collectionId !== "string" || !/^cc_[a-f0-9]{32}$/.test(collectionId))) {
+        throw new Error("선택한 강의자료를 확인할 수 없습니다. 서버 과제·자료 목록을 새로고침하세요.");
+      }
       if (!await this.client.tokens.hasSession()) throw new ApiError("학생 로그인이 필요합니다.", 401, "login_required");
       guard();
       const context = await this.api.context(controller.signal); guard();
       const catalog = await this.api.catalog(context, controller.signal); guard();
+      if (collectionId !== undefined && !catalog.collections.some(item => item.collection_id === collectionId)) {
+        await vscode.window.showWarningMessage("선택한 강의자료가 철회되었거나 현재 학생에게 공개되지 않았습니다. 서버 과제·자료 목록을 새로고침하세요.");
+        return "unavailable";
+      }
       if (!catalog.collections.length) {
         await vscode.window.showInformationMessage(`${context.course_key}: 지금 받을 수 있는 강의자료가 없습니다. 개인 PDF·ZIP 자료는 ‘내 배포 자료’에서 확인하세요.`);
         return "unavailable";
       }
-      const selected = await pick<CollectionPick>(catalog.collections.map(collection => ({
-        label: plain(collection.title), description: `배포 v${collection.generation}`,
-        detail: plain(collection.change_note).slice(0, 300) || "교수자가 공개한 강의자료입니다. 학생 답안과 분리하여 저장합니다.", collection,
-      })), {title: `${context.course_key} · 강의자료 업데이트`, placeHolder: "자료를 선택하세요. 파일은 다음 단계에서 받습니다.", matchOnDescription: true});
-      guard(); if (!selected) return "cancelled";
-      const manifest = await this.api.manifest(selected.collection.release_id, context, controller.signal); guard();
-      if (manifest.collection_id !== selected.collection.collection_id || manifest.generation !== selected.collection.generation) {
+      let collection = collectionId === undefined ? undefined : catalog.collections.find(item => item.collection_id === collectionId);
+      if (!collection) {
+        const selected = await pick<CollectionPick>(catalog.collections.map(collection => ({
+          label: plain(collection.title), description: `배포 v${collection.generation}`,
+          detail: plain(collection.change_note).slice(0, 300) || "교수자가 공개한 강의자료입니다. 학생 답안과 분리하여 저장합니다.", collection,
+        })), {title: `${context.course_key} · 강의자료 업데이트`, placeHolder: "자료를 선택하세요. 파일은 다음 단계에서 받습니다.", matchOnDescription: true});
+        guard(); if (!selected) return "cancelled";
+        collection = selected.collection;
+      }
+      guard();
+      const manifest = await this.api.manifest(collection.release_id, context, controller.signal); guard();
+      if (manifest.collection_id !== collection.collection_id || manifest.generation !== collection.generation) {
         throw new ApiError("자료 목록이 변경되었습니다.", 409, "content_changed");
       }
       const total = manifest.files.reduce((sum, file) => sum + file.size_bytes, 0);

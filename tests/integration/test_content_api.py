@@ -13,7 +13,12 @@ import pytest
 
 from autograde.content_store import ContentService
 from autograde.platform_auth import secret_digest
-from test_student_material_api import COURSE, NOW, SECRET, material_api
+from autograde.platform_bundle import BundleStore
+from test_course_portal import connect
+from test_student_material_api import (
+    COURSE, NOW, SECRET, PDF, ZIP, material_api,
+    publish as publish_personal_material, call as personal_material_request,
+)
 
 
 @pytest.fixture
@@ -99,6 +104,72 @@ def test_context_catalog_and_complete_download_verify(content_api):
     result = json.loads(body)
     assert result["verified"] is True and result["manifest_id"] == content["manifest_id"]
     assert result["offline_export_allowed"] is False
+
+
+def test_one_claim_session_downloads_accepted_assignment_personal_and_course_materials(content_api, tmp_path):
+    """The IDE download hub reuses one claim login without widening its scope."""
+    env = content_api
+    service = env.services[COURSE]
+    service.bundle_store = BundleStore(tmp_path / "hub-bundles")
+    source = tmp_path / "hub-starter"
+    source.mkdir()
+    (source / "README.md").write_text("# Synthetic download lab\n")
+    (source / "main.cpp").write_text("int main() { return 0; }\n")
+    starter = service.bundle_store.create_from_directory(source, kind="starter")
+    accepted_id, unaccepted_id = "basn_hub_accepted", "basn_hub_unaccepted"
+    for assignment_id in (accepted_id, unaccepted_id):
+        env.state.register_bundle_assignment_release(
+            assignment_id=assignment_id, course_key=COURSE, assignment_key=assignment_id,
+            release_id="v1", title="Synthetic hub assignment", starter_path=str(starter.path),
+            starter_digest=starter.digest, starter_size_bytes=starter.compressed_bytes,
+            assessment_path=str(tmp_path / "private-assessment"), assessment_digest="a" * 64,
+            runner_image="registry.school/autograde@sha256:" + "e" * 64,
+            rubric_version="v1", max_score=10, result_policy="immediate",
+            opens_at=NOW - timedelta(minutes=1), due_at=NOW + timedelta(days=1), ready=True, at=NOW,
+        )
+    personal = publish_personal_material(env, files=[("001.pdf", PDF)])
+    other_personal = publish_personal_material(env, files=[("002.zip", ZIP)])
+    _, course_release = publish(env)
+    _, other_release = publish(env, students=[env.students["002"].id])
+
+    service.set_student_password(student_key="001", password="123456")
+    credential = service.authenticate_student_password("001", "123456")
+    _, claim = service.create_authenticated_assignment_claim(credential, accepted_id)
+    _, tokens = connect(env.server, claim)
+    env.tokens["001"] = tokens["access_token"]
+    assert service.require_assignment_acceptance(env.tokens["001"]) == ("bundle", accepted_id)
+
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        futures = [
+            pool.submit(request, env, "/v1/assignments"),
+            pool.submit(personal_material_request, env, token=env.tokens["001"]),
+            pool.submit(request, env, "/v1/content/collections"),
+        ]
+        replies = [future.result() for future in futures]
+    assert all(status == 200 and headers["Cache-Control"] == "no-store" for status, headers, _ in replies)
+    assignments, materials, collections = [json.loads(body) for _, _, body in replies]
+    assert [item["assignment_id"] for item in assignments["assignments"]] == [accepted_id]
+    assert [item["material_id"] for item in materials["materials"]] == [personal["material_id"]]
+    assert [item["release_id"] for item in collections["collections"]] == [course_release["release_id"]]
+
+    status, headers, body = request(env, f"/v1/assignments/{accepted_id}/starter")
+    assert status == 200 and body == starter.path.read_bytes()
+    assert headers["X-Autograde-SHA256"] == starter.digest
+    material = materials["materials"][0]
+    status, _, body = personal_material_request(env, material["download_url"],
+        token=env.tokens["001"], pin=material["sha256"])
+    assert status == 200 and body == PDF
+    content = manifest(env, course_release)
+    for file in content["files"]:
+        status, _, body = request(env,
+            f'/v1/content/releases/{course_release["release_id"]}/objects/{file["sha256"]}',
+            pin=content["manifest_sha256"])
+        assert status == 200 and hashlib.sha256(body).hexdigest() == file["sha256"]
+
+    assert request(env, f"/v1/assignments/{unaccepted_id}/starter")[0] in (403, 404)
+    assert personal_material_request(env, f'/v1/materials/{other_personal["material_id"]}/download',
+        token=env.tokens["001"], pin=hashlib.sha256(ZIP).hexdigest())[0] == 404
+    assert request(env, f'/v1/content/releases/{other_release["release_id"]}/manifest')[0] == 404
 
 
 def test_authentication_course_and_selected_audience(content_api):

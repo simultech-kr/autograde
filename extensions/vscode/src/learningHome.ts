@@ -18,6 +18,7 @@ export interface LearningHomeState {
 }
 
 const actions = {
+  downloads: { command: "autograde.openServerDownloads", label: "서버 과제·자료 다운로드", session: false, trust: false, workspace: false },
   configure: { command: "autograde.configureServiceAddress", label: "서버 주소 설정", session: false, trust: false, workspace: false },
   connection: { command: "autograde.checkServerConnection", label: "서버 연결 확인", session: false, trust: false, workspace: false },
   claim: { command: "autograde.redeemAssignmentClaim", label: "수령 코드로 연결 · 과제 받기", session: false, trust: true, workspace: false },
@@ -107,7 +108,7 @@ aside { margin-top: 28px; padding-top: 16px; border-top: 1px solid var(--vscode-
 <p class="status" role="status" aria-live="polite">${status} · ${state.hasWorkspace ? "작업 영역 열림" : "작업 영역 없음"}${state.trusted ? "" : " · 제한 모드"}${state.busy ? " · 작업 진행 중" : ""}</p>
 <div class="grid">
 <section aria-labelledby="connect"><h2 id="connect">1. 수업 연결</h2><p>교수자가 안내한 채점 서버 주소를 설정하세요. 학생 웹에서 받은 수령 코드를 입력합니다.</p><div class="actions">${button("configure")}${button("connection")}${button("claim", true)}</div></section>
-<section aria-labelledby="resume"><h2 id="resume">2. 실습과 배포 자료</h2><p>${state.sharedSession ? "이번 실습의 새 폴더에 과제를 받습니다. 이전 작업은 서버 작업 저장본 또는 제출 이력에서 새 폴더로 복원할 수 있습니다. 코드와 자료를 보관하려면 내 학습내용 내보내기를 사용하세요." : "IDE를 다시 열었다면 새 수령 코드로 연결한 뒤 기존 폴더를 여세요. 강의자료는 학생별 캐시에 변경분만 받고, 필요할 때 별도 폴더에 저장합니다. 과제 코드는 덮어쓰지 않습니다."}</p><div class="actions">${button("open")}${button("checkpointRestore")}${button("accepted")}${button("content")}${button("materials")}${button("extensions")}</div></section>
+<section aria-labelledby="resume"><h2 id="resume">2. 실습과 배포 자료</h2><p>${state.sharedSession ? "이번 실습의 새 폴더에 과제를 받습니다. 이전 작업은 서버 작업 저장본 또는 제출 이력에서 새 폴더로 복원할 수 있습니다. 코드와 자료를 보관하려면 내 학습내용 내보내기를 사용하세요." : "IDE를 다시 열었다면 새 수령 코드로 연결한 뒤 기존 폴더를 여세요. 강의자료는 학생별 캐시에 변경분만 받고, 필요할 때 별도 폴더에 저장합니다. 과제 코드는 덮어쓰지 않습니다."}</p><div class="actions">${button("downloads", true)}${button("open")}${button("checkpointRestore")}${button("accepted")}${button("extensions")}</div></section>
 <section aria-labelledby="submit"><h2 id="submit">3. 제출과 피드백</h2><p>제출할 과제 폴더를 확인하세요. 제출 접수와 채점 완료는 별도이며, 현재 제출의 결과와 이전 이력을 확인할 수 있습니다.</p><div class="actions">${button("submit", true)}${button("result")}${button("history")}${button("exportLearning")}</div></section>
 </div>
 <aside aria-label="작업 코드 자동 저장"><h2>작업 코드 자동 저장 · 공식 제출과 별도</h2><p role="status" aria-live="polite">${escapeHtml(state.checkpointStatus ?? "대기 · 연결된 과제 폴더 없음")}</p><p>현재 인증으로 연결한 과제 폴더의 편집 내용을 저장하고, 변경된 코드를 30초마다 서버에 보관합니다. 다른 과제·강의자료·다른 프로그램 활동은 이 기능으로 보내지 않습니다. 서버의 접수 응답을 받아야 저장 완료로 표시합니다. 공용 실습에서 새로 받은 템플릿은 수정하거나 지금 저장을 눌렀을 때 보관합니다.</p><p>자동 저장은 공식 제출이나 채점을 시작하지 않습니다. 연결이 끊기거나 파일을 저장할 수 없으면 최신 코드가 서버에 없을 수 있습니다. 최신 상태를 확인하고 필요하면 내보내기를 사용하세요.</p>${button("checkpointSave")}</aside>

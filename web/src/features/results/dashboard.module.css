@@ -142,6 +142,14 @@
   margin-left: var(--space-4);
 }
 
+.assignmentDownloadsLink {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  margin-left: var(--space-4);
+  font-weight: 600;
+}
+
 .liveBar {
   display: flex;
   align-items: center;
@@ -299,6 +307,12 @@
   padding-block: var(--space-2);
   font-size: 0.875rem;
   font-weight: 600;
+}
+
+.reviewActions {
+  display: flex;
+  align-items: flex-start;
+  flex-direction: column;
 }
 
 .pagination {
@@ -525,6 +539,11 @@
     margin: var(--space-1) 0 0;
   }
 
+  .assignmentDownloadsLink {
+    display: flex;
+    margin-left: 0;
+  }
+
   .liveActions {
     gap: var(--space-3);
     margin-left: auto;
@@ -591,11 +610,13 @@
     display: none;
   }
 
-  .table td:nth-child(6) .detailLink {
-    width: 100%;
-    padding-top: var(--space-3);
+  .reviewActions {
+    flex-direction: row;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+    gap: 0 var(--space-4);
+    padding-top: var(--space-2);
     border-top: 1px solid var(--border);
-    text-align: right;
   }
 
   .pagination {

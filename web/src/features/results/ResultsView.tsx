@@ -1,5 +1,6 @@
 import { MetricCard, StatusBadge, type StatusTone } from "../../components/InstructorUI";
-import type { ResultRow, Summary } from "../../lib/contracts/instructor";
+import type { Assignment, ResultRow, Summary } from "../../lib/contracts/instructor";
+import { assignmentDownloadsURL, submissionDownloadURL } from "./downloads";
 import { formatTime } from "./query";
 import styles from "./dashboard.module.css";
 
@@ -83,7 +84,19 @@ function Score({ value, max }: { value: number | null; max: number | null }) {
   );
 }
 
-export function ResultsTable({ rows }: { rows: ResultRow[] }) {
+export function AssignmentDownloadsLink({ courseKey, assignment }: { courseKey: string; assignment?: Assignment }) {
+  const url = assignment ? assignmentDownloadsURL(courseKey, assignment.assignment_id) : null;
+  if (!url || !assignment) return null;
+  return (
+    <a className={styles.assignmentDownloadsLink} href={url} data-testid="assignment-downloads">
+      등록 파일·제출물 다운로드
+      <span className="sr-only">: {assignment.title || assignment.assignment_key}</span>
+    </a>
+  );
+}
+
+// A course is omitted in the synthetic preview so sample receipts stay inert.
+export function ResultsTable({ rows, courseKey = "" }: { rows: ResultRow[]; courseKey?: string }) {
   if (!rows.length) {
     return (
       <div className={styles.empty}>
@@ -111,6 +124,9 @@ export function ResultsTable({ rows }: { rows: ResultRow[] }) {
       <tbody role="rowgroup">
         {rows.map(row => {
           const presentation = resultPresentation(row);
+          // Use the displayed receipt, including when a newer result is waiting
+          // to be applied. Never resolve a student's mutable "latest" receipt.
+          const downloadURL = submissionDownloadURL(courseKey, row.submission_id);
           return (
           <tr key={row.row_key} role="row" data-testid="result-row" data-row-key={row.row_key}>
             <th scope="row" role="rowheader" data-label="학생">
@@ -143,12 +159,22 @@ export function ResultsTable({ rows }: { rows: ResultRow[] }) {
               ) : <span className={styles.muted}>이전 결과 없음</span>}
             </td>
             <td role="cell" data-label="검토">
-              {row.detail_url ? (
-                <a className={styles.detailLink} href={row.detail_url}>
-                  이력·코드 확인
-                  <span className="sr-only">: {row.student_key}, {row.assignment_key}</span>
-                  <span aria-hidden="true"> ↗</span>
-                </a>
+              {row.detail_url || downloadURL ? (
+                <div className={styles.reviewActions}>
+                  {row.detail_url && (
+                    <a className={styles.detailLink} href={row.detail_url}>
+                      이력·코드 확인
+                      <span className="sr-only">: {row.student_key}, {row.assignment_key}</span>
+                      <span aria-hidden="true"> ↗</span>
+                    </a>
+                  )}
+                  {downloadURL && (
+                    <a className={styles.detailLink} href={downloadURL} download data-testid="submission-download">
+                      제출 ZIP 받기
+                      <span className="sr-only">: {row.student_key}, {row.assignment_key}, 현재 표시된 제출</span>
+                    </a>
+                  )}
+                </div>
               ) : <span className={styles.muted}>—</span>}
             </td>
           </tr>

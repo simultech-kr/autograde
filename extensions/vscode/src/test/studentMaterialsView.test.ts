@@ -19,17 +19,26 @@ let workspaceFolders: {uri: {scheme: string; fsPath: string}}[] = [];
 let afterPick = () => {};
 let afterDirectory = () => {};
 let receivedDefault: unknown;
+let informationAction: string | undefined;
+let informationResponse: Promise<string | undefined> | undefined;
+let revealError: Error | undefined;
+let onReveal = () => {};
+let onWarning = () => {};
+let beforeInformation = () => {};
+const revealed: {command: string; uri: {fsPath: string}}[] = [];
 const stub = {
   CancellationTokenSource: class {
     public token = {isCancellationRequested: false};
     public cancel() { this.token.isCancellationRequested = true; }
     public dispose() {}
   },
+  Uri: {file: (fsPath: string) => ({scheme: "file", fsPath})},
+  commands: {executeCommand: async (command: string, uri: {fsPath: string}) => {revealed.push({command, uri}); onReveal(); if (revealError) throw revealError;}},
   workspace: {get isTrusted() {return trusted;}, get workspaceFolders() {return workspaceFolders;}},
   ProgressLocation: {Notification: 1},
   window: {
-    showInformationMessage: async (message: string) => {messages.push(message);},
-    showWarningMessage: async (message: string) => {messages.push(message);},
+    showInformationMessage: async (message: string) => {messages.push(message); beforeInformation(); return informationResponse ?? informationAction;},
+    showWarningMessage: async (message: string) => {messages.push(message); onWarning();},
     showQuickPick: async (items: unknown[]) => { pickCount++; afterPick(); return items[0]; },
     showOpenDialog: async (options: {defaultUri?: unknown}) => {dialogCount++; receivedDefault = options.defaultUri;
       afterDirectory(); return [{scheme: "file", fsPath: directory}];},
@@ -45,12 +54,14 @@ loader._load = original;
 function fixture() {
   messages.length = 0; pickCount = 0; dialogCount = 0; trusted = true; workspaceFolders = [];
   afterPick = () => {}; afterDirectory = () => {}; receivedDefault = undefined;
+  informationAction = undefined; informationResponse = undefined; beforeInformation = () => {}; revealed.length = 0;
+  revealError = undefined; onReveal = () => {}; onWarning = () => {};
   const state = {generation: 1, base: "https://test.invalid", loggedIn: true, reads: 0, lists: 0,
-    items: [material], failure: undefined as Error | undefined};
+    items: [material], downloaded: [] as string[], afterList: () => {}, failure: undefined as Error | undefined};
   const client = {getBaseUrl: () => state.base,
     tokens: {getSessionGeneration: () => state.generation, hasSession: async () => state.loggedIn},
-    getStudentMaterials: async () => {state.lists++; if (state.failure) throw state.failure; return {courseKey: "come2201", materials: state.items};},
-    getStudentMaterialFile: async () => {state.reads++; return pdf;},
+    getStudentMaterials: async () => {state.lists++; if (state.failure) throw state.failure; state.afterList(); return {courseKey: "come2201", materials: state.items};},
+    getStudentMaterialFile: async (item: StudentMaterial) => {state.reads++; state.downloaded.push(item.id); return pdf;},
   } as unknown as AutogradeClient;
   return {state, client};
 }
@@ -219,6 +230,67 @@ test("shared material destination changes or symlink substitution cannot write o
       assert.equal(dialogCount, 0); assert.deepEqual(await readdir(outside), []);
       assert.doesNotMatch(messages.join(" "), /자료를 저장했습니다/);
       view.dispose();
+    }
+  } finally {await rm(root, {recursive: true, force: true});}
+});
+
+
+test("targeted material receipt reloads the catalog and saves only the requested item without a picker", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "autograde-target-material-"));
+  try {
+    const {state, client} = fixture(); directory = root;
+    state.items = [{...material, id: "mat_other"}, {...material, fileRevision: 2, updated: true}];
+    const view = new StudentMaterialsView(client);
+    assert.equal(await view.show(material.id), "saved");
+    assert.equal(state.lists, 1); assert.equal(pickCount, 0); assert.equal(dialogCount, 1);
+    assert.deepEqual(state.downloaded, [material.id]);
+    assert.deepEqual(await readdir(root), ["come2201-mat_test-v2.pdf"]);
+    state.items = [{...material, id: "mat_other"}];
+    assert.equal(await view.show(material.id), "unavailable");
+    assert.equal(state.lists, 2); assert.equal(state.reads, 1); assert.equal(pickCount, 0);
+    assert.match(messages.join(" "), /철회.*새로고침/); view.dispose();
+  } finally {await rm(root, {recursive: true, force: true});}
+});
+
+test("targeted material rejects arbitrary addresses, unavailable periods and changed catalog identity", async () => {
+  for (const situation of ["url", "path", "scheduled", "closed", "untrusted", "account", "server"]) {
+    const {state, client} = fixture();
+    if (situation === "scheduled" || situation === "closed") state.items = [{...material, availability: situation}];
+    if (situation === "untrusted") trusted = false;
+    if (situation === "account") state.afterList = () => {state.generation++;};
+    if (situation === "server") state.afterList = () => {state.base = "https://other.invalid";};
+    const view = new StudentMaterialsView(client);
+    const result = await view.show(situation === "url" ? "https://other.invalid/file.pdf" : situation === "path" ? "../answer" : material.id);
+    assert.notEqual(result, "saved"); assert.equal(state.reads, 0); assert.equal(pickCount, 0); assert.equal(dialogCount, 0);
+    if (situation === "url" || situation === "path") assert.equal(state.lists, 0);
+    if (situation === "account" || situation === "server") assert.deepEqual(messages, []);
+    view.dispose();
+  }
+});
+
+test("save location is optional, nonblocking and scoped; reveal errors do not turn receipt into failure", {timeout: 5000}, async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "autograde-reveal-material-"));
+  try {
+    for (const situation of ["reveal", "dismiss", "changed", "reveal-error"]) {
+      const {state, client} = fixture(); directory = path.join(root, situation); await mkdir(directory);
+      let choose!: (action: string | undefined) => void;
+      informationResponse = new Promise(resolve => {choose = resolve;});
+      const done = new Promise<void>(resolve => {if (situation === "reveal-error") onWarning = resolve; else onReveal = resolve;});
+      if (situation === "reveal-error") revealError = new Error("Finder unavailable");
+      const view = new StudentMaterialsView(client);
+      assert.equal(await view.show(material.id), "saved", "a pending notification does not hold the receipt operation");
+      assert.equal(revealed.length, 0);
+      if (situation === "changed") state.generation++;
+      choose(situation === "dismiss" ? undefined : "저장 위치 보기");
+      if (situation === "reveal" || situation === "reveal-error") await done;
+      await new Promise<void>(resolve => setImmediate(resolve));
+      assert.equal(revealed.length, situation === "reveal" || situation === "reveal-error" ? 1 : 0);
+      if (revealed.length) {
+        assert.equal(revealed[0]!.command, "revealFileInOS");
+        assert.equal(path.dirname(revealed[0]!.uri.fsPath), await realpath(directory));
+      }
+      if (situation === "reveal-error") assert.match(messages.join(" "), /자료는 저장했지만 저장 위치를 열지 못했습니다/);
+      assert.equal(state.reads, 1); view.dispose();
     }
   } finally {await rm(root, {recursive: true, force: true});}
 });

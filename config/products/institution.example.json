@@ -53,7 +53,7 @@
       },
       "compatibility": {
         "server_release": "institution-foundation-0.1",
-        "extension_version": "0.5.15",
+        "extension_version": "0.5.16",
         "os_requirement": "macOS 13.5 or later, Apple Silicon",
         "toolchain_requirement": "C17 and C++17 compiler and debugger separately installed and verified"
       },
@@ -73,7 +73,7 @@
       },
       "compatibility": {
         "server_release": "institution-foundation-0.1",
-        "extension_version": "0.5.15",
+        "extension_version": "0.5.16",
         "os_requirement": "Windows 11 x64; native installer and physical lab acceptance pending",
         "toolchain_requirement": "MSVC C17/C++17, Windows SDK and debugger provisioned by operator; Node bundled with IDE"
       },
@@ -93,7 +93,7 @@
       },
       "compatibility": {
         "server_release": "institution-foundation-0.1",
-        "extension_version": "0.5.15",
+        "extension_version": "0.5.16",
         "os_requirement": "Windows 11, WSL2, WSLg, Linux filesystem",
         "toolchain_requirement": "C17 and C++17 compiler and debugger separately installed and verified"
       },
@@ -113,7 +113,7 @@
       },
       "compatibility": {
         "server_release": "institution-foundation-0.1",
-        "extension_version": "0.5.15",
+        "extension_version": "0.5.16",
         "os_requirement": "Linux distribution and desktop libraries require target acceptance",
         "toolchain_requirement": "C17 and C++17 compiler and debugger separately installed and verified"
       },

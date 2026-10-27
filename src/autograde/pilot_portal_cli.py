@@ -160,6 +160,7 @@ def run(config, *, isolated=False):
                 student_materials=student_materials,
                 content_service=content_service,
                 extension_distribution=extension_distribution,
+                bundle_store=bundles,
                 next_ui_policy=NextResultsPolicy(config),
                 submissions=lambda key, auth: services[key].instructor_dashboard_page(auth, portal=True),
                 submission_updates=lambda key, auth: services[key].instructor_dashboard_updates(auth, portal=True),

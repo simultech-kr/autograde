@@ -6,7 +6,7 @@ import { ApiError, bootstrap, entryURL, results, terminalError } from "../../lib
 import { ContractError, type Bootstrap, type Results } from "../../lib/contracts/instructor";
 import { availableModules } from "../registry";
 import { defaultQuery, filterKey, formatTime, pageURL, parseQuery, pollDelay, statusNames, statuses, type ResultsQuery, type Sort, type Status } from "./query";
-import { refreshPresentation, ResultsTable, SummaryCards } from "./ResultsView";
+import { AssignmentDownloadsLink, refreshPresentation, ResultsTable, SummaryCards } from "./ResultsView";
 import styles from "./dashboard.module.css";
 
 type Failure = { message: string; requestId: string; code: string; terminal: boolean };
@@ -289,6 +289,7 @@ export function InstructorDashboard() {
                   <strong>목록 조건</strong> {assignmentLabel} · {statusNames[query.status]}
                   {query.student && <> · 학생 검색: <strong>{query.student}</strong></>}
                   {visibleData && <span>조건에 맞는 결과 <strong>{visibleData.total.toLocaleString("ko-KR")}건</strong></span>}
+                  <AssignmentDownloadsLink courseKey={course} assignment={selectedAssignment} />
                 </p>
 
                 <div className={styles.liveBar}>
@@ -337,7 +338,7 @@ export function InstructorDashboard() {
                   {loading && !visibleData ? (
                     <p role="status" className={styles.loading}>제출 결과를 불러오고 있습니다…</p>
                   ) : visibleData ? (
-                    <ResultsTable rows={visibleData.rows} />
+                    <ResultsTable rows={visibleData.rows} courseKey={visibleData.course_key} />
                   ) : !error && !changed ? (
                     <p className={styles.loading}>연결되면 결과를 표시합니다.</p>
                   ) : null}

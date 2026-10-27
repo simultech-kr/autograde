@@ -336,6 +336,13 @@ class CoursePortal:
             if method != 'GET':
                 raise PlatformAPIError(405, 'method_not_allowed', '조회만 가능한 경로입니다.')
             return service.instructor_dashboard_updates(authorization or '', portal=True)
+        download = re.fullmatch(r'/courses/([a-z0-9_-]{1,96})/instructor/submissions/(bsub_[A-Za-z0-9_-]+)/(?:download\.zip|files/([0-9]{1,5})/download)', path)
+        if download and download[1] in self.services:
+            service = self.services[download[1]]
+            service._authorize_instructor(authorization or '')
+            if method != 'GET':
+                raise PlatformAPIError(405, 'method_not_allowed', '파일 다운로드는 조회 요청만 허용합니다.')
+            return service.instructor_submission_download(authorization or '', download[2], int(download[3]) if download[3] else None)
         comparison = re.fullmatch(r'/courses/([a-z0-9_-]{1,96})/instructor/submissions/(bsub_[A-Za-z0-9_-]+)/compare/(bsub_[A-Za-z0-9_-]+)(?:/files/([0-9]{1,5}))?', path)
         if comparison and method == 'GET' and comparison[1] in self.services:
             return self.services[comparison[1]].instructor_submission_page(authorization or '', comparison[2],

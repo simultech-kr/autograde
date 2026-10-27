@@ -92,6 +92,7 @@ import { ManagedExtensionsApi } from "./managedExtensionsApi";
 import { ManagedExtensionsInstaller } from "./managedExtensionsView";
 import { LearningCheckpointView, SAVE_LEARNING_CHECKPOINT_COMMAND, RESTORE_LEARNING_CHECKPOINT_COMMAND } from "./learningCheckpointView";
 import { learningCheckpointLabel, type LearningCheckpointStatus } from "./learningCheckpoint";
+import { ServerDownloadsView, SERVER_DOWNLOADS_COMMAND } from "./serverDownloadsView";
 let diagnosticExtensionVersion = "0.5.8";
 
 const SUCCESSFUL_SUBMISSION_STATES = new Set(["accepted", "queued", "running", "graded", "published"]);
@@ -168,6 +169,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   let classroomCommands: ClassroomCommands | undefined;
   let managedExtensions: ManagedExtensions | undefined;
   let learningCheckpoints: LearningCheckpointView | undefined;
+  let serverDownloads: ServerDownloadsView | undefined;
   let checkpointStatus: LearningCheckpointStatus = {state: "inactive"};
   let classroomCommandStatus = "교수자 요청 대기 · 과제 연결 필요";
   let examAssignmentId: string | undefined;
@@ -279,6 +281,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     classroomCommands?.reconcile();
     managedExtensions?.reconcile(); learningCheckpoints?.reconcile();
     learningHome.refresh();
+    serverDownloads?.reconcile();
     await Promise.all([
       vscode.commands.executeCommand(
         "setContext",
@@ -431,6 +434,29 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       void vscode.window.showInformationMessage("수령 코드 입력 또는 과제 작업이 진행 중입니다. 열린 입력창이나 진행 알림에서 완료·취소한 뒤 다시 선택하세요.");
     }),
   );
+  const runServerDownload = async <T>(action: () => Promise<T>): Promise<T> => {
+    if (assignmentOperations.isBusy || submitting) throw new Error("과제 작업이 진행 중입니다. 완료하거나 취소한 뒤 다시 다운로드하세요.");
+    return await assignmentOperations.tryRun(action) as T;
+  };
+  serverDownloads = new ServerDownloadsView(client, {
+    authenticated: () => authenticationUiState && studentState.isActive(),
+    onAuthenticationRequired: async () => {
+      studentState = clearStudentSessionResidue(studentState, treeProvider, output, diagnostics);
+      await updateAuthenticationUI(false);
+    },
+    onActionError: error => { if (!(error instanceof vscode.CancellationError)) showCommandError(error); },
+    downloadAssignment: id => runServerDownload(async () => {
+      const origin = transport.getBaseUrl(), generation = tokens.getSessionGeneration();
+      const assignments = await refreshAssignments(false);
+      if (origin !== transport.getBaseUrl() || generation !== tokens.getSessionGeneration()) return;
+      const assignment = assignments.find(item => item.id === id);
+      if (!assignment || !isAssignmentDownloadable(assignment)) throw new Error("현재 인증으로 받을 수 있는 과제가 아닙니다. 목록을 새로고침하고 수령 코드를 확인하세요.");
+      await cloneAssignment(client, treeProvider, refreshAssignments, new AssignmentTreeItem(assignment), assignmentWorkspaces);
+    }),
+    downloadMaterial: id => runServerDownload(() => studentMaterials.show(id)),
+    downloadContent: id => runServerDownload(() => contentSync.show(undefined, undefined, id)),
+    connect: async () => { await vscode.commands.executeCommand("autograde.redeemAssignmentClaim"); },
+  });
   learningCheckpoints = new LearningCheckpointView(client, {
     currentScope: () => {
       const selected = assignmentWorkspaces.selected;
@@ -612,6 +638,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand(EXAM_MODE_COMMAND, () => examMode.show()),
     learningHome,
     vscode.commands.registerCommand(LEARNING_HOME_COMMAND, () => learningHome.show()),
+    serverDownloads,
+    vscode.commands.registerCommand(SERVER_DOWNLOADS_COMMAND, () => serverDownloads!.show()),
     vscode.commands.registerCommand(END_LEARNING_SESSION_COMMAND, () => runCommand(endSharedSession)),
     vscode.workspace.onDidChangeWorkspaceFolders(() => { learningHome.refresh(); classroom.reconcile(); classroomCommands?.reconcile(); managedExtensions?.reconcile(); learningCheckpoints?.reconcile(); }),
     documentView,
@@ -731,6 +759,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.workspace.onDidGrantWorkspaceTrust(() => {
       treeProvider.setAssignments(treeProvider.getAssignments());
       learningHome.refresh();
+      serverDownloads?.reconcile();
       classroom.reconcile(); learningCheckpoints?.reconcile();
     }),
     vscode.workspace.onDidChangeConfiguration((event) => {

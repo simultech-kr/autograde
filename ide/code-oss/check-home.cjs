@@ -14,7 +14,7 @@ const [compiledHome, playwrightModule, executablePath, output] = args.map(value 
 const { renderLearningHome, learningHomeBlockedReason } = require(compiledHome);
 const { chromium } = require(playwrightModule);
 const widths = [320, 375, 768, 1440];
-const baseActions = ['configure', 'connection', 'claim', 'open', 'accepted', 'materials', 'content', 'submit', 'result', 'history', 'exportLearning', 'exam'];
+const baseActions = ['configure', 'connection', 'claim', 'downloads', 'open', 'checkpointRestore', 'accepted', 'extensions', 'submit', 'result', 'history', 'exportLearning', 'checkpointSave', 'exam'];
 const nonce = 'autograde-synthetic-browser-test';
 const themes = {
   light: {

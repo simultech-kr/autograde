@@ -2,7 +2,7 @@
   "name": "autograde-vscode",
   "displayName": "Autograde",
   "description": "C/C++ 실습 과제 수령·다운로드·제출·채점 피드백을 VS Code에서. Linux, macOS, Windows WSL2 수업용 Autograde 확장.",
-  "version": "0.5.15",
+  "version": "0.5.16",
   "private": true,
   "publisher": "autograde",
   "repository": {
@@ -57,7 +57,8 @@
     "onCommand:autograde.endLearningSession",
     "onCommand:autograde.manageCourseExtensions",
     "onCommand:autograde.saveLearningCheckpoint",
-    "onCommand:autograde.restoreLearningCheckpoint"
+    "onCommand:autograde.restoreLearningCheckpoint",
+    "onCommand:autograde.openServerDownloads"
   ],
   "contributes": {
     "commands": [
@@ -222,6 +223,12 @@
         "title": "Autograde: Restore Server Learning Work",
         "shortTitle": "서버 작업 저장본 · 새 폴더로 복원",
         "enablement": "autograde.authenticated && isWorkspaceTrusted"
+      },
+      {
+        "command": "autograde.openServerDownloads",
+        "title": "Autograde: Server Assignments and Materials",
+        "shortTitle": "서버 과제·자료 다운로드",
+        "icon": "$(cloud-download)"
       }
     ],
     "configuration": {
@@ -268,16 +275,21 @@
       {
         "view": "autograde.assignments",
         "when": "!autograde.authenticated",
-        "contents": "학생 웹(20010번)에서 새 수령 코드를 받아 연결하세요. VS Code 서버 주소는 20000번입니다. IDE 재시작 후에도 기존 과제 파일은 그대로 이어서 사용할 수 있습니다.\n[학습 홈](command:autograde.openLearningHome)\n[서버 주소 설정](command:autograde.configureServiceAddress)\n[서버 연결 확인](command:autograde.checkServerConnection)\n[수령 코드 입력 및 다운로드](command:autograde.redeemAssignmentClaim)"
+        "contents": "학생 웹(20010번)에서 새 수령 코드를 받아 연결하세요. VS Code 서버 주소는 20000번입니다. 일반 VS Code의 기존 과제 파일은 이어서 사용할 수 있습니다. 공용 Autograde IDE는 종료 후 파일이 정리되며 서버 저장본을 복원할 수 있습니다.\n[학습 홈](command:autograde.openLearningHome)\n[서버 과제·자료 다운로드](command:autograde.openServerDownloads)\n[서버 주소 설정](command:autograde.configureServiceAddress)\n[서버 연결 확인](command:autograde.checkServerConnection)\n[수령 코드 입력 및 다운로드](command:autograde.redeemAssignmentClaim)"
       },
       {
         "view": "autograde.assignments",
         "when": "autograde.authenticated",
-        "contents": "현재 인증에서 표시할 수락 과제가 없습니다. 수락 이력에서 과제를 확인하고 해당 과제의 새 수령 코드로 연결하세요.\n[학습 홈](command:autograde.openLearningHome)\n[수락 이력 / 과제 전환](command:autograde.acceptedAssignmentHistory)\n[서버 주소 설정](command:autograde.configureServiceAddress)\n[서버 연결 확인](command:autograde.checkServerConnection)\n[수령 코드 입력 및 다운로드](command:autograde.redeemAssignmentClaim)\n[과제 새로고침](command:autograde.refreshAssignments)"
+        "contents": "현재 인증에서 표시할 수락 과제가 없습니다. 수락 이력에서 과제를 확인하고 해당 과제의 새 수령 코드로 연결하세요.\n[학습 홈](command:autograde.openLearningHome)\n[서버 과제·자료 다운로드](command:autograde.openServerDownloads)\n[수락 이력 / 과제 전환](command:autograde.acceptedAssignmentHistory)\n[서버 주소 설정](command:autograde.configureServiceAddress)\n[서버 연결 확인](command:autograde.checkServerConnection)\n[수령 코드 입력 및 다운로드](command:autograde.redeemAssignmentClaim)\n[과제 새로고침](command:autograde.refreshAssignments)"
       }
     ],
     "menus": {
       "view/title": [
+        {
+          "command": "autograde.openServerDownloads",
+          "when": "view == autograde.assignments",
+          "group": "navigation@1"
+        },
         {
           "command": "autograde.syncContent",
           "when": "view == autograde.assignments && autograde.authenticated",
@@ -336,7 +348,7 @@
         {
           "command": "autograde.refreshAssignments",
           "when": "view == autograde.assignments && autograde.authenticated",
-          "group": "navigation@4"
+          "group": "1_assignment@8"
         },
         {
           "command": "autograde.cloneAssignment",

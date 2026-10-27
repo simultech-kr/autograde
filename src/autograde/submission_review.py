@@ -171,6 +171,7 @@ def render_review(state, store, course_key, submission_id, file_index=None, hist
             f'<p>제출 ID <code>{_e(submission_id)}</code><br>접수 {_e(row["received_at"])}</p>'
             f'<p>상태 {_e(row["state"])} · 점수 {_e(score)} · {_e(attention_reason(row["state"], row["score"], row["max_score"]))}</p>'
             f'<p>실패 코드: {_e(row["failure_code"] or "없음")}</p>'
+            f'<p><a href="{root}/download.zip" download>이 접수의 제출 원본 ZIP 다운로드</a></p>'
             '<p class="notice">제출 당시 원본을 읽기 전용으로 표시합니다. 실행·수정·재채점하지 않습니다. '
             '감점이나 실패는 부정행위 판정이 아닙니다. 비공개 채점 자료는 포함하지 않습니다.</p>')
     best = state.get_bundle_previous_best(submission_id)
@@ -190,8 +191,9 @@ def render_review(state, store, course_key, submission_id, file_index=None, hist
                 comparison += '<br>동일 소스 재제출'
         timeline.append((f'<a href="{url}">#{item["version"]} 제출' + (' · 선택됨' if item['submission_id'] == submission_id else '') + '</a>',
                          _e(item['received_at']), '<code>' + _e(item['source_digest']) + '</code>',
-                         _e(earned), _e(delta), _e(item['state']), comparison))
-    body += result_table(('접수 순번', '제출 시각 (UTC)', '코드 버전 (SHA-256)', '점수', '직전 대비 증감', '상태', '코드 비교'), timeline, '학생별 점수·코드 변경 이력')
+                         _e(earned), _e(delta), _e(item['state']), comparison,
+                         f'<a href="{url}/download.zip" download>원본 ZIP 다운로드</a>'))
+    body += result_table(('접수 순번', '제출 시각 (UTC)', '코드 버전 (SHA-256)', '점수', '직전 대비 증감', '상태', '코드 비교', '원본 다운로드'), timeline, '학생별 점수·코드 변경 이력')
     body += '<p>순번은 보관된 접수 순서이며 SHA-256은 제출 묶음의 식별값입니다. 증감은 바로 이전 제출과 같은 배점일 때만 계산합니다. 미채점·실패·배점 변경은 0점으로 간주하지 않습니다. 과제 릴리스별 이력이며 과거에 중복 처리된 제출 클릭은 복원할 수 없습니다.</p>'
     if history_offset:
         body += f'<a href="{root}/history/{max(0, history_offset - 100)}">더 최근 제출 100건</a> '
@@ -216,7 +218,8 @@ def render_review(state, store, course_key, submission_id, file_index=None, hist
             entry = files[index]
             label = _visible_controls(entry.path)
             label = label[:200] + '…' if len(label) > 200 else label
-            body += f'<li><a href="{root}/files/{index}">{_e(label)}</a> ({entry.size} bytes)</li>'
+            body += (f'<li><a href="{root}/files/{index}">{_e(label)}</a> ({entry.size} bytes) '
+                     f'· <a href="{root}/files/{index}/download" download>원본 파일 다운로드</a></li>')
         body += '</ul>'
         if start:
             body += f'<a href="{root}/files/{start - 200}">이전 파일 200개</a> '
@@ -229,6 +232,7 @@ def render_review(state, store, course_key, submission_id, file_index=None, hist
         else:
             entry = files[file_index]
             body += f'<h2>{_e(_visible_controls(entry.path))}</h2>'
+            body += f'<p><a href="{root}/files/{file_index}/download" download>이 파일 원본 다운로드</a></p>'
             if entry.size > MAX_SOURCE_BYTES:
                 body += '<p>256 KiB를 초과하여 웹 미리보기를 제공하지 않습니다.</p>'
             else:

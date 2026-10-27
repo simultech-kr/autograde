@@ -1509,6 +1509,27 @@ class StudentPlatformService:
 
     # Instructor dashboard -------------------------------------------
 
+    def instructor_submission_download(self, authorization: str, submission_id: str,
+                                       file_index: int | None = None) -> PlatformFileResponse:
+        self._authorize_instructor(authorization)
+        from .instructor_submission_downloads import (InstructorSubmissionDownloads,
+            InstructorDownloadUnavailable, InstructorDownloadLimitError)
+        from .instructor_download_web import file_response
+        if self.bundle_store is None:
+            raise PlatformAPIError(503, 'submission_source_unavailable', '제출 원본 저장소를 확인해 주세요.')
+        try:
+            service = InstructorSubmissionDownloads(self.state, self.bundle_store,
+                self.bundle_store.root.parent / 'cache' / 'instructor-submission-downloads')
+            artifact = service.download(self.course_key, submission_id, file_index)
+            self._authorize_instructor(authorization)
+            return file_response(artifact)
+        except PlatformNotFound as exc:
+            raise PlatformAPIError(404, 'submission_not_found', '현재 수업에서 제출물 또는 파일을 찾을 수 없습니다.') from exc
+        except InstructorDownloadLimitError as exc:
+            raise PlatformAPIError(413, 'submission_download_limit', str(exc)) from exc
+        except InstructorDownloadUnavailable as exc:
+            raise PlatformAPIError(503, 'submission_source_unavailable', '제출 원본의 보관 상태와 서버 저장 공간·권한을 확인해 주세요.') from exc
+
     def instructor_submission_page(self, authorization: str, submission_id: str,
                                    file_index: int | None = None, *, history_offset: int = 0,
                                    compare_id: str | None = None) -> PlatformResponse:

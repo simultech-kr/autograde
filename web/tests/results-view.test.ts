@@ -8,13 +8,14 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import ts from "typescript";
 import type { ResultRow } from "../src/lib/contracts/instructor.ts";
+import { assignmentDownloadsURL, submissionDownloadURL } from "../src/features/results/downloads.ts";
 import { sampleResults } from "./fixtures.ts";
 
 // Node's native TypeScript runner does not transform JSX or CSS modules. Load
-// only these three repository presentation modules in memory; no app, network,
+// only these repository presentation modules in memory; no app, network,
 // browser globals, generated files, or new test dependency is needed.
 const sourceRoot = fileURLToPath(new URL("../src/", import.meta.url));
-const allowed = ["features/results/ResultsView.tsx", "components/InstructorUI.tsx", "features/results/query.ts"]
+const allowed = ["features/results/ResultsView.tsx", "components/InstructorUI.tsx", "features/results/query.ts", "features/results/downloads.ts"]
   .map(file => resolve(sourceRoot, file));
 const require = createRequire(import.meta.url);
 const cache = new Map<string, { exports: unknown }>();
@@ -40,9 +41,11 @@ function load(file: string): unknown {
   new Function("require", "module", "exports", compiled)(localRequire, module, module.exports);
   return module.exports;
 }
-const { ResultsTable, SummaryCards, resultPresentation, refreshPresentation } = load(allowed[0]) as typeof import("../src/features/results/ResultsView");
+const { AssignmentDownloadsLink, ResultsTable, SummaryCards, resultPresentation, refreshPresentation } = load(allowed[0]) as typeof import("../src/features/results/ResultsView");
 const row = (patch: Partial<ResultRow> = {}): ResultRow => ({ ...sampleResults.rows[0], ...patch });
 const render = (value: ResultRow) => renderToStaticMarkup(createElement(ResultsTable, { rows: [value] }));
+const renderCourse = (value: ResultRow, courseKey = sampleResults.course_key) =>
+  renderToStaticMarkup(createElement(ResultsTable, { rows: [value], courseKey }));
 const cell = (html: string, testId: string) => {
   const match = html.match(new RegExp(`data-testid="${testId}"[^>]*>([\\s\\S]*?)</td>`));
   assert.ok(match, `Missing ${testId} cell`);
@@ -135,6 +138,47 @@ test("row context, time semantics, mobile labels and scoped review link stay ava
   assert.match(html, /href="\/courses\/come2201\/instructor\/submissions\/sample-submission-2"/);
   assert.match(html, /이력·코드 확인/);
   assert.match(html, /누적 제출 2회/);
+});
+
+test("submission downloads target the displayed receipt, independently of history, previous best or grade state", () => {
+  for (const state of ["received", "queued", "failed", "published"]) {
+    const value = row({ state, submission_id: "bsub_displayed-2", detail_url: "/courses/come2201/instructor/students/SAMPLE-001/submissions?assignment_id=observer" });
+    const html = renderCourse(value);
+    assert.match(html, /href="\/courses\/come2201\/instructor\/submissions\/bsub_displayed-2\/download\.zip" download=""/);
+    assert.match(html, /제출 ZIP 받기/);
+    assert.match(html, /SAMPLE-001, Week04-Problem01, 현재 표시된 제출/);
+    assert.doesNotMatch(html, /sample-submission-1\/download|latest\/download/);
+    assert.match(html, /이력·코드 확인/);
+  }
+  assert.match(renderCourse(row({ submission_id: "bsub_displayed-2", detail_url: null })), /data-testid="submission-download"/);
+  assert.doesNotMatch(renderCourse(row({ submission_id: null })), /data-testid="submission-download"/);
+  assert.doesNotMatch(render(row()), /data-testid="submission-download"/); // Synthetic preview.
+});
+
+test("download routes reject cross-course paths, traversal, encoded separators and IDs outside the instructor routes", () => {
+  for (const course of ["", "../other", "come2201/instructor/other", "//example.test", "come2201%2fother", "come2201\n", "c".repeat(97)]) {
+    assert.equal(submissionDownloadURL(course, "bsub_2"), null);
+    assert.equal(assignmentDownloadsURL(course, "basn_1"), null);
+    assert.doesNotMatch(renderCourse(row(), course), /data-testid="submission-download"/);
+  }
+  for (const id of ["", ".", "..", "../other", "x/y", "x\\y", "x%2fother", "x%252fother", "x?next=other", "x#other", "https://example.test", "x\n", "x\r", "x\0", "bsub_A2._~-"]) {
+    assert.equal(submissionDownloadURL("come2201", id), null);
+    assert.equal(assignmentDownloadsURL("come2201", id), null);
+    assert.doesNotMatch(renderCourse(row({ submission_id: id })), /data-testid="submission-download"/);
+  }
+  for (const id of ["sample-submission-2", "bsub_"]) assert.equal(submissionDownloadURL("come2201", id), null);
+  assert.equal(submissionDownloadURL("course_01-a", "bsub_A2_-"), "/courses/course_01-a/instructor/submissions/bsub_A2_-/download.zip");
+});
+
+test("a known selected assignment has one scoped navigation link, including before any submission", () => {
+  const assignment = { ...sampleResults.assignments[0], submitted: 0 };
+  const html = renderToStaticMarkup(createElement(AssignmentDownloadsLink, { courseKey: "come2201", assignment }));
+  assert.match(html, /href="\/courses\/come2201\/instructor\/assignments\/observer\/downloads"/);
+  assert.match(html, /등록 파일·제출물 다운로드/);
+  assert.match(html, /Observer · Decorator 패턴 구현/);
+  assert.doesNotMatch(html, / download=/);
+  assert.equal(renderToStaticMarkup(createElement(AssignmentDownloadsLink, { courseKey: "come2201" })), "");
+  assert.equal(renderToStaticMarkup(createElement(AssignmentDownloadsLink, { courseKey: "come2201", assignment: { ...assignment, assignment_id: "../other" } })), "");
 });
 
 test("untrusted row text remains escaped and empty filtered results remain explicit", () => {
