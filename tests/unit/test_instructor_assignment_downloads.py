@@ -279,3 +279,100 @@ def test_tampered_download_cache_is_not_replaced_or_served(services):
     with pytest.raises(AssignmentDownloadUnavailable, match='관리자'):
         downloads.download('come2201', 'starter', draft_id=draft['draft_id'])
     assert result['path'].read_bytes() == b'PRIVATE corrupted cache'
+
+
+def legacy_release(admin, tmp_path, *, with_data=True, overrides=None):
+    roots, digests = {}, {}
+    for kind in ('assessment', 'data'):
+        root = tmp_path / ('legacy-' + kind)
+        (root / 'nested').mkdir(parents=True)
+        (root / 'empty').mkdir()
+        (root / 'nested' / 'raw.txt').write_bytes(kind.encode() + b'\x00\xff\r\n')
+        (root / ('grade.py' if kind == 'assessment' else 'tests.json')).write_bytes(b'not executed\r\n')
+        (root / ('grade.py' if kind == 'assessment' else 'tests.json')).chmod(0o700)
+        roots[kind] = root
+        digests[kind] = WorkspaceBuilder(admin.paths.workspaces).digest_instructor_tree(root).sha256
+    fields = dict(assessment_path=str(roots['assessment']), assessment_digest=digests['assessment'],
+                  data_path=str(roots['data']) if with_data else None,
+                  dataset_digest=digests['data'] if with_data else '')
+    return release(admin, **(fields | (overrides or {}))), roots
+
+
+@pytest.mark.parametrize('with_data', [False, True])
+def test_legacy_registered_trees_export_exact_bytes_without_bundle_store(services, tmp_path, with_data):
+    admin, _, _, _ = services
+    published, roots = legacy_release(admin, tmp_path, with_data=with_data)
+    downloads = InstructorAssignmentDownloads(admin)
+    identity = {'assignment_id': published.assignment_id}
+    grading = unpack(downloaded(downloads, 'grading', **identity))
+    expected = {}
+    for kind in ('assessment', 'data') if with_data else ('assessment',):
+        for path in roots[kind].rglob('*'):
+            if path.is_file():
+                expected[kind + '/' + path.relative_to(roots[kind]).as_posix()] = path.read_bytes()
+    assert grading == expected
+    assert '웹 채점 ZIP 가져오기 형식과 다릅니다' in items(downloads, **identity)['grading']['reason']
+    with pytest.raises(PlatformNotFound):
+        downloads.download('come3105', 'grading', **identity)
+
+
+@pytest.mark.parametrize('damage', ['changed', 'file_link', 'directory_link', 'root_link', 'ancestor_link', 'oversize', 'too_many'])
+def test_legacy_changed_unsafe_or_oversized_tree_is_not_exported(services, tmp_path, monkeypatch, damage):
+    from autograde import instructor_assignment_downloads as module
+    admin, downloads, _, _ = services
+    published, roots = legacy_release(admin, tmp_path)
+    target = roots['assessment'] / 'grade.py'
+    if damage == 'changed':
+        target.write_bytes(b'changed after registration')
+    elif damage == 'file_link':
+        target.unlink()
+        target.symlink_to(roots['data'] / 'tests.json')
+    elif damage == 'directory_link':
+        directory = roots['assessment'] / 'nested'
+        directory.rename(roots['assessment'] / 'original-nested')
+        directory.symlink_to(roots['assessment'] / 'original-nested', target_is_directory=True)
+    elif damage == 'root_link':
+        original = roots['assessment'].with_name('real-assessment')
+        roots['assessment'].rename(original)
+        roots['assessment'].symlink_to(original, target_is_directory=True)
+    elif damage == 'ancestor_link':
+        parent = tmp_path / 'registered-parent'
+        parent.mkdir()
+        moved = parent / 'assessment'
+        roots['assessment'].rename(moved)
+        linked = tmp_path / 'linked-parent'
+        linked.symlink_to(parent, target_is_directory=True)
+        digest = WorkspaceBuilder(admin.paths.workspaces).digest_instructor_tree(moved).sha256
+        published = release(admin, assignment_id='ancestor-link-release',
+            assessment_path=str(linked / 'assessment'), assessment_digest=digest)
+    elif damage == 'oversize':
+        monkeypatch.setattr(module, 'MAX_DOWNLOAD_BYTES', 10)
+    elif damage == 'too_many':
+        monkeypatch.setattr(module, 'MAX_TREE_MEMBERS', 2)
+    identity = {'assignment_id': published.assignment_id}
+    available = items(downloads, **identity)
+    assert not available['grading']['available']
+    with pytest.raises(PlatformNotFound) as error:
+        downloads.download('come2201', 'grading', **identity)
+    assert str(tmp_path) not in str(error.value)
+
+
+def test_legacy_file_swap_after_scan_is_rejected(services, tmp_path, monkeypatch):
+    admin, downloads, _, _ = services
+    published, roots = legacy_release(admin, tmp_path)
+    original_scan = InstructorAssignmentDownloads._scan_tree.__func__
+    scans = 0
+
+    def swapped(cls, root_fd):
+        nonlocal scans
+        result = original_scan(cls, root_fd)
+        scans += 1
+        if scans == 1:
+            target = roots['assessment'] / 'grade.py'
+            target.unlink()
+            target.symlink_to(roots['data'] / 'tests.json')
+        return result
+
+    monkeypatch.setattr(InstructorAssignmentDownloads, '_scan_tree', classmethod(swapped))
+    with pytest.raises(PlatformNotFound):
+        downloads.download('come2201', 'grading', assignment_id=published.assignment_id)

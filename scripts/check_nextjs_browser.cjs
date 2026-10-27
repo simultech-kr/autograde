@@ -98,6 +98,25 @@ async function main() {
       assert.match(await row.innerText(), /보완 필요/, 'partial credit is text, not colour alone');
     }
     check('Current zero remains distinct from previous best 100 in all 20 visible rows');
+    for (const row of await page.getByTestId('result-row').all()) {
+      const review = await row.getByRole('link', {name:/이력·코드 확인/}).getAttribute('href');
+      const download = row.getByTestId('submission-download');
+      assert.equal(await download.getAttribute('href'), review + '/download.zip');
+      assert.notEqual(await download.getAttribute('download'), null);
+    }
+    check('Each native ZIP download refers to the exact displayed submission receipt');
+    const selectedID = await page.getByTestId('assignment-select').evaluate(select => [...select.options].find(option => option.value)?.value);
+    assert.ok(selectedID);
+    await page.getByTestId('assignment-select').selectOption(selectedID);
+    let selectedReply = page.waitForResponse(r => r.url().includes(resultPath) && new URL(r.url()).searchParams.get('assignment_id') === selectedID);
+    await page.getByTestId('apply-filters').click(); await selectedReply;
+    await page.getByTestId('assignment-downloads').waitFor();
+    assert.equal(await page.getByTestId('assignment-downloads').getAttribute('href'), `/courses/come2201/instructor/assignments/${selectedID}/downloads`);
+    await page.getByTestId('assignment-select').selectOption('');
+    selectedReply = page.waitForResponse(r => r.url().includes(resultPath) && !new URL(r.url()).searchParams.has('assignment_id'));
+    await page.getByTestId('apply-filters').click(); await selectedReply;
+    await page.waitForFunction(() => !document.querySelector('[data-testid="assignment-downloads"]'));
+    check('Selected assignment exposes its course-scoped downloads page and all-assignment view hides it');
     const firstKeys = await page.getByTestId('result-row').evaluateAll(rows => rows.map(row => row.dataset.rowKey || row.textContent));
     const secondResponse = page.waitForResponse(r => r.url().includes(resultPath) && new URL(r.url()).searchParams.get('page') === '2');
     await page.getByTestId('next-page').click();
@@ -133,7 +152,7 @@ async function main() {
     await page.getByTestId('result-row').first().waitFor();
     check('Real course switch clears the old roster and resets filter inputs');
 
-    await page.getByTestId('result-row').first().getByRole('link').focus();
+    await page.getByTestId('result-row').first().getByRole('link', {name:/이력·코드 확인/}).focus();
     const stable = await page.evaluate(() => {
       window.__readingRow = document.querySelector('[data-testid="result-row"]');
       window.__readingFocus = document.activeElement;

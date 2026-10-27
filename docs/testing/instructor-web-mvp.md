@@ -64,3 +64,30 @@ VS Code 회귀 시험은 **132개 통과, 실패 없음**이다.
 - `pilot-local`은 보안 격리가 아니다. 일반 학생의 임의 코드와 공식 성적 운영은 여전히 별도 심사 대상이다.
 
 [사용 안내](../operations/instructor-web-mvp.md)의 백업·기능 활성화·운영 확인 절차를 따른다.
+
+## 2026-10-27 교수자 파일 다운로드 검증
+
+이번 변경의 관련 서버 검사 **137개**, Next.js 웹 검사 **35개**가 통과했다.
+Next.js 프로덕션 빌드와 TypeScript 검사도 통과했다. 운영 DB·실제 학생 계정·운영 서버는 사용하지 않았다.
+
+- 등록 학생용·정답·오답 ZIP은 저장된 원본 바이트와 동일하다. 웹 채점 ZIP은 새 초안에 다시 가져와 테스트 설정을 복구한다.
+- CLI 등록 자료는 저장 당시 해시와 비교하며, 기존 파일 트리와 관리형 번들을 모두 지원한다. 경로·파일 교체, 심볼릭 링크와 용량 초과를 거부한다.
+- 선택한 접수 ZIP과 개별 바이너리 파일은 제출 당시 내용이다. 재제출 이후에도 이전 접수 원본이 유지된다.
+- 학생별 최신·전체 이력 ZIP의 manifest와 실제 파일을 확인했다. 누락·손상·한도 초과에서 부분 ZIP을 주지 않는다.
+- 익명·학생 토큰·다른 수업 접근을 거부한다. 파일 생성 중 교수자 권한이 취소되면 다운로드도 거부한다.
+- 실제 HTTP에서 attachment, no-store, nosniff, SHA-256, 한글 파일명과 안전한 오류 응답을 확인했다.
+- 서버 렌더링 화면은 **48개 화면 크기·테마 조합**에서 가로 넘침·버튼 잘림·외부 요청·스크립트 오류가 없었다.
+- Next.js 프로덕션 빌드를 임시 Python 서버에 연결한 **21개 브라우저 검사**가 통과했다. 정확한 접수 ZIP 링크,
+  선택 과제 다운로드 이동, 실시간 갱신, 수업 전환, 인증 오류, 모바일·다크 모드·키보드 접근성을 확인했다.
+
+주요 기능 검사는 다음으로 재실행한다.
+
+```sh
+.venv/bin/python -m pytest tests/unit/test_instructor_assignment_downloads.py tests/unit/test_instructor_submission_downloads.py tests/integration/test_instructor_download_http.py -q
+cd web
+npm test
+npm run build
+```
+
+화면 검사는 `scripts/check_instructor_downloads.cjs`와 `scripts/check_nextjs_browser.cjs`에 있다.
+이번 결과는 로컬 합성 데이터에 대한 검증이며 배포 서버의 HTTPS·Nginx 설정을 검증한 것은 아니다.
