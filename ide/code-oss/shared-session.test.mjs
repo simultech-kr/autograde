@@ -47,6 +47,39 @@ test('shared sessions use a fixed owned root with fresh identities and do not ad
   cleanupSharedSession(b);
 });
 
+for (const ending of ['cleanup', 'stale recovery']) test(`bundled service address survives ${ending} without retaining student data`, t => {
+  const f = fixture(t);
+  const bundledDefaults = JSON.parse(fs.readFileSync(new URL('./runtime-settings.json', import.meta.url), 'utf8'));
+  const serviceAddress = 'https://ai.cbchoi.info:20000';
+  const a = prepareSharedSession(f.layout(), bundledDefaults);
+  const settingsPath = path.join(a.runtime, 'user-data/User/settings.json');
+  const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+  assert.equal(settings['autograde.serviceBaseUrl'], serviceAddress);
+
+  const privateFiles = ['workspace/answer.cpp', 'materials/slides.pdf',
+    'r/user-data/User/globalStorage/autograde/session.json', 'r/user-data/Backups/unsaved-code'];
+  for (const relative of privateFiles) {
+    const file = path.join(a.root, relative);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, 'synthetic previous-student data');
+  }
+  // A student's session-local address choice must not preserve the whole profile.
+  json(settingsPath, { ...settings, 'autograde.serviceBaseUrl': 'https://temporary.example:20000' });
+  if (ending === 'cleanup') cleanupSharedSession(a);
+  else stale(a, 'running', 99999998);
+
+  const b = prepareSharedSession(f.layout(), bundledDefaults, dead);
+  assert.equal(b.root, a.root);
+  assert.notEqual(b.sessionId, a.sessionId);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(b.runtime, 'user-data/User/settings.json'), 'utf8'))['autograde.serviceBaseUrl'], serviceAddress);
+  assert.deepEqual(fs.readdirSync(b.workspace), []);
+  assert.deepEqual(fs.readdirSync(b.materials), []);
+  for (const relative of privateFiles) assert.equal(fs.existsSync(path.join(b.root, relative)), false, relative);
+  assert.deepEqual(b.recovered, ending === 'stale recovery' ? [a.sessionId] : []);
+  cleanupSharedSession(b);
+  assert.equal(fs.existsSync(b.root), false);
+});
+
 test('session environment resets inherited ownership and exposes only this session', t => {
   const f = fixture(t), a = prepareSharedSession(f.layout(), defaults);
   const env = learnerEnvironment(a, { AUTOGRADE_SESSION_ROOT: '/previous', AUTOGRADE_SESSION_ID: 'old', PATH: '/tools' });

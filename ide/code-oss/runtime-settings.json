@@ -1,4 +1,5 @@
 {
+  "autograde.serviceBaseUrl": "https://ai.cbchoi.info:20000",
   "workbench.startupEditor": "none",
   "workbench.tips.enabled": false,
   "chat.disableAIFeatures": true,

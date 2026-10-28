@@ -360,6 +360,7 @@ test('fresh runtime seeds first-boot user settings privately before the workbenc
   const runtime = prepareRuntime(f.root);
   const settings = path.join(runtime, 'user-data/User/settings.json');
   const expected = {
+    'autograde.serviceBaseUrl': 'https://ai.cbchoi.info:20000',
     'workbench.startupEditor': 'none',
     'workbench.tips.enabled': false,
     'chat.disableAIFeatures': true,
