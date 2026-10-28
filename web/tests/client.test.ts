@@ -5,7 +5,7 @@ import { defaultQuery, filterKey, pageURL, parseQuery, pollDelay } from "../src/
 import { availableModules } from "../src/features/registry.ts";
 import { sampleBootstrap } from "./fixtures.ts";
 
-test("entry stays in Basic protection space and never accepts a return URL", () => {
+test("entry stays in the instructor authentication routes and never accepts a return URL", () => {
   assert.equal(entryURL("come2201"), "/instructor/api/v1/entry?screen=results&course_key=come2201");
 });
 test("results query pins snapshot for paging and omits it only on explicit refresh", () => {

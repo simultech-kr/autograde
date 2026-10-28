@@ -32,7 +32,7 @@ _REQUIRED_KEYS = frozenset(
 _OPTIONAL_KEYS = frozenset(
     {"grading_runtime", "bundle_worker_count", "external_access_mode", "web_public_base_url", "web_port",
      "instructor_assignment_web_enabled", "instructor_rubric_web_enabled", "instructor_auth_mode", "roster_bootstrap_mode",
-     "instructor_next_results_enabled", "instructor_next_course_keys", "learning_runtime_socket"}
+     "instructor_next_results_enabled", "instructor_next_course_keys", "learning_runtime_socket", "instructor_runner_image"}
 )
 _ALLOWED_KEYS = _REQUIRED_KEYS | _OPTIONAL_KEYS
 _SECRET_KEY_PARTS = frozenset(
@@ -114,6 +114,16 @@ def load_pilot_config(path: str | Path) -> PilotConfig:
     if enabled not in {"true", "false"}:
         raise PilotConfigError("instructor_assignment_web_enabled must be true or false")
     values["instructor_assignment_web_enabled"] = enabled == "true"
+    if "instructor_runner_image" in raw_values:
+        from .platform_runner_image import normalize_runner_image, RunnerImageAvailabilityError
+        if values["grading_runtime"] == "pilot-local":
+            raise PilotConfigError("instructor_runner_image requires Docker or Podman grading")
+        try:
+            values["instructor_runner_image"] = normalize_runner_image(raw_values["instructor_runner_image"])
+        except RunnerImageAvailabilityError as exc:
+            raise PilotConfigError("instructor_runner_image must be an immutable OCI digest") from exc
+    if enabled == "true" and values["grading_runtime"] != "pilot-local" and "instructor_runner_image" not in values:
+        raise PilotConfigError("isolated instructor authoring requires instructor_runner_image")
     if "learning_runtime_socket" in raw_values:
         runtime_socket = raw_values["learning_runtime_socket"]
         if (not runtime_socket or not Path(runtime_socket).is_absolute() or len(os.fsencode(runtime_socket)) > 100

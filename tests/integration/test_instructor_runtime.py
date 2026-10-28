@@ -312,22 +312,39 @@ def test_feature_enabled_real_cli_process_launch_and_readiness(tmp_path, rubric_
         else:
             pytest.fail('CLI process failed to become ready')
         assert request(api, '/readyz')[0] == 200
-        assert request(web, '/instructor')[0] == 401
+        assert request(web, '/instructor')[0] == (303 if auth_mode == 'personal' else 401)
         token = (tmp_path / 'data' / 'platform-instructor-token').read_text().strip()
         auth = 'Basic ' + base64.b64encode(('instructor:' + token).encode()).decode()
+        auth_cookie = None
         if auth_mode == 'personal':
-            assert request(web, '/instructor', authorization=auth)[0] == 401
-            auth = 'Basic ' + base64.b64encode(b'owner:synthetic-owner-password-2026').decode()
-        status, headers, body = request(web, '/instructor', authorization=auth)
+            from autograde.instructor_sessions import totp
+            assert request(web, '/instructor', authorization=auth)[0] == 303
+            auth = None
+            origin = f'http://127.0.0.1:{web_port}'
+            _, headers, body = request(web, '/instructor/login')
+            status, headers, body = request(web, '/instructor/login', method='POST', origin=origin,
+                cookie=cookie(headers), data={'csrf':csrf(body), 'username':'owner', 'password':'synthetic-owner-password-2026'})
+            assert status == 303 and headers['Location'] == '/instructor/account'
+            auth_cookie = cookie(headers)
+            _, _, body = request(web, '/instructor/account', cookie=auth_cookie)
+            status, _, body = request(web, '/instructor/account/mfa', method='POST', origin=origin,
+                cookie=auth_cookie, data={'csrf':csrf(body)})
+            assert status == 200, body
+            seed = re.search(rb'<code>([A-Z2-7]{32})</code>', body)[1].decode()
+            status, headers, body = request(web, '/instructor/account/mfa/confirm', method='POST', origin=origin,
+                cookie=auth_cookie, data={'csrf':csrf(body), 'factor':totp(seed, int(time.time())//30)})
+            assert status == 200, body
+            auth_cookie = cookie(headers)
+        status, headers, body = request(web, '/instructor', authorization=auth, cookie=auth_cookie)
         assert status == 200, body
         assert '<h2>교수자 포털</h2>'.encode() in body
-        assert request(web, '/courses/come2201/instructor/rubrics', authorization=auth)[0] == (200 if rubric_enabled else 404)
+        assert request(web, '/courses/come2201/instructor/rubrics', authorization=auth, cookie=auth_cookie)[0] == (200 if rubric_enabled else 404)
         assert (tmp_path / 'data' / 'rubric-catalog.sqlite3').exists() is rubric_enabled
         assert request(api, '/courses/come2201/instructor/rubrics', authorization=auth)[0] == 404
-        assert request(web, '/courses/come2201/instructor/submissions', authorization=auth)[0] == 200
-        status, headers, body = request(web, '/instructor/admin', authorization=auth)
+        assert request(web, '/courses/come2201/instructor/submissions', authorization=auth, cookie=auth_cookie)[0] == 200
+        status, headers, body = request(web, '/instructor/admin', authorization=auth, cookie=auth_cookie)
         assert status == 200 and b'action="/instructor/courses"' in body
-        instructor_cookie, instructor_csrf = cookie(headers), csrf(body)
+        instructor_cookie, instructor_csrf = cookie(headers) if 'Set-Cookie' in headers else auth_cookie, csrf(body)
         origin = f'http://127.0.0.1:{web_port}'
         status, headers, body = request(web, '/instructor/courses', method='POST', authorization=auth,
             origin=origin, cookie=instructor_cookie, data={'csrf': instructor_csrf, 'code': 'live101',
@@ -367,7 +384,7 @@ def test_feature_enabled_real_cli_process_launch_and_readiness(tmp_path, rubric_
                 assert request(web, '/healthz')[0] == 200
                 assert request(api, '/readyz')[0] == 200
                 if filename == 'instructor-identities.sqlite3':
-                    assert request(web, '/instructor', authorization=auth)[0] == 503
+                    assert request(web, '/instructor', authorization=auth, cookie=auth_cookie)[0] == 503
                 assert not original.exists()
             finally:
                 held.rename(original)

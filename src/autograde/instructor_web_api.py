@@ -40,8 +40,8 @@ def _courses(web, enabled):
 def request(web, method, path, query, cookies, authorization, *, origin=None):
     """Authenticate every request, including existing open tabs after rollback.
 
-    The signed cookie is only CSRF state. Basic credentials are always required;
-    bootstrap can replace an expired CSRF cookie without acting as a login.
+    Personal browser mode uses a revocable server-side session. Legacy shared
+    mode retains its existing Basic authorization plus signed CSRF state.
     """
     request_id = secrets.token_hex(16)
     metadata = {'contract_version': '1', 'request_id': request_id, 'server_time': utc_iso()}
@@ -49,9 +49,13 @@ def request(web, method, path, query, cookies, authorization, *, origin=None):
     # Repeating them in a facade response is rejected by its header validator.
     headers = {'Content-Type': 'application/json; charset=utf-8', 'X-Request-ID': request_id}
     try:
+        from .instructor_account_web import authorization as browser_authorization
+        authorization = browser_authorization(web, cookies, authorization)
         scoped = web._scoped(authorization)
         command_match = _COMMANDS.fullmatch(path)
         if command_match:
+            if scoped.principal and scoped.principal.read_only:
+                raise PlatformAccessDenied()
             if method != 'POST':
                 raise PlatformAPIError(405, 'method_not_allowed', 'IDE 요청은 POST만 허용합니다.', headers={'Allow': 'POST'})
             session, _ = scoped._session(cookies, required=True)
@@ -89,8 +93,9 @@ def request(web, method, path, query, cookies, authorization, *, origin=None):
                 if not classroom_entry and course_key not in enabled:
                     raise PlatformAPIError(404, 'next_ui_disabled', '이 수업은 기존 교수자 화면을 이용해 주세요.')
             _, signed = scoped._session(cookies, required=False)
-            headers.update({'Location': ('/app/classroom' if classroom_entry else '/app') + ('?' + urlencode({'course_key': course_key}) if course_key else ''),
-                            'Set-Cookie': _cookie(scoped, signed)})
+            headers.update({'Location': ('/app/classroom' if classroom_entry else '/app') + ('?' + urlencode({'course_key': course_key}) if course_key else '')})
+            if signed:
+                headers['Set-Cookie'] = _cookie(scoped, signed)
             return PlatformResponse(303, None, headers)
         if classroom_bootstrap:
             if query:
@@ -101,8 +106,9 @@ def request(web, method, path, query, cookies, authorization, *, origin=None):
             payload = dict(courses=[{key: course[key] for key in fields} for course in scoped.courses.list_courses()],
                 principal={'id': principal.user_id if principal else 'shared',
                            'display_name': principal.display_name if principal else '공유 교수자',
-                           'mode': 'personal' if principal else 'shared'}, csrf=session['csrf'], capabilities=['classroom.read', 'classroom.control'])
-            headers['Set-Cookie'] = _cookie(scoped, signed)
+                           'mode': 'personal' if principal else 'shared'}, csrf=session['csrf'], capabilities=['classroom.read'] + ([] if principal and principal.read_only else ['classroom.control']))
+            if signed:
+                headers['Set-Cookie'] = _cookie(scoped, signed)
             return PlatformResponse(200, {**metadata, **payload}, headers)
         if classroom_match:
             scoped._session(cookies, required=True)
@@ -121,7 +127,8 @@ def request(web, method, path, query, cookies, authorization, *, origin=None):
                                           'display_name': principal.display_name if principal else '공유 교수자',
                                           'mode': 'personal' if principal else 'shared'},
                                csrf=session['csrf'], capabilities=['results.read'])
-                headers['Set-Cookie'] = _cookie(scoped, signed)
+                if signed:
+                    headers['Set-Cookie'] = _cookie(scoped, signed)
             return PlatformResponse(200, {**metadata, **payload}, headers)
         match = _RESULTS.fullmatch(path)
         if match:

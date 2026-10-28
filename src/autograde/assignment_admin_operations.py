@@ -296,7 +296,8 @@ def _new_grader(
             level="warning",
         )
         return PilotLocalGrader()
-    return ContainerGrader(
+    from .fixed_stdio_grader import PortalContainerGrader
+    return PortalContainerGrader(
         runtime=args.grading_runtime,
         instance_label=_grader_instance_label(paths, course_key),
     )

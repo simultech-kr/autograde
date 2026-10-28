@@ -401,6 +401,8 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
         return self.server  # type: ignore[return-value]
 
     def _dispatch(self, method: str) -> None:
+        import secrets
+        self.operation_request_id = secrets.token_hex(16)
         self.close_connection = True
         content_slot = False
         try:
@@ -440,6 +442,7 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
                     "http_request_unexpected_exception",
                     component="http",
                     exception=exc,
+                    request_id=self.operation_request_id,
                 )
                 mapped = PlatformHTTPError(
                     500,
@@ -503,6 +506,8 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
         self, path: str
     ) -> tuple[Optional[str], Mapping[str, str], frozenset[str]]:
         facade = self.platform_server.facade
+        if path == '/v1/operations/seats/report' and callable(getattr(facade, 'report_seat_status', None)):
+            return 'seat_report', {}, frozenset({'POST'})
         if callable(getattr(facade, "portal_request", None)) and path not in {"/healthz", "/readyz"}:
             if path in {"/", "/student", "/courses"} or path.startswith(("/courses/", "/student/")) or (
                 getattr(facade, "instructor", None) is not None
@@ -883,6 +888,10 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
         if route == "health":
             self._ensure_no_body()
             return {"status": "ok"}, 200
+        if route == 'seat_report':
+            if query:
+                raise PlatformHTTPError(400, 'invalid_query', 'Unexpected query parameter')
+            return facade.report_seat_status(self._bearer_token(), self._read_json_object(max_bytes=4096)), 200
         if route == "readiness":
             self._ensure_no_body()
             check = self.platform_server.readiness_check
@@ -1420,6 +1429,7 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
                 "http_response_unexpected_exception",
                 component="http",
                 exception=exc,
+                request_id=getattr(self, 'operation_request_id', None),
             )
             if allow_fallback:
                 self._send_error_result(
@@ -1434,6 +1444,8 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
             return
 
         self.send_response(status)
+        if not any(name.casefold() == 'x-request-id' for name in headers):
+            self.send_header('X-Request-ID', getattr(self, 'operation_request_id', ''))
         for name, value in _SECURITY_HEADERS.items():
             results_page = content_type.startswith('text/html') and b'<script data-instructor-results-enhancement>' in body
             if name == "Content-Security-Policy" and results_page:
@@ -1511,6 +1523,7 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
                 "http_file_response_unexpected_exception",
                 component="http",
                 exception=exc,
+                request_id=getattr(self, 'operation_request_id', None),
             )
             if allow_fallback:
                 self._send_error_result(
@@ -1527,6 +1540,8 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
         assert descriptor is not None
         try:
             self.send_response(status_code)
+            if not any(name.casefold() == 'x-request-id' for name in headers):
+                self.send_header('X-Request-ID', getattr(self, 'operation_request_id', ''))
             for name, value in _SECURITY_HEADERS.items():
                 self.send_header(name, value)
             self.send_header("Connection", "close")

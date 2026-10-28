@@ -2,6 +2,7 @@
 // Build-time tool only. The resulting app runs without a checkout, npm or installed Node.
 import * as fs from 'node:fs';
 import { compilePolicyRuntime } from './policy-runtime.mjs';
+import { prepareDistribution } from './distribution-inventory.mjs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
@@ -158,7 +159,7 @@ function sanitizedEnvironment() {
   return result;
 }
 
-export function packageMacos({ source, node, output, zip = true }) {
+export function packageMacos({ source, node, output, institutionProfile, zip = true }) {
   if (process.platform !== 'darwin') throw new Error('Build the Mac app on macOS with the matching architecture');
   source = fs.realpathSync(path.resolve(source));
   node = path.resolve(node); regular(node);
@@ -199,7 +200,7 @@ export function packageMacos({ source, node, output, zip = true }) {
     execFileSync('/usr/bin/ditto', [electronApp, path.join(resources, 'editor/Autograde IDE.app')]);
     copyRegular(node, path.join(resources, 'runtime/bin/node'));
     copyRegular(nodeLicense, path.join(resources, 'runtime/LICENSE'));
-    for (const name of ['mac-launcher.mjs', 'shared-session.mjs', 'learning-profile.mjs', 'runtime-settings.json']) copyRegular(path.join(here, name), path.join(resources, 'autograde', name));
+    for (const name of ['mac-launcher.mjs', 'shared-session.mjs', 'learning-profile.mjs', 'seat-reporter.mjs', 'runtime-settings.json']) copyRegular(path.join(here, name), path.join(resources, 'autograde', name));
     for (const name of ['LICENSE', 'version']) {
       const file = path.join(source, '.build/electron', name);
       if (fs.existsSync(file)) copyRegular(file, path.join(resources, 'licenses', `Electron-${name}`));
@@ -213,6 +214,7 @@ export function packageMacos({ source, node, output, zip = true }) {
     fs.writeFileSync(path.join(contents, 'Info.plist'), infoPlist(version, process.arch));
     execFileSync('/usr/bin/xcrun', ['clang', '-arch', process.arch === 'x64' ? 'x86_64' : 'arm64', '-fobjc-arc', '-framework', 'Cocoa', '-mmacosx-version-min=13.5', nativeSource, '-o', path.join(contents, 'MacOS/AutogradeLauncher')], { stdio: 'inherit' });
     execFileSync('/usr/bin/plutil', ['-lint', path.join(contents, 'Info.plist')], { stdio: 'inherit' });
+    prepareDistribution(app, path.join(resources, 'autograde'), {ideVersion: version, extensionVersion: checked.extensionVersion, nodeVersion: nodeInfo.version, upstreamCommit: upstream.commit}, institutionProfile);
     // Local pilot signing makes the generated native executable runnable. This
     // is not Developer ID signing/notarization and does not bypass Gatekeeper.
     execFileSync('/usr/bin/codesign', ['--force', '--sign', '-', app], { stdio: 'inherit' });
@@ -237,7 +239,7 @@ export function parseOptions(args) {
   const result = { source: path.join(repoRoot, '.cache/code-oss'), node: process.execPath, output: path.join(repoRoot, 'build/macos/Autograde IDE.app'), zip: true };
   for (let index = 0; index < args.length; index++) {
     if (args[index] === '--no-zip') { result.zip = false; continue; }
-    const key = { '--source': 'source', '--node': 'node', '--output': 'output' }[args[index]];
+    const key = { '--source': 'source', '--node': 'node', '--output': 'output', '--institution-profile': 'institutionProfile' }[args[index]];
     if (!key || !args[index + 1] || args[index + 1].startsWith('--')) throw new Error('Usage: package-macos.mjs [--source PATH] [--node PATH] [--output NEW.app] [--no-zip]');
     result[key] = args[++index];
   }

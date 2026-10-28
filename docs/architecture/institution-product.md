@@ -107,7 +107,9 @@ compiler·사용 가능한 디스크·업무 데이터의 상태는 이 검사�
 현재 제약은 명시적으로 거부한다.
 
 - `trusted-pilot`은 `pilot-local`만 사용한다. 신뢰한 합성 코드 파일럿이며 일반 학생 실행 격리가 아니다.
-- `isolated-staging`은 `docker` 또는 `podman`만 사용한다. 현재 교수자 과제 작성 웹을 함께 켤 수 없다.
+- `isolated-staging`은 `docker` 또는 `podman`만 사용한다. 교수자 웹의 고정 C/C++ 작성은
+  CSV의 `instructor_runner_image`에 사전 준비한 immutable digest를 지정하여 함께 켤 수 있다.
+  [실행 경계와 인수 절차](../operations/isolated-instructor-authoring.md)를 따른다.
   이는 [실제 시작 코드](../../src/autograde/pilot_portal_cli.py)의 제약이다.
 - ASGI·PostgreSQL·공용 다기관 설정을 이름만 바꾸어 켤 수 없다. 구현·이전·복구 시험을 마친
   새 schema/릴리스에서만 지원 범위를 추가한다.
@@ -211,7 +213,7 @@ Windows에서 편집/컴파일할 수 있다는 사실이 Win32 API 답안을 �
 | 1. 재현 가능한 릴리스 | 서버/확장/Code-OSS/Node·패키징 입력과 artifact hash를 잠그고 Mac·Windows native 기본·Linux 및 선택 WSL2 설치 파일 생성 | 실제 대상 OS별 설치·학생 흐름·공용 좌석 정리 결과; 서명·공증·롤백 경로 |
 | 2. 서버 운영 경계 | 기존 도메인 서비스를 보존하면서 ASGI adapter·요청 크기/시간 제한·인증·CSRF·오류 계약·graceful shutdown 구현 | 현행 API/웹 호환성 회귀, HTTPS 프록시를 통한 시험, 내장 HTTP에서 되돌릴 절차 |
 | 3. 격리된 C/C++ 채점 | API/DB와 worker 권한 분리, 검증한 runner digest, 비밀 테스트와 학생 실행 분리, quota·네트워크/파일/프로세스 통제 | 실제 대상 Linux 호스트 공격·장애 시험, 학생의 결과 위조 방지, 고아 작업 정리 |
-| 4. 교수자 작성과 격리 통합 | 현재 `--isolated`+교수자 웹 충돌 해소; 문제의 사전 정답/오답 검증도 안전한 worker 계약으로 연결 | 웹 초안→격리 사전검증→공개→학생 접수→채점까지 같은 승인 release로 수행 |
+| 4. 교수자 작성과 격리 통합 | 고정 C/C++ 웹 작성의 `--isolated` 연결 구현; 정답/오답·학생 소스 모두 제한 OCI 실행, 서버 고정 평가 | 대상 호스트에서 웹 초안→격리 사전검증→공개→학생 접수→채점까지 같은 승인 release로 인수 |
 | 5. 운영·복구 인수 | 강한 학생/개인 교수자 인증, 권한 회수, 감사, 용량/부하·중단 재시작·큐/디스크 제한, 전체 백업·업데이트/롤백 | 독립 복원 환경의 접수본·점수·artifact digest·권한 일치 및 기관 검수 |
 | 6. SES/plugin 제품군 | 승인 plugin 계약·registry·API 호환성·서명/digest·의존성·pruning/lock 구현, 기존 기능을 adapter로 점진 추출 | 미승인/비호환 plugin 거부, 최소 권한과 실패 격리, 조합별 기능·이전·복구 시험 |
 | 후속 저장소 선택 | Docker 기반 운영 단계에서 측정된 용량/운영 요구에 따라 PostgreSQL adapter와 migration 설계 | SQLite와의 계약 시험, 백업·이전·실패 롤백·재접수/권한 검증 후 별도 승인 |
@@ -226,7 +228,7 @@ Docker 운영 작업에서 전환 필요성을 검토한다는 프로젝트 순�
 | gate ID | 인수할 내용 |
 | --- | --- |
 | `isolated_grading` | 대상 호스트 C/C++ 도구·고정 digest, 학생/채점 권한 분리, 비밀 입력·결과 무결성, 자원·네트워크 제한 |
-| `instructor_isolated_authoring` | 교수자 작성과 격리 모드의 현재 충돌 해소, 정답/오답 사전검증부터 실제 제출까지 회귀 |
+| `instructor_isolated_authoring` | 구현된 고정 C/C++ 경로를 대상 기관 호스트에서 정답/오답 사전검증부터 실제 제출까지 인수; 임의 OCI runner는 별도 검토 |
 | `production_http` | ASGI adapter, HTTPS·요청 제한·인증·CSRF·프록시 경계, drain·재시작과 배포 복귀 |
 | `identity_and_authorization` | 기관/수업/학생 범위, 강한 인증과 개인 교수자 권한, 비활성·회수·감사·credential 운영 |
 | `backup_restore_and_upgrade` | 전체 상태의 암호화/접근 통제 백업, 별도 위치 복원, 스키마 이전 실패·업데이트 롤백 |

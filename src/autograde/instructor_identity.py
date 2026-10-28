@@ -76,9 +76,13 @@ class InstructorPrincipal:
     def allows(self, course):
         return self.role == 'admin' or course in self.courses
 
+    @property
+    def read_only(self):
+        return self.role in {'assistant', 'evaluator'}
+
 
 class InstructorIdentityStore:
-    def __init__(self, path, *, clock=time.monotonic):
+    def __init__(self, path, *, clock=time.monotonic, browser_auth=False):
         self.path = Path(path).absolute()
         self._slots = threading.BoundedSemaphore(2)
         self._lock = threading.Lock()
@@ -86,6 +90,16 @@ class InstructorIdentityStore:
         self._clock = clock
         self._verified = {}  # HMAC credential fingerprints only, never raw credentials.
         self._cache_secret = secrets.token_bytes(32)
+        self.browser_auth = browser_auth
+        self.browser = None
+
+    def prepare_browser_auth(self):
+        if self.browser is None:
+            from .instructor_sessions import InstructorBrowserAuth
+            browser = InstructorBrowserAuth(self)
+            browser.prepare()
+            self.browser = browser
+        return self.browser
 
     def initialize(self):
         try:
@@ -132,6 +146,8 @@ class InstructorIdentityStore:
             db.execute('SELECT action,actor FROM instructor_identity_audit LIMIT 0')
             if not db.execute("SELECT 1 FROM instructors WHERE role='admin' AND active=1 LIMIT 1").fetchone():
                 raise ValueError('개인 인증을 켜기 전에 활성 관리자 계정을 생성하세요.')
+        if self.browser_auth:
+            self.prepare_browser_auth().check_ready()
 
     @staticmethod
     def _username(username):
@@ -140,9 +156,29 @@ class InstructorIdentityStore:
         return username
 
     @staticmethod
-    def _audit(db, action, user_id, course=None):
+    def _audit(db, action, user_id, course=None, actor=None):
         db.execute('INSERT INTO instructor_identity_audit(action,user_id,course_key,actor,occurred_at) VALUES(?,?,?,?,?)',
-                   (action, user_id, course, 'local_operator', datetime.now(timezone.utc).isoformat()))
+                   (action, user_id, course, actor.user_id if actor else 'local_operator', datetime.now(timezone.utc).isoformat()))
+
+    @staticmethod
+    def _assert_actor(db, actor, *, target=None):
+        if actor is None:  # Explicit trusted local CLI boundary.
+            return
+        row = db.execute('SELECT * FROM instructors WHERE user_id=?', (actor.user_id,)).fetchone()
+        if not row or not row['active'] or row['revision'] != actor.revision or (row['role'] != 'admin' and target != actor.user_id):
+            raise PlatformAccessDenied('계정 관리 권한이 변경되었습니다. 다시 로그인하세요.')
+
+    @staticmethod
+    def _role(db, row):
+        if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='instructor_access_roles'").fetchone():
+            override = db.execute('SELECT role FROM instructor_access_roles WHERE user_id=?', (row['user_id'],)).fetchone()
+            if override:
+                return override[0]
+        return row['role']
+
+    def _principal(self, db, row):
+        courses = frozenset(r[0] for r in db.execute('SELECT course_key FROM instructor_grants WHERE user_id=?', (row['user_id'],)))
+        return InstructorPrincipal(row['user_id'], row['username'], row['display_name'], self._role(db, row), row['revision'], courses)
 
     @staticmethod
     def _user(db, username):
@@ -151,48 +187,55 @@ class InstructorIdentityStore:
             raise ValueError('등록된 교수자 계정이 없습니다.')
         return row
 
-    def create(self, username, display_name, role, password):
+    def create(self, username, display_name, role, password, *, actor=None):
         self._username(username)
-        if role not in {'admin', 'instructor'} or not isinstance(display_name, str) or not display_name.strip() or len(display_name) > 100 or any(ord(c) < 32 for c in display_name):
+        if role not in {'admin', 'instructor', 'assistant', 'evaluator'} or not isinstance(display_name, str) or not display_name.strip() or len(display_name) > 100 or any(ord(c) < 32 for c in display_name):
             raise ValueError('계정 역할과 표시 이름을 확인하세요.')
         encoded = hash_password(password)
         with self._connect() as db:
             db.execute('BEGIN IMMEDIATE')
+            self._assert_actor(db, actor)
             if db.execute('SELECT 1 FROM instructors WHERE username=?', (username,)).fetchone():
                 raise ValueError('이미 등록된 계정명입니다.')
             user_id = 'ins_' + uuid.uuid4().hex
             db.execute('INSERT INTO instructors(user_id,username,display_name,role,password_hash) VALUES(?,?,?,?,?)',
-                       (user_id, username, display_name.strip(), role, encoded))
-            self._audit(db, 'created', user_id)
+                       (user_id, username, display_name.strip(), 'instructor' if role in {'assistant', 'evaluator'} else role, encoded))
+            if role in {'assistant', 'evaluator'}:
+                db.execute("CREATE TABLE IF NOT EXISTS instructor_access_roles(user_id TEXT PRIMARY KEY REFERENCES instructors(user_id), role TEXT NOT NULL CHECK(role IN ('assistant','evaluator')))")
+                db.execute('INSERT INTO instructor_access_roles VALUES(?,?)', (user_id, role))
+            self._audit(db, 'created', user_id, actor=actor)
         return user_id
 
-    def set_password(self, username, password):
+    def set_password(self, username, password, *, actor=None):
         encoded = hash_password(password)
         with self._connect() as db:
             db.execute('BEGIN IMMEDIATE')
             row = self._user(db, username)
+            self._assert_actor(db, actor, target=row['user_id'])
             db.execute('UPDATE instructors SET password_hash=?,revision=revision+1 WHERE user_id=?', (encoded, row['user_id']))
-            self._audit(db, 'password_changed', row['user_id'])
+            self._audit(db, 'password_changed', row['user_id'], actor=actor)
 
-    def set_active(self, username, active):
+    def set_active(self, username, active, *, actor=None):
         if type(active) is not bool:
             raise ValueError('활성 상태는 boolean이어야 합니다.')
         with self._connect() as db:
             db.execute('BEGIN IMMEDIATE')
             row = self._user(db, username)
+            self._assert_actor(db, actor)
             if bool(row['active']) == active:
                 return
             if not active and row['role'] == 'admin' and db.execute("SELECT COUNT(*) FROM instructors WHERE role='admin' AND active=1").fetchone()[0] <= 1:
                 raise ValueError('마지막 활성 관리자 계정은 비활성화할 수 없습니다.')
             db.execute('UPDATE instructors SET active=?,revision=revision+1 WHERE user_id=?', (active, row['user_id']))
-            self._audit(db, 'enabled' if active else 'disabled', row['user_id'])
+            self._audit(db, 'enabled' if active else 'disabled', row['user_id'], actor=actor)
 
-    def set_grant(self, username, course, *, allowed):
+    def set_grant(self, username, course, *, allowed, actor=None):
         if not isinstance(course, str) or not COURSE.fullmatch(course) or type(allowed) is not bool:
             raise ValueError('분반 코드와 권한을 확인하세요.')
         with self._connect() as db:
             db.execute('BEGIN IMMEDIATE')
             row = self._user(db, username)
+            self._assert_actor(db, actor)
             if row['role'] == 'admin':
                 raise ValueError('관리자는 모든 수업에 접근합니다. 제한 계정은 instructor 역할로 만드세요.')
             if allowed:
@@ -201,14 +244,14 @@ class InstructorIdentityStore:
                 changed = db.execute('DELETE FROM instructor_grants WHERE user_id=? AND course_key=?', (row['user_id'], course)).rowcount
             if changed:
                 db.execute('UPDATE instructors SET revision=revision+1 WHERE user_id=?', (row['user_id'],))
-                self._audit(db, 'course_granted' if allowed else 'course_revoked', row['user_id'], course)
+                self._audit(db, 'course_granted' if allowed else 'course_revoked', row['user_id'], course, actor)
 
     def list_accounts(self):
         with self._connect() as db:
             db.execute('BEGIN')
             result = []
             for row in db.execute('SELECT user_id,username,display_name,role,active,revision FROM instructors ORDER BY username'):
-                result.append(dict(row, courses=[r[0] for r in db.execute('SELECT course_key FROM instructor_grants WHERE user_id=? ORDER BY course_key', (row['user_id'],))]))
+                result.append(dict(row, role=self._role(db, row), courses=[r[0] for r in db.execute('SELECT course_key FROM instructor_grants WHERE user_id=? ORDER BY course_key', (row['user_id'],))]))
             return result
 
     @staticmethod
@@ -233,9 +276,7 @@ class InstructorIdentityStore:
                 db.execute('BEGIN')
                 row = db.execute('SELECT * FROM instructors WHERE user_id=?', (user_id,)).fetchone()
                 if row and row['active'] and row['revision'] == revision:
-                    courses = frozenset(r[0] for r in db.execute(
-                        'SELECT course_key FROM instructor_grants WHERE user_id=?', (user_id,)))
-                    return InstructorPrincipal(user_id, row['username'], row['display_name'], row['role'], revision, courses)
+                    return self._principal(db, row)
         except (sqlite3.Error, OSError, ValueError):
             raise PlatformAPIError(503, 'instructor_identity_unavailable', '교수자 인증 저장소를 확인해 주세요.') from None
         with self._lock:
@@ -243,6 +284,13 @@ class InstructorIdentityStore:
         return None
 
     def authenticate(self, authorization):
+        if self.browser_auth:
+            if not isinstance(authorization, str) or not authorization.startswith('InstructorSession '):
+                raise PlatformAPIError(401, 'instructor_login_required', '교수자 웹에 다시 로그인하세요.')
+            return self.prepare_browser_auth().session(authorization[18:])['principal']
+        return self._authenticate_basic(authorization)
+
+    def _authenticate_basic(self, authorization):
         try:
             if not isinstance(authorization, str) or not authorization.startswith('Basic ') or len(authorization) > 1024:
                 raise ValueError()
@@ -284,13 +332,13 @@ class InstructorIdentityStore:
                 current = db.execute('SELECT * FROM instructors WHERE user_id=?', (row['user_id'],)).fetchone()
                 if not current or not current['active'] or current['revision'] != row['revision']:
                     raise self._denied()
-                courses = frozenset(r[0] for r in db.execute('SELECT course_key FROM instructor_grants WHERE user_id=?', (row['user_id'],)))
+                principal = self._principal(db, current)
             with self._lock:
                 self._failures.pop(bucket, None)
                 if len(self._verified) >= 1024:
                     self._verified.pop(next(iter(self._verified)))
                 self._verified[fingerprint] = (row['user_id'], row['revision'], self._clock() + 60)
-            return InstructorPrincipal(row['user_id'], row['username'], row['display_name'], row['role'], row['revision'], courses)
+            return principal
         except (sqlite3.Error, OSError, ValueError):
             raise PlatformAPIError(503, 'instructor_identity_unavailable', '교수자 인증 저장소를 확인해 주세요.') from None
         finally:
@@ -326,10 +374,14 @@ class ScopedCourses:
 
     def update_course(self, key, **fields):
         self.get_course(key)
+        if self.principal.read_only:
+            raise PlatformAccessDenied()
         return self.service.update_course(key, **fields)
 
     def set_status(self, key, status):
         self.get_course(key)
+        if self.principal.read_only:
+            raise PlatformAccessDenied()
         return self.service.set_status(key, status)
 
     def deletion_preview(self, key):

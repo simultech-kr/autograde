@@ -51,6 +51,22 @@ def test_downloadable_starter_is_reproducible_and_can_be_saved(admin):
     assert starter["sha256"] == first["sha256"]
 
 
+def test_publish_requires_the_current_validated_runtime_and_authoring_has_distinct_cleanup_scope(admin):
+    from autograde.assignment_admin_operations import _grader_instance_label
+    draft = admin.create_draft("come2201", language="c")
+    job = admin.queue_check("come2201", draft["draft_id"], draft["revision"], True)
+    assert admin.run_one()
+    checked = admin.get_check("come2201", job["job_id"])
+    assert checked["status"] == "succeeded"
+    admin.grading_runtime = "docker"
+    admin.runner_image = "registry.example/grader@sha256:" + "ab" * 32
+    with pytest.raises(PlatformConflict, match="환경이 현재 설정과 다릅니다"):
+        admin.publish("come2201", draft["draft_id"], draft["revision"])
+    assert not admin.state.get_bundle_assignment(checked["assignment_id"]).ready
+    assert admin._validation_instance_label().startswith("authoring-")
+    assert admin._validation_instance_label() != _grader_instance_label(admin.paths, "validation")
+
+
 @pytest.mark.parametrize("language,platform,expected", [
     ("c", "linux", {"main.c", "README.md"}),
     ("cpp", "windows", {"main.cpp", "README.md", "CMakeLists.txt"}),

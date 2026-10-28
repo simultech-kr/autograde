@@ -14,6 +14,7 @@ const loader = require("node:module") as Loader, originalLoad = loader._load;
 const noOp = () => {}, disposable = () => ({dispose: noOp});
 const commands = new Map<string, (...args: unknown[]) => unknown>();
 const ui = {choice: undefined as string | undefined, quits: 0, exports: 0, signins: 0, claims: 0,
+  choices: [] as (string | undefined)[],
   revoked: 0, warnings: [] as string[], errors: [] as string[], workspace: "", exportRoot: "",
   failRevoke: false, assignments: [] as Assignment[], inspected: "", serverOrigin: "https://test.invalid", homeForms: [] as unknown[]};
 let homeInputs: {claim(code: string, expectedServer: string): Promise<void>; configureServer(address: string): Promise<void>};
@@ -57,7 +58,7 @@ const vscode = {
     createOutputChannel: () => ({dispose: noOp, clear: noOp, hide: noOp}),
     createStatusBarItem: () => ({dispose: noOp, show: noOp, hide: noOp}),
     showInformationMessage: async () => undefined,
-    showWarningMessage: async (message: string) => {ui.warnings.push(message); return ui.choice;},
+    showWarningMessage: async (message: string) => {ui.warnings.push(message); return ui.choices.length ? ui.choices.shift() : ui.choice;},
     showErrorMessage: async (message: string) => {ui.errors.push(message); return undefined;},
     withProgress: async (_options: unknown, task: (progress: unknown, cancellation: unknown) => Promise<unknown>) =>
       task({report: noOp}, {isCancellationRequested: false, onCancellationRequested: disposable})},
@@ -104,7 +105,7 @@ const extension = require("../extension") as typeof import("../extension");
 loader._load = originalLoad;
 
 async function fixture(used = false) {
-  commands.clear(); Object.assign(ui, {choice: undefined, quits: 0, exports: 0, signins: 0, claims: 0, revoked: 0, warnings: [], errors: [], failRevoke: false, assignments: [], inspected: "", serverOrigin: "https://test.invalid", homeForms: []});
+  commands.clear(); Object.assign(ui, {choice: undefined, choices: [], quits: 0, exports: 0, signins: 0, claims: 0, revoked: 0, warnings: [], errors: [], failRevoke: false, assignments: [], inspected: "", serverOrigin: "https://test.invalid", homeForms: []});
   const parent = await mkdtemp(path.join(await realpath(os.tmpdir()), "ag-lifecycle-test-"));
   const id = randomBytes(12).toString("hex"), root = path.join(parent, `e-${id}`), workspace = path.join(root, "workspace");
   await mkdir(root, {mode: 0o700}); await mkdir(workspace, {mode: 0o700}); await mkdir(path.join(root, "materials"), {mode: 0o700});
@@ -157,6 +158,7 @@ test("actual reload blocks authentication but allows own code export and full ID
     assert.equal(ui.claims, 0); assert.equal(ui.signins, 0);
     await f.command("autograde.exportLearning"); assert.equal(ui.exportRoot, f.workspace);
     tokens.loggedIn = true; ui.failRevoke = true; ui.choice = "실습 종료";
+    ui.choices = ["실습 종료", "미저장 변경 폐기 선택", "미저장 변경을 폐기하고 종료"];
     await f.command("autograde.signOut");
     assert.equal(ui.revoked, 1); assert.equal(tokens.loggedIn, false); assert.equal(ui.quits, 1);
     // The actual process supervisor, not extension deactivation, owns deletion.

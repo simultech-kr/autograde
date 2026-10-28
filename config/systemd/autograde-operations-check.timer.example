@@ -1,0 +1,10 @@
+[Unit]
+Description=Autograde operational checks every five minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=5min
+Unit=autograde-operations-check.service
+
+[Install]
+WantedBy=timers.target

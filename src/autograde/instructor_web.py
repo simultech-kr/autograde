@@ -63,6 +63,7 @@ table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:12px;bor
 .assignment-selection input{flex:none}.assignment-bulk-tools{margin:16px 0;padding:12px;background:var(--soft);border:1px solid var(--border);border-radius:8px}
 .assignment-bulk-tools .actions{align-items:center}.assignment-bulk-tools label,.assignment-bulk-tools button{margin:0}
 button:disabled{opacity:.55;cursor:not-allowed}
+.readonly-view form[method=post]{display:none}
 .draft-navigation{display:flex;flex-wrap:wrap;gap:8px;margin:16px 0;padding:0;list-style:none}
 .draft-navigation a{display:block;padding:8px 12px;border:1px solid var(--border);border-radius:6px;text-decoration:none}
 .draft-summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,200px),1fr));gap:12px;padding:16px;background:var(--soft);border-radius:8px}
@@ -138,7 +139,7 @@ class InstructorWeb:
     def __init__(self, course_admin, enrollment_admin, assignment_admin, *, authorize,
                  secret, web_url, submissions=None, submission_review=None, submission_updates=None, rubrics=None, identities=None,
                  next_ui_policy=None, exam_papers=None, student_materials=None, content_service=None,
-                 extension_distribution=None, bundle_store=None, learning_runtime_overview=None):
+                 extension_distribution=None, bundle_store=None, learning_runtime_overview=None, operations=None):
         self.courses = course_admin
         self.students = enrollment_admin
         self.assignments = assignment_admin
@@ -156,6 +157,7 @@ class InstructorWeb:
         self.extension_distribution = extension_distribution
         self.bundle_store = bundle_store
         self.learning_runtime_overview = learning_runtime_overview
+        self.operations = operations
         self.principal = None
         self.next_ui_policy = next_ui_policy if next_ui_policy is not None else lambda: frozenset()
         self.catalog = InstructorAssignmentCatalog(assignment_admin.state) if assignment_admin else None
@@ -165,6 +167,13 @@ class InstructorWeb:
         return path == "/instructor" or path.startswith("/instructor/") or bool(_COURSE_PATH.fullmatch(path))
 
     def _session(self, cookies, *, required):
+        from .instructor_account_web import enabled
+        if enabled(self):
+            from .instructor_sessions import COOKIE
+            session = self.identities.prepare_browser_auth().session(cookies.get(COOKIE, ''))
+            if self.principal is None or session['principal'].session_binding != self.principal.session_binding:
+                raise PlatformAPIError(403, 'instructor_csrf', '교수자 계정이 변경되었습니다. 다시 로그인하세요.')
+            return session, None
         try:
             value = cookies.get(_COOKIE, "")
             if not isinstance(value, str) or len(value) > 2048:
@@ -200,7 +209,14 @@ class InstructorWeb:
         """Called before reading an upload. Full form CSRF is checked afterward."""
         if not self.matches(path):
             raise PlatformAPIError(404, "not_found", "교수자 경로를 찾을 수 없습니다.")
+        from . import instructor_account_web
+        if instructor_account_web.enabled(self) and path in instructor_account_web.PATHS:
+            instructor_account_web.preflight(self, path, cookies, origin)
+            return
+        authorization = instructor_account_web.authorization(self, cookies, authorization)
         scoped = self._scoped(authorization)
+        if scoped.principal and scoped.principal.read_only:
+            raise PlatformAPIError(403, 'instructor_read_only', '조회 전용 계정은 변경 작업을 할 수 없습니다.')
         match = _COURSE_PATH.fullmatch(path)
         if match:
             try:
@@ -214,10 +230,31 @@ class InstructorWeb:
     def request(self, method, path, form, cookies, origin=None, authorization=None):
         if not self.matches(path):
             return None
+        from . import instructor_account_web
+        response = instructor_account_web.request(self, method, path, form, cookies, origin)
+        if response is not None:
+            return response
+        authorization = instructor_account_web.authorization(self, cookies, authorization)
         from . import instructor_web_api
         if instructor_web_api.matches(path):
-            return instructor_web_api.request(self, method, path, form, cookies, authorization, origin=origin)
-        return self._scoped(authorization)._authenticated_request(method, path, form, cookies, origin, authorization)
+            response = instructor_web_api.request(self, method, path, form, cookies, authorization, origin=origin)
+            if instructor_account_web.enabled(self) and method == 'GET' and path == '/instructor/api/v1/entry':
+                if response.status == 401:
+                    return self._redirect('/instructor/login')
+                if response.status == 403 and response.body.get('error', {}).get('code') == 'instructor_mfa_enrollment_required':
+                    return self._redirect('/instructor/account')
+            return response
+        try:
+            scoped = self._scoped(authorization)
+        except PlatformAPIError as exc:
+            if instructor_account_web.enabled(self) and method == 'GET' and exc.status == 401:
+                return self._redirect('/instructor/login')
+            if instructor_account_web.enabled(self) and method == 'GET' and exc.code == 'instructor_mfa_enrollment_required':
+                return self._redirect('/instructor/account')
+            raise
+        if method == 'POST' and scoped.principal and scoped.principal.read_only:
+            raise PlatformAPIError(403, 'instructor_read_only', '조회 전용 계정은 변경 작업을 할 수 없습니다.')
+        return scoped._authenticated_request(method, path, form, cookies, origin, authorization)
 
     def _authenticated_request(self, method, path, form, cookies, origin, authorization):
         polling = bool(re.fullmatch(r'/courses/[a-z0-9_-]{1,96}/instructor/(?:checks/[a-zA-Z0-9_-]+/status|submissions/live)', path))
@@ -279,7 +316,7 @@ class InstructorWeb:
         if course:
             context = f'{course["code"]} · {course.get("name") or "정보 확인 필요"} · {course.get("year") or "학년도 미설정"} / {course.get("semester") or "학기 미설정"} · {course.get("section") or "분반 미설정"}'
         if self.principal:
-            identity = f'{self.principal.display_name} ({self.principal.username}) · ' + ('관리자' if self.principal.role == 'admin' else '담당 교수자')
+            identity = f'{self.principal.display_name} ({self.principal.username}) · ' + {'admin': '관리자', 'instructor': '담당 교수자', 'assistant': '조교 · 조회 전용', 'evaluator': '평가자 · 조회 전용'}[self.principal.role]
             context = context + ' · ' + identity if course else identity
         nav = navigation(self, course, current_path)
         options = '<option value="">수업 선택</option>' + ''.join(
@@ -293,10 +330,18 @@ class InstructorWeb:
         if cookie:
             secure = "; Secure" if self.web_url.startswith("https://") else ""
             headers["Set-Cookie"] = f"{_COOKIE}={cookie}; Path=/; Max-Age=3600; HttpOnly; SameSite=Strict{secure}"
-        account_hint = ('개인 교수자 계정으로 인증되었습니다. 브라우저가 인증 정보를 기억하므로 공용 학생 PC에서 사용하지 마세요. '
+        account_hint = ('개인 교수자 계정으로 인증되었습니다. 공용 기기에서는 사용 후 로그아웃하세요. '
                         if self.principal else '공유 교수자 계정은 개인별 권한을 제공하지 않습니다. 공용 학생 PC에서 사용하지 마세요. ')
+        from .instructor_account_web import enabled
+        if enabled(self):
+            nav += '<a href="/instructor/account">내 계정·로그아웃</a>'
+            if self.principal and self.principal.role == 'admin':
+                nav += '<a href="/instructor/accounts">교수자 계정 관리</a>'
+        read_only = bool(self.principal and self.principal.read_only)
+        if read_only:
+            body = '<p class="notice">조회 전용 계정입니다. 변경·평가 저장·학생 IDE 요청은 담당 교수자에게 요청하세요.</p>' + body
         document = ('<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
-                    f'<title>{_e(title)} · Autograde</title><style>{_STYLE}{THEME_CSS}{RESPONSIVE_CSS}{PORTAL_STYLE}</style></head><body class="responsive-instructor"><a class="skip-link" href="#main-content">본문으로 건너뛰기</a><header class="instructor-header"><div><h1>Autograde 교수자 포털</h1><div class="instructor-context">{_e(context)}</div></div>{switch}</header>'
+                    f'<title>{_e(title)} · Autograde</title><style>{_STYLE}{THEME_CSS}{RESPONSIVE_CSS}{PORTAL_STYLE}</style></head><body class="responsive-instructor{" readonly-view" if read_only else ""}"><a class="skip-link" href="#main-content">본문으로 건너뛰기</a><header class="instructor-header"><div><h1>Autograde 교수자 포털</h1><div class="instructor-context">{_e(context)}</div></div>{switch}</header>'
                     f'<div class="shell"><nav class="portal-navigation" aria-label="교수자 메뉴">{nav}</nav><main id="main-content" tabindex="-1" data-audience="instructor"><h2>{_e(title)}</h2>{body}'
                     '<p class="hint account-notice">' + account_hint +
                     'pilot-local 실행은 보안 격리가 아닙니다.</p></main></div>' + SCRIPT_TAG + '</body></html>')
@@ -325,6 +370,10 @@ class InstructorWeb:
         return PlatformResponse(303, None, {"Location": path})
 
     def _root_request(self, method, path, form, session):
+        if self.operations is not None:
+            from . import operations_web
+            if operations_web.matches(path):
+                return operations_web.request(self, method, path, form, session)
         if method == 'GET' and path == '/instructor/switch':
             return self._redirect(self._base(self.courses.get_course(_value(form, 'course_key'))))
         if method == 'GET' and path == '/instructor':

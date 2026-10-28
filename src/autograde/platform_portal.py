@@ -32,12 +32,13 @@ class CourseAPI:
         "get_learning_runtime", "create_learning_runtime", "run_learning_runtime", "close_learning_runtime",
     })
 
-    def __init__(self, services: Mapping[str, StudentPlatformService], secret: bytes, *, courses=None, student_materials=None, content_service=None, extension_distribution=None):
+    def __init__(self, services: Mapping[str, StudentPlatformService], secret: bytes, *, courses=None, student_materials=None, content_service=None, extension_distribution=None, operations=None):
         self.services = services
         self.courses = courses
         self.student_materials = student_materials
         self.content_service = content_service
         self.extension_distribution = extension_distribution
+        self.operations = operations
         self.secret = secret
         self.state = courses.state if courses is not None else next(iter(services.values())).state
 
@@ -69,6 +70,13 @@ class CourseAPI:
     def list_materials(self, access_token, cursor=None):
         from .student_material_api import list_materials
         return list_materials(self, access_token, cursor)
+
+    def report_seat_status(self, token, payload):
+        if self.operations is None:
+            raise PlatformAPIError(404, 'not_found', '기기 보고 기능을 사용할 수 없습니다.')
+        if self.operations.seats is None:
+            raise PlatformAPIError(503, 'seat_registry_unavailable', '기기 상태 저장소를 확인하세요.')
+        return self.operations.seats.report(token, payload)
 
     def get_material_download(self, access_token, material_id, expected_sha256):
         from .student_material_api import download_material

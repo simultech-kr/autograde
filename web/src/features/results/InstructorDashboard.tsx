@@ -12,7 +12,7 @@ import styles from "./dashboard.module.css";
 
 type Failure = { message: string; requestId: string; code: string; terminal: boolean };
 function failure(error: unknown): Failure {
-  if (error instanceof ApiError) return { message: error.status === 401 ? "교수자 인증이 필요합니다. 인증 후 이 화면으로 돌아옵니다." : error.code === "next_ui_disabled" ? "새 현황 화면이 중단되었거나 이 수업에는 아직 허용되지 않았습니다. 기존 교수자 화면을 사용해 주세요." : error.message,
+  if (error instanceof ApiError) return { message: error.status === 401 ? "교수자 로그인이 필요합니다. 로그인 후 담당 수업을 다시 선택해 주세요." : error.code === "next_ui_disabled" ? "새 현황 화면이 중단되었거나 이 수업에는 아직 허용되지 않았습니다. 기존 교수자 화면을 사용해 주세요." : error.message,
     requestId: error.requestId, code: error.code, terminal: terminalError(error) };
   if (error instanceof ContractError) return { message: error.message, requestId: "", code: "contract_mismatch", terminal: true };
   return { message: "서버에 연결하지 못했습니다. 마지막 확인 시각을 확인하고 연결 상태를 점검해 주세요.", requestId: "", code: "network_error", terminal: false };
@@ -378,7 +378,7 @@ export function InstructorDashboard() {
 
       <footer className={styles.footnote}>
         <p>접수·채점 대기·오류는 0점이 아닙니다. 이전 최고점은 현재 제출을 제외한 결과입니다.</p>
-        <p>공용 PC에서는 사용 후 모든 브라우저 창을 종료하세요. 이 화면은 브라우저의 Basic 인증 기록을 삭제할 수 없습니다.</p>
+        {identity?.principal.mode === "personal" ? <p>공용 기기에서는 <a href="/instructor/account">내 계정·로그아웃</a>에서 접속을 종료하세요.</p> : <p>공유 인증을 사용한 공용 PC에서는 사용 후 모든 브라우저 창을 종료하세요.</p>}
       </footer>
     </AppShell>
   );

@@ -1,6 +1,7 @@
 /* Shared by the Python pages and the Next.js application.
    Keep semantic colour roles here; component layout belongs to each renderer. */
 [data-theme="light"],
+:root[data-theme="light"],
 :root {
   color-scheme: light;
   --page: #ffffff;

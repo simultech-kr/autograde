@@ -109,10 +109,11 @@ def test_unsupported_scope_and_runtime_fail(tmp_path, profile, section, key, val
     assert result["errors"][0]["code"] == code
 
 
-def test_isolated_mode_rejects_current_instructor_web(tmp_path, profile):
+def test_isolated_mode_allows_fixed_instructor_authoring_but_is_not_deployment_ready(tmp_path, profile):
     profile["runtime"].update(mode="isolated-staging", grading="docker")
     result = validate_profile(save(tmp_path, profile))
-    assert result["errors"][0]["code"] == "isolated_authoring"
+    assert result["valid"]
+    assert not result["deployment_ready"]
     profile["runtime"]["instructor_web"] = False
     result = validate_profile(save(tmp_path, profile))
     assert result["valid"]

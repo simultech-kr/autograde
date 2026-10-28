@@ -1,0 +1,11 @@
+[Unit]
+Description=Nightly Autograde backup outside teaching hours
+
+[Timer]
+OnCalendar=*-*-* 03:00:00
+# Do not unexpectedly stop a lesson after a missed timer while the host was off.
+Persistent=false
+Unit=autograde-backup.service
+
+[Install]
+WantedBy=timers.target

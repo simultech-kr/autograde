@@ -30,6 +30,7 @@ def emit_operator_event(
     level: str = "error",
     exception: Optional[BaseException] = None,
     submission_id: Optional[str] = None,
+    request_id: Optional[str] = None,
 ) -> None:
     """Write one allowlisted event without serializing attacker-controlled detail.
 
@@ -61,6 +62,8 @@ def emit_operator_event(
         and _SUBMISSION_ID.fullmatch(submission_id) is not None
     ):
         payload["submission_id"] = submission_id
+    if isinstance(request_id, str) and re.fullmatch(r'[a-f0-9]{32}', request_id):
+        payload['request_id'] = request_id
 
     try:
         line = json.dumps(

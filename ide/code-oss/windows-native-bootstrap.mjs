@@ -1,3 +1,4 @@
+import { createSeatReporter } from './seat-reporter.mjs';
 // Started only by the native Windows supervisor, already inside its job object.
 import fs from 'node:fs';
 import path from 'node:path';
@@ -84,13 +85,18 @@ export function windowsLaunchSpec(bundle, layout, inherited = process.env) {
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  let seatReporter;
   try {
     if (process.argv.length !== 4) throw new Error('Native supervisor arguments required');
     const bundle = loadWindowsPackage(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'));
+    seatReporter = createSeatReporter({ version: bundle.manifest.version, extensionVersion: bundle.manifest.extensionVersion });
     const layout = prepareWindowsSession(bundle, process.argv[2], Number(process.argv[3]));
     const spec = windowsLaunchSpec(bundle, layout);
     const child = spawn(spec.executable, spec.args, spec.options);
+    seatReporter.event({ event: 'ide-started' });
     const code = await new Promise((resolve, reject) => { child.once('error', reject); child.once('close', code => resolve(code ?? 1)); });
     process.exitCode = code ? 1 : 0;
   } catch { process.exitCode = 1; }
+  // Native supervisor cleans only after this bootstrap exits: leave cleanup unknown.
+  await seatReporter?.close();
 }

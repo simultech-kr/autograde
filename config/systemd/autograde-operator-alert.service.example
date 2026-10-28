@@ -1,0 +1,8 @@
+[Unit]
+Description=Record an Autograde operator alert for the institution log collector
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/logger --priority daemon.err --tag autograde-operations "Autograde operation needs attention. Check backup/check service journal and instructor operations page."
+# Connect the institution's existing log alert receiver here; no external
+# message, email address or credential is configured by this example.

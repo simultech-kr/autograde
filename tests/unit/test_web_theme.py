@@ -43,6 +43,16 @@ def test_python_pages_read_the_canonical_token_resource():
     assert referenced <= defined
 
 
+def test_explicit_light_theme_outranks_os_dark_preference():
+    # Both rules match <html data-theme="light"> on a dark OS. The explicit
+    # theme must have greater specificity than the later media-query :root.
+    tokens = files('autograde').joinpath('web_tokens.css').read_text(encoding='utf-8')
+    light_selectors = tokens.split('{', 1)[0]
+    assert ':root[data-theme="light"]' in light_selectors
+    media = tokens.split('@media (prefers-color-scheme: dark)', 1)[1]
+    assert re.match(r'\s*\{\s*:root\s*\{', media)
+
+
 def test_student_html_uses_shared_theme_after_legacy_colours():
     body = CoursePortal._page('Test', '<input>').body
     assert THEME_CSS in body

@@ -108,6 +108,23 @@ test("a skipped forced capture never reuses an older successful save as a curren
   assert.ok(saver.getStatus().savedAt); saver.dispose();
 });
 
+test("save evidence retains server version and digest during failures, while identity changes clear evidence", async () => {
+  const f = setup(); f.saver.reconcile(); await settle();
+  assert.equal(await f.saver.saveNow(), true);
+  assert.equal(f.saver.getStatus().receipt?.checkpoint_id, "cp_1");
+  assert.match(learningCheckpointLabel(f.saver.getStatus()), /서버 보관 v1/);
+  assert.match(learningCheckpointLabel(f.saver.getStatus()), /SHA-256 aaaaaaaaaaaa/);
+  f.setContent("b"); f.saver.recordEdit(); f.setUpload(async () => {throw new Error("offline");});
+  assert.equal(await f.saver.saveNow(), false);
+  assert.equal(f.saver.getStatus().receipt?.archive_sha256, "a".repeat(64));
+  assert.match(learningCheckpointLabel(f.saver.getStatus()), /저장 실패/);
+  f.saver.recordRestored(receipt("c".repeat(64)));
+  assert.match(learningCheckpointLabel(f.saver.getStatus()), /마지막 복원 v1/);
+  f.setScope({...scope, generation: 2}); f.saver.reconcile();
+  assert.equal(f.saver.getStatus().receipt, undefined); assert.equal(f.saver.getStatus().restored, undefined);
+  f.saver.dispose();
+});
+
 test("edits observed before a shared starter baseline finishes still trigger a server save", async () => {
   const f = setup(true); f.saver.reconcile(); f.saver.recordEdit(); await settle();
   await f.time.advance(30_000); assert.equal(f.uploads.length, 1); f.saver.dispose();

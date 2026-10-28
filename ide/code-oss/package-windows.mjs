@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { verify, readJson, repoRoot } from './manage.mjs';
 import { compilePolicyRuntime } from './policy-runtime.mjs';
+import { prepareDistribution } from './distribution-inventory.mjs';
 import { runtimePlan, isInside } from './package-macos.mjs';
 import { fileSha256 } from './package-wsl.mjs';
 import { selectPlatformPrebuilds } from './package-linux.mjs';
@@ -82,11 +83,11 @@ export function assembleWindowsPackage({ source, node, nodeLicense, editorPlan, 
   if (pending.length) throw new Error('Unresolved Windows dependency links');
   for (const name of electronFiles) { const relative = windowsRelative(name); copy(path.join(electronRoot, relative), path.join(destination, 'editor/electron', relative)); }
   copy(node, path.join(destination, 'runtime/node.exe')); copy(nodeLicense, path.join(destination, 'runtime/LICENSE'));
-  for (const name of ['windows-native-bootstrap.mjs', 'runtime-settings.json']) copy(path.join(launcherRoot, name), path.join(destination, 'autograde', name));
+  for (const name of ['windows-native-bootstrap.mjs', 'seat-reporter.mjs', 'runtime-settings.json']) copy(path.join(launcherRoot, name), path.join(destination, 'autograde', name));
   fs.writeFileSync(path.join(destination, 'windows-package.json'), `${JSON.stringify(manifest, null, 2)}\n`, { flag: 'wx' });
   copy(path.join(launcherRoot, 'windows/INSTALL-NATIVE-WINDOWS.md'), path.join(destination, 'INSTALL-NATIVE-WINDOWS.md'));
 }
-export function packageWindows({ source, node, output, archive = true }) {
+export function packageWindows({ source, node, output, institutionProfile, archive = true }) {
   if (process.platform !== 'win32' || process.arch !== 'x64') throw new Error('Build native Windows x64 on Windows x64 with fresh Windows dependencies');
   source = fs.realpathSync(source); node = fs.realpathSync(node); output = path.resolve(output);
   for (const file of [output, `${output}.zip`, `${output}.zip.sha256`]) if (fs.existsSync(file)) throw new Error('Windows package output already exists');
@@ -107,6 +108,7 @@ export function packageWindows({ source, node, output, archive = true }) {
   const powershell = path.join(process.env.SystemRoot, 'System32/WindowsPowerShell/v1.0/powershell.exe');
   execFileSync(powershell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', path.join(here, 'windows/Build-NativeLauncher.ps1'), '-OutputDirectory', compiled, '-ExtensionVersion', checked.extensionVersion, '-RunChecks'], { stdio: 'inherit' });
   for (const name of ['Autograde IDE.exe', 'Autograde Native Checks.exe']) { if (peArchitecture(path.join(compiled, name)) !== 'x64') throw new Error('Native launcher architecture mismatch'); copy(path.join(compiled, name), path.join(payload, name)); }
+  prepareDistribution(payload, path.join(payload, 'autograde'), {ideVersion: manifest.version, extensionVersion: checked.extensionVersion, nodeVersion: info.version, upstreamCommit: upstream.commit}, institutionProfile);
   fs.renameSync(payload, output);
   if (archive) {
     // Windows bsdtar creates ZIP without PowerShell's 2 GiB-per-file restriction.
@@ -120,7 +122,7 @@ export function parseWindowsOptions(args) {
   for (let i = 0; i < args.length; i++) {
     const option = args[i]; if (seen.has(option)) throw new Error('Repeated Windows package option'); seen.add(option);
     if (option === '--no-archive') { result.archive = false; continue; }
-    const key = { '--source': 'source', '--node': 'node', '--output': 'output' }[option];
+    const key = { '--source': 'source', '--node': 'node', '--output': 'output', '--institution-profile': 'institutionProfile' }[option];
     if (!key || !args[i + 1] || args[i + 1].startsWith('--')) throw new Error('Usage: package-windows.mjs --source PATH --node WINDOWS_NODE --output NEW_DIRECTORY [--no-archive]'); result[key] = args[++i];
   }
   return result;

@@ -1,3 +1,4 @@
+import { createSeatReporter } from './seat-reporter.mjs';
 // Native Linux desktop entry point, executed through bundled Linux Node.
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -225,11 +226,13 @@ export function showLinuxFailure(failure, { env = process.env, run = spawnSync, 
 }
 
 if (isLinuxLauncherEntry(process.argv[1])) {
-  const report = event => process.stdout.write(`${JSON.stringify(event)}\n`);
+  let seatReporter;
+  const report = event => { seatReporter?.event(event); process.stdout.write(`${JSON.stringify(event)}\n`); };
   try {
     if (process.argv.length > 3 || (process.argv[2] && process.argv[2] !== '--check' && process.argv[2] !== '--desktop')) fail('bundle_invalid', '지원하지 않는 실행 옵션입니다. 설치된 아이콘으로 실행해 주세요.');
     const environment = inspectLinuxEnvironment();
     const bundle = loadLinuxBundle(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'));
+    seatReporter = createSeatReporter({ version: bundle.manifest.version, extensionVersion: bundle.manifest.extensionVersion ?? bundle.manifest.version });
     const sandbox = checkLinuxSandbox(bundle);
     const libraries = checkLinuxLibraries(bundle);
     if (process.argv[2] === '--check') report(preflightLinux(bundle, { environment, sandbox, libraries }));
@@ -242,4 +245,5 @@ if (isLinuxLauncherEntry(process.argv[1])) {
     if (process.argv[2] === '--desktop') showLinuxFailure(failure);
     process.exitCode = 1;
   }
+  await seatReporter?.close();
 }

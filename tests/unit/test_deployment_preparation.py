@@ -102,7 +102,7 @@ def test_isolated_checks_images_and_uses_stable_course_label(tmp_path, monkeypat
         def check_many(self, references):
             observations.append(references)
     monkeypatch.setattr(portal, "RunnerImageAvailabilityChecker", Checker)
-    monkeypatch.setattr(portal, "ContainerGrader", lambda **options: options)
+    monkeypatch.setattr(portal, "PortalContainerGrader", lambda **options: options)
     options = portal._course_grader(profile(), AppPaths(tmp_path), state, COURSE, isolated=True)
     assert options["runtime"] == "docker"
     assert options["instance_label"] == portal._grader_instance_label(AppPaths(tmp_path), COURSE)

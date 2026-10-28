@@ -251,6 +251,11 @@ server는 loopback에 둔 채 HTTPS reverse proxy·server identity·운영 인�
 
 ## 학생 코드
 
+- 교수자 웹 고정 C/C++ 과제의 isolated 실행은
+  [격리 작성·채점 운영 절차](isolated-instructor-authoring.md)를 따릅니다. 소스와 현재 입력만
+  별도 컨테이너에 전달하고, 예상 출력·배점·전체 테스트는 서버의 고정 평가 로직에 남깁니다.
+  아래의 세 입력 mount 방식은 기존 사용자 정의 OCI runner에 해당합니다.
+
 - `pilot-local`은 합성·신뢰 코드만 host에서 실행합니다. 실제 학생 코드는 실행하지 않습니다.
 - 파일럿 workspace의 source, assessment와 data 분리는 provenance 경계이지 접근 통제가 아닙니다.
 - Production collection host에서는 학생 코드를 실행하지 않고 Git cache나 credential을 grading

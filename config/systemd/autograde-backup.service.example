@@ -1,0 +1,18 @@
+[Unit]
+Description=Verified Autograde maintenance backup (brief planned outage)
+After=network.target
+# Copy this file without .example and replace paths/user/service name first.
+# ExecStopPost restarts the portal even if backup or verification fails.
+OnFailure=autograde-operator-alert.service
+
+[Service]
+Type=oneshot
+User=autograde
+Group=autograde
+UMask=0077
+WorkingDirectory=/opt/autograde
+ExecStartPre=+/bin/systemctl stop autograde.service
+ExecStart=/opt/autograde/.venv/bin/python -m autograde.operations_cli backup --config /etc/autograde/pilot.csv --destination /var/backups/autograde --release-id institution-release-001
+ExecStartPost=/opt/autograde/.venv/bin/python -m autograde.operations_cli prune-backups --directory /var/backups/autograde --keep 7 --apply
+ExecStopPost=+/bin/systemctl start autograde.service
+TimeoutStartSec=3600

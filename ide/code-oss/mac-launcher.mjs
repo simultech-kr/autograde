@@ -1,3 +1,4 @@
+import { createSeatReporter } from './seat-reporter.mjs';
 // Self-contained Mac app runtime. No Git, npm, checkout or system Node dependency.
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -130,11 +131,14 @@ export function isMacLauncherEntry(argument, moduleURL = import.meta.url) {
 }
 
 if (isMacLauncherEntry(process.argv[1])) {
-  const report = event => process.stdout.write(`${JSON.stringify(event)}\n`);
+  let seatReporter;
+  const report = event => { seatReporter?.event(event); process.stdout.write(`${JSON.stringify(event)}\n`); };
   try {
     const bundle = loadMacBundle(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'));
+    seatReporter = createSeatReporter({ version: bundle.manifest.version, extensionVersion: bundle.manifest.extensionVersion ?? bundle.manifest.version });
     const result = await runMacSession(bundle, { report });
     // A crashed IDE is still cleaned, but the student needs a visible notice.
     if (result.code) throw new Error('IDE가 정상적으로 종료되지 않았습니다. 임시 실습 파일은 정리했습니다. 서버에 제출한 코드와 직접 내보낸 파일을 확인해 주세요.');
   } catch (error) { report({ event: 'error', message: macFailureMessage(error) }); process.exitCode = 1; }
+  await seatReporter?.close();
 }

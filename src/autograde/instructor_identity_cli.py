@@ -32,8 +32,8 @@ def main(argv=None):
     create = commands.add_parser('create')
     create.add_argument('--username', required=True)
     create.add_argument('--name', required=True)
-    create.add_argument('--role', choices=('admin', 'instructor'), default='instructor')
-    for name in ('password', 'enable', 'disable', 'grant', 'revoke'):
+    create.add_argument('--role', choices=('admin', 'instructor', 'assistant', 'evaluator'), default='instructor')
+    for name in ('password', 'enable', 'disable', 'grant', 'revoke', 'revoke-sessions', 'reset-mfa'):
         sub = commands.add_parser(name)
         sub.add_argument('--username', required=True)
         if name in {'grant', 'revoke'}:
@@ -50,6 +50,8 @@ def main(argv=None):
             result['user_id'] = store.create(args.username, args.name, args.role, _password())
         elif args.command == 'password':
             store.set_password(args.username, _password())
+        elif args.command in {'revoke-sessions', 'reset-mfa'}:
+            store.prepare_browser_auth().revoke(args.username, reset_mfa=args.command == 'reset-mfa')
         elif args.command in {'enable', 'disable'}:
             store.set_active(args.username, args.command == 'enable')
         elif args.command in {'grant', 'revoke'}:

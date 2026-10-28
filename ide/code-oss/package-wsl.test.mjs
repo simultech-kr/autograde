@@ -32,7 +32,7 @@ function fixture(t) {
   write('source/LICENSE.txt', 'Code OSS license');
   write('source/node_modules/runtime/index.js', '// production module');
   write('source/.env', 'MUST NOT SHIP'); write('source/.git/config', 'MUST NOT SHIP'); write('source/student_roster.csv', 'MUST NOT SHIP');
-  for (const file of ['wsl-launcher.mjs', 'shared-session.mjs', 'learning-profile.mjs']) write(`launcher/${file}`, '// bundled launcher');
+  for (const file of ['wsl-launcher.mjs', 'shared-session.mjs', 'learning-profile.mjs', 'seat-reporter.mjs']) write(`launcher/${file}`, '// bundled launcher');
   write('launcher/runtime-settings.json', {});
   const editorPlan = { files: ['out/main.js', 'LICENSE.txt', 'node_modules/runtime/index.js'], links: {}, approvedBuiltins: ['autograde', 'autograde-ide-profile'] };
   const manifest = wslManifest({ version: '1.143.0', arch: 'x64', nodeVersion: '24.18.0', extensionVersion: '0.5.12',

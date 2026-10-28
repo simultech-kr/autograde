@@ -14,6 +14,7 @@ from .platform_auth import create_or_load_auth_secret, create_or_load_instructor
 from .platform_bundle_worker import BundleSubmissionProcessor, BundleSubmissionWorker
 from .platform_cli import _bundle_store, _exclusive_course_service_lock, _validate_bundle_assignment, _grader_instance_label
 from .platform_grader import PilotLocalGrader, ContainerGrader, PILOT_LOCAL_RUNNER
+from .fixed_stdio_grader import PortalContainerGrader
 from .platform_runner_image import RunnerImageAvailabilityChecker
 from .platform_readiness import PortalReadiness
 from .platform_http import create_server
@@ -35,6 +36,8 @@ def _validate_mode(values, *, isolated):
         if any(urlsplit(values.get(key, "")).scheme != "https"
                for key in ("public_base_url", "web_public_base_url")):
             raise ValueError("isolated mode requires HTTPS for both public origins")
+        if values.get("instructor_assignment_web_enabled") and not values.get("instructor_runner_image"):
+            raise ValueError("isolated instructor authoring requires instructor_runner_image")
     elif values["grading_runtime"] != "pilot-local":
         raise ValueError("container portal requires explicit --isolated staging mode")
 
@@ -47,7 +50,7 @@ def _course_grader(values, paths, state, course, *, isolated):
         return PilotLocalGrader()
     # Inspect exact local digests; never pull or fall back to host execution.
     RunnerImageAvailabilityChecker(runtime=values["grading_runtime"]).check_many(references)
-    return ContainerGrader(runtime=values["grading_runtime"],
+    return PortalContainerGrader(runtime=values["grading_runtime"],
                            instance_label=_grader_instance_label(paths, course))
 
 
@@ -77,8 +80,6 @@ def run(config, *, isolated=False):
     values = config.values
     _validate_mode(values, isolated=isolated)
     admin_enabled = values.get("instructor_assignment_web_enabled", False)
-    if isolated and admin_enabled:
-        raise ValueError("instructor web authoring currently requires trusted pilot-local mode")
     if not {"web_port", "web_public_base_url"} <= values.keys():
         raise ValueError("portal requires web_port and web_public_base_url in CSV")
     paths = AppPaths.from_value(values["data_root"]).ensure()
@@ -90,7 +91,7 @@ def run(config, *, isolated=False):
     if values.get('instructor_auth_mode', 'shared') == 'personal':
         from .instructor_identity import InstructorIdentityStore
         import sqlite3
-        identities = InstructorIdentityStore(paths.root / 'instructor-identities.sqlite3')
+        identities = InstructorIdentityStore(paths.root / 'instructor-identities.sqlite3', browser_auth=True)
         try:
             identities.check_ready()
         except sqlite3.Error as exc:
@@ -130,6 +131,9 @@ def run(config, *, isolated=False):
         content_service = None
         extension_distribution = None
         web_module_checks = {}
+        from .operations import OperationsService
+        operations = OperationsService(paths, workers=workers,
+            runtime_configured=bool(values.get('learning_runtime_socket')))
         if identities is not None:
             web_module_checks['instructor_identity'] = identities.check_ready
         if admin_enabled:
@@ -143,7 +147,8 @@ def run(config, *, isolated=False):
             student_materials = StudentMaterialService(state, paths.root / 'student-materials')
             content_service = ContentService(state, paths.root / 'content')
             extension_distribution = ExtensionDistribution(state, paths.root / 'ide-extensions')
-            assignments = AssignmentAdminService(state, paths, course_status=lambda key: courses.get_course(key)["status"])
+            assignments = AssignmentAdminService(state, paths, course_status=lambda key: courses.get_course(key)["status"],
+                grading_runtime=values["grading_runtime"], runner_image=values.get("instructor_runner_image"))
             workers.append(assignments)
             rubrics = None
             if values.get("instructor_rubric_web_enabled", False):
@@ -167,6 +172,7 @@ def run(config, *, isolated=False):
                 student_materials=student_materials,
                 content_service=content_service,
                 extension_distribution=extension_distribution,
+                operations=operations,
                 bundle_store=bundles,
                 learning_runtime_overview=lambda course_key: services[course_key].learning_runtime_overview(),
                 next_ui_policy=NextResultsPolicy(config),
@@ -174,7 +180,7 @@ def run(config, *, isolated=False):
                 submission_updates=lambda key, auth: services[key].instructor_dashboard_updates(auth, portal=True),
                 submission_review=lambda key, auth, sid, index, **options: services[key].instructor_submission_page(auth, sid, index, **options))
         api = CourseAPI(services, secret, courses=courses, student_materials=student_materials, content_service=content_service,
-                        extension_distribution=extension_distribution)
+                        extension_distribution=extension_distribution, operations=operations)
         web = CoursePortal(services, secret, values["web_public_base_url"], values["public_base_url"],
                            courses=courses, instructor=controller, exam_papers=exam_papers, student_materials=student_materials)
         servers = []

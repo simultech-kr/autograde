@@ -1,0 +1,13 @@
+[Unit]
+Description=Autograde queue, disk, backup and listener health check
+After=autograde.service
+OnFailure=autograde-operator-alert.service
+
+[Service]
+Type=oneshot
+User=autograde
+Group=autograde
+UMask=0077
+WorkingDirectory=/opt/autograde
+ExecStart=/opt/autograde/.venv/bin/python -m autograde.operations_cli check --config /etc/autograde/pilot.csv
+TimeoutStartSec=30

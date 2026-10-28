@@ -14,6 +14,17 @@ Windows 원격 채점 작업자는 후속 구현입니다.
 VS Code 0.4.0 / Visual Studio 0.2.0 소스에는 [제출 기록·이전 코드 복원](docs/operations/submission-history-mvp.md)이
 추가되었습니다. 서버 접수본을 학생별로 조회하고 현재 작업을 덮어쓰지 않는 새 폴더에 복원합니다.
 
+기관 배포 담당자를 위한 [IDE 서명·기관 승인·배치 업데이트·복귀 절차](docs/operations/ide-signed-releases.md)를 제공합니다.
+Mac·Windows·Linux·WSL 빌드에 기관 기본 주소와 구성/라이선스 inventory를 넣을 수 있습니다.
+실제 OS 서명·공증과 기관 인수를 완료했다는 의미는 아닙니다.
+
+기관 출시 준비를 위한 [전체 백업·복원, 사전 진단, 실습실 기기 운영](docs/operations/institution-operations.md),
+[교수자 개인 로그인·관리자 MFA·계정 관리](docs/operations/instructor-personal-auth.md),
+[웹 과제 작성과 격리 채점](docs/operations/isolated-instructor-authoring.md)을 제공합니다.
+관리자는 `/instructor/operations`에서 채점 대기·백업·저장 공간·등록 기기를 확인합니다.
+SQLite와 기존 파일럿 실행은 유지하며, 일반 학생 코드의 운영 채점에는 승인된 격리 실행을 사용합니다.
+[반영 범위·적용 순서·남은 출시 인수 항목](docs/operations/commercial-readiness.md)을 먼저 확인하세요.
+
 ## 현재 권장 실행 흐름
 
 웹 시작 화면 `/`에서 **교수자 포털**(`/instructor`)과 **학생 포털**(`/student`)을 선택합니다.
@@ -22,8 +33,8 @@ VS Code 0.4.0 / Visual Studio 0.2.0 소스에는 [제출 기록·이전 코드 �
 구분하여 표시합니다. [포털 운영 안내](docs/operations/role-portals.md),
 [정보구조·고도화 설계](docs/architecture/role-portals.md)를 참고하세요.
 
-학생은 `/student/register`에서 **학번·본인 비밀번호·교과목**으로 가입합니다. 교수자가 **가입·수강 명단**에
-올린 학번 목록과 일치하면 수업에 자동 연결되며 수동 승인은 필요하지 않습니다. 이후 `/student/login`에서
+학생은 `/student/register`에서 **학번·본인 비밀번호**로 가입한 뒤 수업 목록에서 수강할 수업을 선택합니다.
+신규 계정의 본인 확인과 교수자가 **가입·수강 명단**에 올린 학번 목록 일치가 모두 완료되면 수업에 자동 연결됩니다. 이후 `/student/login`에서
 로그인하여 `/student/account`의 본인 수업으로 이동합니다. 명단 CSV에는 비밀번호를 넣지 않습니다.
 [회원가입·명단 연결 안내](docs/operations/student-membership.md)를 확인하세요.
 교과목 정보는 SQLite에 저장하며 **수업 설정 → 삭제 범위 확인**에서 보관을 거치지 않고 영구 삭제할 수 있습니다.

@@ -42,12 +42,12 @@ from .platform_github_app import (
     OpenSSLRS256Signer,
 )
 from .platform_grader import (
-    ContainerGrader,
     Grader,
     GradingError,
     PILOT_LOCAL_RUNNER,
     PilotLocalGrader,
 )
+from .fixed_stdio_grader import PortalContainerGrader as ContainerGrader
 from .platform_http import create_server
 from .platform_pinner import GitSubmissionPinner
 from .pilot_config import apply_pilot_config, load_pilot_config

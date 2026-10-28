@@ -25,7 +25,8 @@ import zlib
 
 from .platform_auth import new_public_id
 from .platform_state import PlatformConflict, PlatformNotFound, utc_iso
-from .platform_grader import PilotLocalGrader
+from .platform_grader import PilotLocalGrader, PILOT_LOCAL_RUNNER
+from .platform_runner_image import RunnerImageAvailabilityChecker, normalize_runner_image
 
 MAX_ZIP_BYTES = 5 * 1024 * 1024
 MAX_EXPANDED_BYTES = 20 * 1024 * 1024
@@ -374,13 +375,27 @@ def _grading_bundle(content, language):
 
 
 class AssignmentAdminService:
-    def __init__(self, state, paths, course_status=None):
+    def __init__(self, state, paths, course_status=None, *, grading_runtime="pilot-local", runner_image=None):
         self.state, self.paths, self.course_status = state, paths, course_status
+        if grading_runtime not in {"pilot-local", "docker", "podman"}:
+            raise ValueError("unsupported assignment validation runtime")
+        if grading_runtime == "pilot-local":
+            if runner_image is not None:
+                raise ValueError("pilot-local authoring must not configure a container image")
+        else:
+            runner_image = normalize_runner_image(runner_image)
+            RunnerImageAvailabilityChecker(runtime=grading_runtime).check(runner_image)
+        self.grading_runtime, self.runner_image = grading_runtime, runner_image
         self._stop = threading.Event()
         self._wake = threading.Event()
         self._thread = None
         self._grader_lock = threading.Lock()
         self._active_grader = None
+
+    def _validation_instance_label(self):
+        from .assignment_admin_operations import _grader_instance_label
+        # Never share orphan-reconciliation scope with a student course worker.
+        return "authoring-" + _grader_instance_label(self.paths, "validation").removeprefix("service-")
 
     def _course(self, course, *, publishing=False):
         if self.course_status:
@@ -718,7 +733,10 @@ class AssignmentAdminService:
     def queue_check(self, course, draft_id, revision, trusted_code_confirmed=False):
         self._course(course)
         if trusted_code_confirmed is not True:
-            raise ValueError("서버에서 실행할 정답·오답 코드를 검토했음을 확인하세요. pilot-local은 보안 격리가 아닙니다.")
+            message = "정답·오답 코드와 예상 점수를 검토했음을 확인하세요."
+            if self.grading_runtime == "pilot-local":
+                message += " pilot-local은 보안 격리가 아닙니다."
+            raise ValueError(message)
         with self.state._write() as connection:
             self._course_transaction(connection, course)
             row = self._row(connection, course, draft_id)
@@ -781,6 +799,9 @@ class AssignmentAdminService:
                 check = connection.execute("SELECT status FROM bundle_release_checks WHERE assignment_id=? ORDER BY id DESC LIMIT 1", (assignment_id,)).fetchone()
                 if not release or not release["active"] or not check or check[0] != "passed":
                     raise PlatformConflict("검증된 공개본을 확인할 수 없습니다.")
+                expected_runner = PILOT_LOCAL_RUNNER if self.grading_runtime == "pilot-local" else self.runner_image
+                if release["runner_image"] != expected_runner:
+                    raise PlatformConflict("검증 시 사용한 채점 환경이 현재 설정과 다릅니다. 초안을 수정하고 다시 검증하세요.")
                 if release['due_at'] and release['due_at'] <= utc_iso():
                     raise PlatformConflict('마감이 지난 과제는 새로 공개할 수 없습니다. 일정을 수정하고 다시 검증하세요.')
                 if connection.execute("SELECT 1 FROM bundle_assignment_releases WHERE course_key=? AND assignment_key=? AND assignment_id<>? AND ready=1 AND active=1", (course, release["assignment_key"], assignment_id)).fetchone():
@@ -1014,6 +1035,11 @@ class AssignmentAdminService:
     def start(self):
         if self.is_alive():
             return
+        if self.grading_runtime != "pilot-local":
+            from .fixed_stdio_grader import FixedStdioContainerGrader
+            with FixedStdioContainerGrader(runtime=self.grading_runtime,
+                    instance_label=self._validation_instance_label()) as stale:
+                stale.reconcile_orphans()
         with self.state._write() as connection:
             connection.execute("UPDATE bundle_release_checks SET status='failed',completed_at=?,details_json=? "
                 "WHERE status='pending' AND assignment_id IN (SELECT assignment_id FROM instructor_assignment_jobs WHERE status='running')",
@@ -1108,13 +1134,18 @@ class AssignmentAdminService:
                         destination.parent.mkdir(parents=True, exist_ok=True)
                         destination.write_bytes(content)
             (directories["starter"] / "README.md").write_text(draft["description"] + "\n", encoding="utf-8")
-            (directories["assessment"] / "grade.py").write_bytes(Path(assignment_admin_grader.__file__).read_bytes())
+            if self.grading_runtime == "pilot-local":
+                (directories["assessment"] / "grade.py").write_bytes(Path(assignment_admin_grader.__file__).read_bytes())
+            else:
+                from .fixed_stdio_grader import write_recipe
+                write_recipe(directories["assessment"])
             (directories["data"] / "tests.json").write_text(json.dumps({key: draft[key] for key in ("mode", "language", "tests")}), encoding="utf-8")
             assignment_id = new_public_id("basn")
-            args = argparse.Namespace(grading_runtime="pilot-local", runner_image=None, starter=directories["starter"],
+            args = argparse.Namespace(grading_runtime=self.grading_runtime, runner_image=self.runner_image,
+                runner_image_inspect_timeout=15, starter=directories["starter"],
                 assessment=directories["assessment"], data=directories["data"], assignment_id=assignment_id,
                 assignment_key=assignment_key, release_id=f"revision-{draft['revision']}-{job['job_id']}",
-                title=draft["title"], rubric_version="fixed-stdio-v1", max_score=draft["max_score"],
+                title=draft["title"], rubric_version="fixed-stdio-v1" if self.grading_runtime == "pilot-local" else "fixed-stdio-oci-v1", max_score=draft["max_score"],
                 result_policy=draft["result_policy"], opens_at=draft["opens_at"], due_at=draft["due_at"],
                 solution=directories["solution"], negative_solution=directories["negative"], negative_score=draft["negative_score"])
             _add_bundle_assignment(args, self.paths, self.state, job["course_key"])
@@ -1123,7 +1154,13 @@ class AssignmentAdminService:
             with self._grader_lock:
                 if self._stop.is_set():
                     raise InterruptedError("worker_shutdown")
-                grader = _ValidationGrader()
+                if self.grading_runtime == "pilot-local":
+                    grader = _ValidationGrader()
+                else:
+                    from .fixed_stdio_grader import FixedStdioContainerGrader
+                    grader = FixedStdioContainerGrader(runtime=self.grading_runtime,
+                        instance_label=self._validation_instance_label())
+                    grader.reconcile_orphans()
                 self._active_grader = grader
             try:
                 details = _check_bundle_assignment(args, self.paths, self.state, job["course_key"], grader=grader)

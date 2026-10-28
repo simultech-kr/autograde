@@ -26,6 +26,9 @@ export interface LearningCheckpointScope {
 export interface LearningCheckpointStatus {
   readonly state: "inactive" | "waiting" | "saving" | "saved" | "retrying" | "failed" | "unavailable";
   readonly savedAt?: string;
+  /** Last acknowledged server object; retained during retries, never presented as the current edit. */
+  readonly receipt?: LearningCheckpoint;
+  readonly restored?: LearningCheckpoint;
 }
 export function parseLearningCheckpoint(value: unknown, assignmentId: string): LearningCheckpoint {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("서버 저장본 정보를 확인할 수 없습니다.");
@@ -53,7 +56,7 @@ export function learningCheckpointLabel(status: LearningCheckpointStatus): strin
   const labels = { inactive: "대기 · 연결된 과제 폴더 없음", waiting: status.savedAt ? "현재 변경 저장 대기" : "변경 대기 · 이 세션에서 아직 서버 저장 안 됨",
     saving: "서버 저장 중", saved: "서버 저장 확인됨", retrying: "저장 실패 · 연결 확인 후 재시도 대기",
     failed: "자동 저장 중단 · 파일·연결 확인 후 지금 저장을 누르세요", unavailable: "저장 불가 · 서버 지원 또는 인증 확인 필요" };
-  return `${labels[status.state]}${status.savedAt ? ` · 마지막 성공 ${new Date(status.savedAt).toLocaleString()}` : ""}`;
+  return `${labels[status.state]}${status.savedAt ? ` · 마지막 성공 ${new Date(status.savedAt).toLocaleString()}` : ""}${status.receipt ? ` · 서버 보관 v${status.receipt.version} (${status.receipt.checkpoint_id}, SHA-256 ${status.receipt.archive_sha256.slice(0, 12)})` : ""}${status.restored ? ` · 마지막 복원 v${status.restored.version} (${new Date(status.restored.created_at).toLocaleString()} 저장본)` : ""}`;
 }
 interface Clock {
   setTimeout(callback: () => void, milliseconds: number): ReturnType<typeof setTimeout>;
@@ -114,6 +117,11 @@ export class LearningCheckpointAutosaver {
       if (this.status.state === "saved") this.update({...this.status, state: "waiting"});
     }
   }
+  recordRestored(checkpoint: LearningCheckpoint): void {
+    this.reconcile();
+    if (this.scope?.assignmentId !== checkpoint.assignment_id) return;
+    this.update({...this.status, restored: checkpoint});
+  }
   async saveNow(): Promise<boolean> {
     this.reconcile();
     const scope = this.scope, revision = this.revision;
@@ -164,7 +172,8 @@ export class LearningCheckpointAutosaver {
         if ((receipt.received_archive_sha256 ?? receipt.archive_sha256) !== bundle.sha256) throw new Error("서버 저장본 검증에 실패했습니다.");
         this.savedHash = bundle.sha256; this.attempts = 0;
         this.savedSnapshot = {checkpoint: receipt, filePaths: [...(bundle.filePaths ?? [])]};
-        this.update({state: capturedEditRevision === this.editRevision ? "saved" : "waiting", savedAt: receipt.created_at});
+        this.update({state: capturedEditRevision === this.editRevision ? "saved" : "waiting", savedAt: receipt.created_at,
+          receipt, restored: this.status.restored});
       } catch (error) {
         if (!this.current(scope, revision)) return;
         const code = error && typeof error === "object" && "status" in error ? Number(error.status) : 0;

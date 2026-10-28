@@ -79,6 +79,8 @@ def navigation_groups(web, course):
     portal = [('/instructor', '교수자 포털')]
     if can_manage_courses(web):
         portal.append(('/instructor/admin', '교과목·분반 관리'))
+        if getattr(web, 'operations', None) is not None:
+            portal.append(('/instructor/operations', '서버·실습실 운영'))
     groups = [('포털', portal)]
     if course:
         base = web._base(course)

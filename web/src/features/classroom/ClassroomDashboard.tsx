@@ -145,6 +145,7 @@ export function ClassroomDashboard() {
         <label>공식 제출 확인 과제<select aria-label="공식 제출 확인 과제" value={assignment} onChange={e => { clearSelection(); setAssignment(e.target.value); }}><option value="">과제 선택 · 전체 수업 활동</option>{validData?.assignments.map(a => <option key={a.assignment_id} value={a.assignment_id}>{a.title || a.assignment_key}</option>)}</select></label>
         <button onClick={() => setRefresh(n => n + 1)}>다시 연결</button>
       </section>
+      {identity.principal.mode === "personal" && <p className={styles.footnote}><a href="/instructor/account">내 계정·로그아웃</a> · 공용 기기에서는 사용 후 접속을 종료하세요.</p>}
       {!identity.courses.length && <p>조회할 수 있는 수업이 없습니다.</p>}
       <div className={styles.live} role="status" data-stream={stream}>{stream === "live" ? "● 실시간 수신" : stream === "paused" ? "수신 일시 중단" : stream === "denied" ? "접근 종료" : "실시간 연결 확인 중"}<span>마지막 확인: {displayTime(lastSuccess)}</span></div>
       {stream !== "live" && validData && <p className={styles.notice}>브라우저의 수신이 중단되었거나 재연결 중입니다. 카드는 마지막 확인 상태이며, 학생 IDE의 연결 종료를 뜻하지 않습니다.</p>}

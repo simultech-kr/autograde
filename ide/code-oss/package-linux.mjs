@@ -2,6 +2,7 @@
 // Build on native Linux. The installed payload needs neither npm nor a Node install.
 import * as fs from 'node:fs';
 import { compilePolicyRuntime } from './policy-runtime.mjs';
+import { prepareDistribution } from './distribution-inventory.mjs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
@@ -10,7 +11,7 @@ import { verify, readJson, repoRoot } from './manage.mjs';
 import { runtimePlan, isInside } from './package-macos.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const runtimeFiles = ['linux-launcher.mjs', 'shared-session.mjs', 'learning-profile.mjs', 'runtime-settings.json'];
+const runtimeFiles = ['linux-launcher.mjs', 'shared-session.mjs', 'learning-profile.mjs', 'seat-reporter.mjs', 'runtime-settings.json'];
 const versionPattern = /^\d+\.\d+\.\d+(?:[-+][\w.-]+)?$/;
 function present(file) { try { return fs.lstatSync(file); } catch (error) { if (error.code === 'ENOENT') return undefined; throw error; } }
 function regular(file) {
@@ -138,7 +139,7 @@ export function validateLinuxNativeModules(source, editorPlan, arch) {
   }
 }
 
-export function packageLinux({ source, node, output, archive = true }) {
+export function packageLinux({ source, node, output, institutionProfile, archive = true }) {
   if (process.platform !== 'linux') throw new Error('Build the native Linux payload on Linux with matching Linux Node and Electron binaries');
   source = fs.realpathSync(path.resolve(source)); node = path.resolve(node); output = path.resolve(output);
   if (present(output) || present(`${output}.tar.gz`) || present(`${output}.tar.gz.sha256`)) throw new Error('Choose a new package output; existing artifacts are never overwritten');
@@ -164,6 +165,7 @@ export function packageLinux({ source, node, output, archive = true }) {
   const payload = path.join(staging, path.basename(output));
   try {
     assembleLinuxPackage({ source, node, nodeLicense, electronRoot, electronFiles, editorPlan, destination: payload, manifest });
+    prepareDistribution(payload, path.join(payload, 'autograde'), {ideVersion: manifest.version, extensionVersion: checked.extensionVersion, nodeVersion: nodeInfo.version, upstreamCommit: upstream.commit}, institutionProfile);
     // Reserve a new empty destination before moving the owned build into place.
     fs.mkdirSync(output, { mode: 0o755 }); fs.renameSync(payload, output); fs.rmdirSync(staging);
     const result = archive ? archiveLinuxPackage(output, `${output}.tar.gz`) : {};
@@ -181,7 +183,7 @@ export function parseLinuxOptions(args) {
     if (seen.has(option)) throw new Error(`Repeated option: ${option}`);
     seen.add(option);
     if (option === '--no-archive') { result.archive = false; continue; }
-    const key = { '--source': 'source', '--node': 'node', '--output': 'output' }[option];
+    const key = { '--source': 'source', '--node': 'node', '--output': 'output', '--institution-profile': 'institutionProfile' }[option];
     if (!key || !args[index + 1] || args[index + 1].startsWith('--')) throw new Error('Usage: package-linux.mjs [--source PATH] [--node LINUX_NODE] [--output NEW_DIRECTORY] [--no-archive]');
     result[key] = args[++index];
   }

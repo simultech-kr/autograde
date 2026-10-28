@@ -1,3 +1,4 @@
+import { createSeatReporter } from './seat-reporter.mjs';
 // WSLg entry point, executed by the Windows icon through the bundled Linux Node.
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -197,11 +198,13 @@ export function isWslLauncherEntry(argument, moduleURL = import.meta.url) {
 }
 
 if (isWslLauncherEntry(process.argv[1])) {
-  const report = event => process.stdout.write(`${JSON.stringify(event)}\n`);
+  let seatReporter;
+  const report = event => { seatReporter?.event(event); process.stdout.write(`${JSON.stringify(event)}\n`); };
   try {
     if (process.argv.length > 3 || (process.argv[2] && process.argv[2] !== '--check')) fail('bundle_invalid', '지원하지 않는 실행 옵션입니다. 설치된 아이콘으로 실행해 주세요.');
     const environment = inspectWslEnvironment();
     const bundle = loadWslBundle(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'));
+    seatReporter = createSeatReporter({ version: bundle.manifest.version, extensionVersion: bundle.manifest.extensionVersion ?? bundle.manifest.version });
     const sandbox = checkWslSandbox(bundle);
     if (process.argv[2] === '--check') report(preflightWsl(bundle, { environment, sandbox }));
     else {
@@ -209,4 +212,5 @@ if (isWslLauncherEntry(process.argv[1])) {
       if (result.code) fail('session_failed', 'IDE가 정상적으로 종료되지 않았습니다. 임시 실습 파일은 정리했습니다. 담당자에게 WSLg·Linux 라이브러리·Chromium 보안 실행 환경을 확인해 달라고 요청해 주세요.');
     }
   } catch (error) { report(wslFailure(error)); process.exitCode = 1; }
+  await seatReporter?.close();
 }

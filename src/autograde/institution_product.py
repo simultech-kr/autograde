@@ -141,8 +141,9 @@ def validate_definition(value: Any) -> dict[str, Any]:
         _fail("type", "runtime.instructor_web", "Expected a boolean.")
     if (runtime["mode"] == "trusted-pilot") != (runtime["grading"] == "pilot-local"):
         _fail("runtime_mode", "runtime", "Trusted pilot requires pilot-local; isolated staging requires Docker or Podman.")
-    if runtime["mode"] == "isolated-staging" and runtime["instructor_web"]:
-        _fail("isolated_authoring", "runtime", "Current isolated staging cannot enable instructor web authoring.")
+    # Runtime startup separately requires a locally available immutable
+    # instructor_runner_image for fixed C/C++ web authoring. An offline product
+    # manifest does not establish that deployment acceptance gate by itself.
     scope = _object(profile["teaching_scope"], {"languages", "c_standard", "cpp_standard"}, "teaching_scope")
     if scope["languages"] != ["c", "cpp"]:
         _fail("scope", "teaching_scope.languages", "Version 1 defines C and C++ in that order.")

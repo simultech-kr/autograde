@@ -94,6 +94,7 @@ import { ManagedExtensionsApi } from "./managedExtensionsApi";
 import { ManagedExtensionsInstaller } from "./managedExtensionsView";
 import { LearningCheckpointView, SAVE_LEARNING_CHECKPOINT_COMMAND, RESTORE_LEARNING_CHECKPOINT_COMMAND } from "./learningCheckpointView";
 import { learningCheckpointLabel, type LearningCheckpointStatus } from "./learningCheckpoint";
+import { resolveUnsavedSharedExit } from "./sharedExitDecision";
 import { ServerDownloadsView, SERVER_DOWNLOADS_COMMAND } from "./serverDownloadsView";
 import { REMOTE_LEARNING_COMMAND } from "./remoteLearning";
 import { RemoteLearningView } from "./remoteLearningView";
@@ -645,7 +646,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     endingSharedSession = true;
     try {
     const action = await vscode.window.showWarningMessage("공용 실습을 종료하면 이번 세션의 코드·자료·IDE 기록을 정리합니다.", {
-      modal: true, detail: "서버 저장이 확인된 작업본·공식 제출본과 세션 밖에 내보낸 파일은 보존됩니다. 종료 전에 현재 작업의 서버 저장을 잠시 시도합니다. 저장을 확인하지 못한 코드는 먼저 내보내세요. 종료를 취소하면 파일이 남아 있으므로 다음 학생에게 자리를 넘기지 마세요.",
+      modal: true, detail: `${learningCheckpoints?.exitEvidence() ?? "이 세션의 서버 저장 증거가 없습니다."}\n서버 저장이 확인된 작업본·공식 제출본과 세션 밖에 내보낸 파일은 보존됩니다. 종료 전에 현재 작업의 서버 저장을 시도합니다. 창 닫기·강제 종료도 로컬 파일을 삭제하므로 필요한 코드는 먼저 내보내세요. 종료를 취소하면 다음 학생에게 자리를 넘기지 마세요.`,
     }, "먼저 내보내기", "실습 종료");
     if (action === "먼저 내보내기") { await vscode.commands.executeCommand("autograde.exportLearning"); return; }
     if (action !== "실습 종료") return;
@@ -658,14 +659,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       if (decision === "먼저 내보내기") { await vscode.commands.executeCommand("autograde.exportLearning"); return; }
       if (decision !== "원격 정리 미확인으로 종료") return;
     }
-    const saved = await learningCheckpoints?.flushBeforeExit();
-    if (!saved && assignmentWorkspaces.selected) {
-      const decision = await vscode.window.showWarningMessage("최신 작업의 서버 저장을 확인하지 못했습니다.",
-        {modal: true, detail: "종료 후와 다음 시작 시 로컬 실습 파일이 정리됩니다. 서버에 저장되지 않은 코드는 복구할 수 없으므로 필요한 파일은 먼저 내보내세요."},
-        "먼저 내보내기", "저장 없이 종료");
-      if (decision === "먼저 내보내기") { await vscode.commands.executeCommand("autograde.exportLearning"); return; }
-      if (decision !== "저장 없이 종료") return;
+    let saved = await learningCheckpoints?.flushBeforeExit();
+    if (!saved && (assignmentWorkspaces.selected || sharedSession.authenticationUsed)) {
+      const approved = await resolveUnsavedSharedExit({
+        evidence: () => learningCheckpoints?.exitEvidence() ?? "이 세션의 서버 저장 증거가 없습니다.",
+        retry: async () => { saved = await learningCheckpoints?.flushBeforeExit(); return saved === true; },
+        exportWork: async () => { await vscode.commands.executeCommand("autograde.exportLearning"); },
+        choose: async (message, detail, ...choices) => vscode.window.showWarningMessage(message, {modal: true, detail}, ...choices),
+      });
+      if (!approved) return;
     }
+    if (saved) void vscode.window.showInformationMessage(`종료 전 저장 증거: ${learningCheckpoints?.exitEvidence()}`);
     // Revoke best-effort; local exit/cleanup must remain available when offline.
     try { if (await tokens.hasSession()) await client.revokeCurrentSession(); } catch { /* The server session expires independently. */ }
     await tokens.clear();

@@ -794,7 +794,7 @@ def test_facade_safe_errors_are_mapped_and_unexpected_details_are_hidden(
             "message": "Poll less frequently",
         }
 
-        status, _, body = request(
+        status, error_headers, body = request(
             server, "GET", "/v1/me", headers=auth_headers()
         )
         assert status == 500
@@ -819,6 +819,7 @@ def test_facade_safe_errors_are_mapped_and_unexpected_details_are_hidden(
         "event": "http_request_unexpected_exception",
         "exception_type": "RuntimeError",
         "level": "error",
+        "request_id": error_headers['x-request-id'],
     }
 
 

@@ -107,15 +107,18 @@ def run(arguments, work, label, timeout, stdin=b""):
         return process.returncode, output.read(OUTPUT_LIMIT), failure
 
 
-def evaluate(source, configuration, work):
+def evaluate(source, configuration, work, *, runner=None, compiler=None, total_seconds=25):
+    # The isolated backend injects an OCI-only runner and a logical compiler
+    # name. It never uses this module's host subprocess implementation.
+    run = runner or globals()["run"]
     # Leave teardown/serialization headroom below PilotLocalGrader's 30 seconds.
-    total_deadline = time.monotonic() + 25
+    total_deadline = time.monotonic() + total_seconds
     is_c = configuration["language"] == "c"
-    compiler = shutil.which("cc" if is_c else "c++")
+    compiler = compiler or shutil.which("cc" if is_c else "c++")
     if compiler is None:
         raise RuntimeError("compiler_unavailable")
     flags = []
-    if sys.platform == "darwin" and not is_c:
+    if runner is None and sys.platform == "darwin" and not is_c:
         lookup = subprocess.run(["/usr/bin/xcrun", "--show-sdk-path"], capture_output=True, text=True, timeout=3)
         headers = Path(lookup.stdout.strip()) / "usr/include/c++/v1"
         if lookup.returncode == 0 and (headers / "iostream").is_file():

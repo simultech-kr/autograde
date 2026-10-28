@@ -38,7 +38,7 @@ test('Windows assembly materializes aliases and bundles only explicit runtime in
   write(source, 'out/main.js', 'main'); write(source, 'node_modules/real/index.js', 'runtime'); write(source, '.env', 'not shipped');
   const node = write(root, 'runtime/node.exe', pe()), nodeLicense = write(root, 'runtime/LICENSE', 'node license');
   write(electron, 'Autograde IDE.exe', pe());
-  for (const name of ['windows-native-bootstrap.mjs', 'runtime-settings.json', 'windows/INSTALL-NATIVE-WINDOWS.md']) write(launchers, name, '{}');
+  for (const name of ['windows-native-bootstrap.mjs', 'seat-reporter.mjs', 'runtime-settings.json', 'windows/INSTALL-NATIVE-WINDOWS.md']) write(launchers, name, '{}');
   const plan = { files: ['out/main.js', 'node_modules/real/index.js'], links: { 'node_modules\\alias': 'real' } };
   assembleWindowsPackage({ source, node, nodeLicense, editorPlan: plan, electronRoot: electron, electronFiles: ['Autograde IDE.exe'], destination, manifest: windowsManifest(metadata), launcherRoot: launchers });
   const alias = path.join(destination, 'editor/app/node_modules/alias');

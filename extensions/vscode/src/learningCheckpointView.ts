@@ -108,6 +108,11 @@ export class LearningCheckpointView {
       })]);
     } finally { if (timer) clearTimeout(timer); }
   }
+  exitEvidence(): string {
+    this.autosaver.reconcile();
+    const status = this.autosaver.getStatus();
+    return `${learningCheckpointLabel(status)}. ${status.state === "saved" ? "이 응답 이후 새로 편집한 내용은 다시 저장해야 합니다." : "표시된 이전 저장본에 현재 변경이 포함되었다고 보장하지 않습니다."}`;
+  }
   /** Capture this assignment now; never choose the newest history item from another upload. */
   async saveForExecution(scope: LearningCheckpointScope): Promise<SavedLearningSnapshot> {
     if (!sameLearningScope(scope, this.scope())) throw new Error("연결된 과제가 변경되었습니다.");
@@ -159,6 +164,7 @@ export class LearningCheckpointView {
       if (!connectedCurrent()) throw new Error("인증이 변경되어 복원을 중단했습니다.");
       // Connecting changes the selected folder. It is intentional; do not treat it as stale cleanup.
       created = undefined;
+      this.autosaver.recordRestored(selected.checkpoint);
       void vscode.window.showInformationMessage("서버 작업 저장본을 새 과제 폴더로 열었습니다. 코드 확인 후 공식 제출을 진행하세요.");
     } catch (error) {
       if (created) {

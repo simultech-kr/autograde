@@ -1,0 +1,6 @@
+{
+  "schema": "autograde.ide-institution.v1",
+  "institutionId": "example-school",
+  "apiUrl": "https://autograde.example.edu:20000",
+  "portalUrl": "https://autograde.example.edu:20010"
+}
