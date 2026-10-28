@@ -13,6 +13,7 @@ import {
   TokenManager,
 } from "./api";
 import { AssignmentClaimController } from "./assignmentClaim";
+import { OperationCancelledError } from "./deviceAuth";
 import { AssignmentOperationGate, confirmWorkspaceSwitch } from "./assignmentOperation";
 import { AssignmentDocumentState } from "./assignmentDocument";
 import { AssignmentDocumentView, ASSIGNMENT_DOCUMENT_SCHEME } from "./assignmentDocumentView";
@@ -61,6 +62,7 @@ import {
   rememberSubmission,
 } from "./studentSessionState";
 import { ServiceAddressController } from "./serviceAddress";
+import { STUDENT_PORTAL_COMMAND, studentPortalUrl, configuredStudentPortalBase } from "./studentPortalLink";
 import { AssignmentTreeItem, AssignmentsTreeProvider } from "./tree";
 import type { Assignment, GradeResult, SubmissionSummary } from "./types";
 import { clearResultPanel, pauseDisplayedResult, refreshDisplayedResult, showResultPanel } from "./resultPanel";
@@ -93,6 +95,8 @@ import { ManagedExtensionsInstaller } from "./managedExtensionsView";
 import { LearningCheckpointView, SAVE_LEARNING_CHECKPOINT_COMMAND, RESTORE_LEARNING_CHECKPOINT_COMMAND } from "./learningCheckpointView";
 import { learningCheckpointLabel, type LearningCheckpointStatus } from "./learningCheckpoint";
 import { ServerDownloadsView, SERVER_DOWNLOADS_COMMAND } from "./serverDownloadsView";
+import { REMOTE_LEARNING_COMMAND } from "./remoteLearning";
+import { RemoteLearningView } from "./remoteLearningView";
 let diagnosticExtensionVersion = "0.5.8";
 
 const SUCCESSFUL_SUBMISSION_STATES = new Set(["accepted", "queued", "running", "graded", "published"]);
@@ -169,6 +173,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   let classroomCommands: ClassroomCommands | undefined;
   let managedExtensions: ManagedExtensions | undefined;
   let learningCheckpoints: LearningCheckpointView | undefined;
+  let remoteLearning: RemoteLearningView | undefined;
+  let remoteLearningStatus = "과제 연결 후 환경을 준비하세요";
   let serverDownloads: ServerDownloadsView | undefined;
   let checkpointStatus: LearningCheckpointStatus = {state: "inactive"};
   let classroomCommandStatus = "교수자 요청 대기 · 과제 연결 필요";
@@ -229,9 +235,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       ...Array.from(assignmentWorkspaces.attached.values()).map(uri => uri.fsPath),
     ],
   });
-  assignmentWorkspaces.onSelected = id => { examAssignmentId = id; examMode.reconcile(); classroom.reconcile(); classroomCommands?.reconcile(); managedExtensions?.reconcile(); learningCheckpoints?.reconcile(); };
+  assignmentWorkspaces.onSelected = id => { learningHome.refresh(); examAssignmentId = id; examMode.reconcile(); classroom.reconcile(); classroomCommands?.reconcile(); managedExtensions?.reconcile(); learningCheckpoints?.reconcile(); remoteLearning?.reconcile(); };
   let classroomStatus: ClassroomSharingStatus = "inactive";
   let classroomDisclosureIdentity: number | undefined;
+  const homeAssignment = () => {
+    if (!authenticationUiState) return undefined;
+    const accepted = treeProvider.getAssignments();
+    const selectedId = assignmentWorkspaces.selected?.assignment.id;
+    return accepted.find(item => item.id === selectedId) ?? (accepted.length === 1 ? accepted[0] : undefined);
+  };
   const learningHome = new LearningHomeView(() => ({
     authenticated: authenticationUiState,
     trusted: vscode.workspace.isTrusted,
@@ -240,9 +252,37 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     classroomStatus,
     classroomCommandStatus,
     checkpointStatus: learningCheckpointLabel(checkpointStatus),
+    remoteLearningStatus,
     sharedSession: Boolean(sharedSession),
     sessionNeedsRestart: Boolean(sharedSession?.authenticationUsed && !authenticationUiState),
-  }));
+    sessionGeneration: tokens.getSessionGeneration(),
+    serviceBaseUrl: (() => { try { return transport.getBaseUrl(); } catch { return ""; } })(),
+    studentPortalBaseUrl: configuredStudentPortalBase(vscode.workspace.getConfiguration("autograde").inspect<string>("studentPortalBaseUrl")),
+    assignment: homeAssignment(),
+    hasAssignmentFolder: Boolean(authenticationUiState && assignmentWorkspaces.selected
+      && homeAssignment()?.id === assignmentWorkspaces.selected.assignment.id),
+  }), {
+    claim: async (code, expectedServer) => {
+      // Invoke the controller directly: secrets never enter command arguments or persistence.
+      const operation = runInlineLearningAction(() => {
+        const redemption = redeemAssignmentClaim(code, expectedServer);
+        code = "";
+        return redemption;
+      });
+      try { await operation; } finally { code = ""; }
+    },
+    configureServer: address => runInlineLearningAction(async () => {
+      sharedSession?.assertCanAuthenticate();
+      if (!await serviceAddresses.configure(address)) throw new OperationCancelledError();
+      await connectionMonitor.checkNow();
+    }),
+    configurePortal: address => runInlineLearningAction(async () => {
+      // Navigation origin is a machine setting, never inherited from a downloaded project.
+      studentPortalUrl(address);
+      const origin = new URL(address.trim()).origin;
+      await vscode.workspace.getConfiguration("autograde").update("studentPortalBaseUrl", origin, vscode.ConfigurationTarget.Global);
+    }),
+  });
   const reportedEnvironment = classroomEnvironment(process.platform, vscode.env.appName, vscode.env.remoteName);
   const classroom = new ClassroomActivityReporter(client, () => {
     const selected = assignmentWorkspaces.selected;
@@ -253,7 +293,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   }, reportedEnvironment ?? { os: "linux", ide: "vscode" }, status => {
     classroomStatus = status; learningHome.refresh();
     classroomCommands?.reconcile();
-    managedExtensions?.reconcile(); learningCheckpoints?.reconcile();
+    managedExtensions?.reconcile(); learningCheckpoints?.reconcile(); remoteLearning?.reconcile();
     const identity = tokens.getSessionGeneration();
     if (status === "sharing" && classroomDisclosureIdentity !== identity) {
       classroomDisclosureIdentity = identity;
@@ -279,7 +319,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     classroomIdentity = authenticated ? tokens.getSessionGeneration() : undefined;
     classroom.reconcile();
     classroomCommands?.reconcile();
-    managedExtensions?.reconcile(); learningCheckpoints?.reconcile();
+    managedExtensions?.reconcile(); learningCheckpoints?.reconcile(); remoteLearning?.reconcile();
     learningHome.refresh();
     serverDownloads?.reconcile();
     await Promise.all([
@@ -429,6 +469,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     clearSessionUiForAddressChange,
   );
   const assignmentOperations = new AssignmentOperationGate();
+  const runInlineLearningAction = async (action: () => Promise<void>): Promise<void> => {
+    if (assignmentOperations.isBusy || submitting) throw new Error("과제 작업이 진행 중입니다. 완료하거나 취소한 뒤 다시 시도하세요.");
+    // Unlike runCommand, preserve errors so the form cannot show a false success.
+    await assignmentOperations.tryRun(action);
+  };
   const runAssignmentCommand = (action: () => Promise<unknown>): Promise<void> => runCommand(() =>
     assignmentOperations.run(action, () => {
       void vscode.window.showInformationMessage("수령 코드 입력 또는 과제 작업이 진행 중입니다. 열린 입력창이나 진행 알림에서 완료·취소한 뒤 다시 선택하세요.");
@@ -457,8 +502,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     downloadContent: id => runServerDownload(() => contentSync.show(undefined, undefined, id)),
     connect: async () => { await vscode.commands.executeCommand("autograde.redeemAssignmentClaim"); },
   });
-  learningCheckpoints = new LearningCheckpointView(client, {
-    currentScope: () => {
+  const learningScope = () => {
       const selected = assignmentWorkspaces.selected;
       const uri = selected && assignmentWorkspaces.attached.get(path.resolve(selected.rootPath));
       if (!authenticationUiState || !studentState.isActive() || !vscode.workspace.isTrusted || !selected || !uri
@@ -466,7 +510,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         || !treeProvider.getAssignments().some(item => item.id === selected.assignment.id && isBundleAssignment(item))) return undefined;
       return {baseUrl: transport.getBaseUrl(), generation: tokens.getSessionGeneration(), assignmentId: selected.assignment.id,
         rootPath: selected.rootPath, scheme: uri.scheme, authority: uri.authority ?? ""};
-    },
+    };
+  learningCheckpoints = new LearningCheckpointView(client, {
+    currentScope: learningScope,
     isBusy: () => assignmentOperations.isBusy || submitting,
     withCaptureLock: action => assignmentOperations.tryRun(action),
     sharedSession,
@@ -475,6 +521,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       if (assignment && current()) await connectAssignmentFolder(assignmentWorkspaces, uri, assignment, current);
     },
     onStatus: status => { checkpointStatus = status; learningHome.refresh(); },
+  });
+  remoteLearning = new RemoteLearningView(client, {
+    currentScope: learningScope,
+    saveSnapshot: scope => learningCheckpoints!.saveForExecution(scope),
+    onStatus: status => { remoteLearningStatus = status; learningHome.refresh(); },
   });
   classroomCommands = new ClassroomCommands(client, () => {
     const scope = classroom.getCommandContext();
@@ -557,7 +608,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   managedExtensions = new ManagedExtensions(new ManagedExtensionsApi(client), () => classroom.getCommandContext(),
     new ManagedExtensionsInstaller(sharedSession, environment, assignmentOperations, context.extension));
   managedExtensions.reconcile();
-  const redeemAssignmentClaim = async (): Promise<void> => {
+  const redeemAssignmentClaim = async (entered?: string, expectedServer?: string): Promise<void> => {
+    const claimOrigin = transport.getBaseUrl();
+    const claimGeneration = tokens.getSessionGeneration();
+    const ensureClaimContext = (): void => {
+      if (claimOrigin !== transport.getBaseUrl() || claimGeneration !== tokens.getSessionGeneration()
+          || expectedServer !== undefined && expectedServer !== claimOrigin) {
+        throw new Error("연결할 서버나 로그인이 변경되었습니다. 학습 홈에서 주소를 확인하고 다시 입력하세요.");
+      }
+    };
+    ensureClaimContext();
     sharedSession?.assertCanAuthenticate();
     studentMaterials.clear();
     contentSync.clear();
@@ -568,11 +628,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       if (!(vscode.workspace.workspaceFolders ?? []).some(folder => path.resolve(folder.uri.fsPath) === sharedSession.workspace)) {
         throw new Error("공용 실습의 기본 작업 폴더가 닫혔습니다. IDE를 종료하고 실행기로 새 실습 세션을 시작하세요.");
       }
-    } else if (!await prepareClaimWorkspace(context.globalState)) return;
+    } else if (!await prepareClaimWorkspace(context.globalState)) throw new OperationCancelledError();
+    ensureClaimContext();
     if (!vscode.workspace.isTrusted) {
       throw new Error("수령 코드로 파일을 받으려면 현재 workspace를 신뢰해야 합니다.");
     }
-    await assignmentClaims.redeem();
+    if (entered === undefined) { learningHome.show("claim"); return; }
+    const operation = assignmentClaims.redeem(entered);
+    entered = undefined;
+    if (!await operation) throw new OperationCancelledError();
   };
 
   let endingSharedSession = false;
@@ -585,6 +649,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }, "먼저 내보내기", "실습 종료");
     if (action === "먼저 내보내기") { await vscode.commands.executeCommand("autograde.exportLearning"); return; }
     if (action !== "실습 종료") return;
+    const remoteClosed = await remoteLearning?.finishBeforeExit();
+    if (remoteClosed === false) {
+      const decision = await vscode.window.showWarningMessage("원격 실행공간의 서버 저장 또는 삭제를 확인하지 못했습니다.",
+        {modal: true, detail: "연결을 확인한 뒤 원격 실습 화면에서 다시 종료하거나 먼저 내보내세요. 그래도 IDE를 종료하면 로컬 파일은 정리되며 원격 공간은 서버의 만료 정책으로 정리됩니다. 저장되지 않은 편집은 복원을 보장하지 않습니다."},
+        "원격 실습으로 돌아가기", "먼저 내보내기", "원격 정리 미확인으로 종료");
+      if (decision === "원격 실습으로 돌아가기") { await remoteLearning?.show(); return; }
+      if (decision === "먼저 내보내기") { await vscode.commands.executeCommand("autograde.exportLearning"); return; }
+      if (decision !== "원격 정리 미확인으로 종료") return;
+    }
     const saved = await learningCheckpoints?.flushBeforeExit();
     if (!saved && assignmentWorkspaces.selected) {
       const decision = await vscode.window.showWarningMessage("최신 작업의 서버 저장을 확인하지 못했습니다.",
@@ -607,12 +680,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push(
     classroom,
     learningCheckpoints,
+    remoteLearning,
+    vscode.commands.registerCommand(REMOTE_LEARNING_COMMAND, () => runCommand(() => remoteLearning!.show())),
     vscode.commands.registerCommand(SAVE_LEARNING_CHECKPOINT_COMMAND, () => runCommand(() => learningCheckpoints!.saveNow())),
     vscode.commands.registerCommand(RESTORE_LEARNING_CHECKPOINT_COMMAND, () => runAssignmentCommand(() => learningCheckpoints!.restore())),
     classroomCommands,
     managedExtensions,
     vscode.commands.registerCommand(MANAGED_EXTENSIONS_COMMAND, () => managedExtensions!.check(true)),
-    vscode.workspace.onDidChangeTextDocument(event => { if (event.contentChanges.length) learningCheckpoints?.recordEdit(event.document.uri); }),
+    vscode.workspace.onDidChangeTextDocument(event => {
+      if (event.contentChanges.length) {
+        learningCheckpoints?.recordEdit(event.document.uri);
+        const scope = learningScope();
+        if (scope && event.document.uri.scheme === scope.scheme && event.document.uri.authority === scope.authority
+          && containsPath(scope.rootPath, event.document.uri.fsPath)) remoteLearning?.markEdited();
+      }
+    }),
     vscode.workspace.onDidSaveTextDocument(document => {
       learningCheckpoints?.recordEdit(document.uri);
       // Never inspect or report unrelated workspaces, unsaved buffers, or non-file resources.
@@ -638,12 +720,25 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand(EXAM_MODE_COMMAND, () => examMode.show()),
     learningHome,
     vscode.commands.registerCommand(LEARNING_HOME_COMMAND, () => learningHome.show()),
+    vscode.commands.registerCommand(STUDENT_PORTAL_COMMAND, () => runCommand(async () => {
+      const config = vscode.workspace.getConfiguration("autograde");
+      // Workspace settings are controlled by downloaded projects, never trust them for account navigation.
+      const setting = config.inspect<string>("studentPortalBaseUrl");
+      let base = configuredStudentPortalBase(setting);
+      if (!base.trim()) {
+        learningHome.show("portal");
+        return;
+      }
+      const target = studentPortalUrl(base, homeAssignment()?.courseKey);
+      // No IDE token, claim code or student number enters the browser URL.
+      await vscode.env.openExternal(vscode.Uri.parse(target));
+    })),
     serverDownloads,
     vscode.commands.registerCommand(SERVER_DOWNLOADS_COMMAND, () => serverDownloads!.show()),
     vscode.commands.registerCommand(END_LEARNING_SESSION_COMMAND, () => runCommand(endSharedSession)),
-    vscode.workspace.onDidChangeWorkspaceFolders(() => { learningHome.refresh(); classroom.reconcile(); classroomCommands?.reconcile(); managedExtensions?.reconcile(); learningCheckpoints?.reconcile(); }),
+    vscode.workspace.onDidChangeWorkspaceFolders(() => { learningHome.refresh(); classroom.reconcile(); classroomCommands?.reconcile(); managedExtensions?.reconcile(); learningCheckpoints?.reconcile(); remoteLearning?.reconcile(); }),
     documentView,
-    treeProvider.onDidChangeTreeData(() => { documentView.reconcileAccepted(); classroom.reconcile(); classroomCommands?.reconcile(); managedExtensions?.reconcile(); learningCheckpoints?.reconcile(); }),
+    treeProvider.onDidChangeTreeData(() => { learningHome.refresh(); documentView.reconcileAccepted(); classroom.reconcile(); classroomCommands?.reconcile(); managedExtensions?.reconcile(); learningCheckpoints?.reconcile(); remoteLearning?.reconcile(); }),
     vscode.workspace.registerTextDocumentContentProvider(ASSIGNMENT_DOCUMENT_SCHEME, documentView),
     vscode.commands.registerCommand("autograde.viewAssignmentDocument", (item?: AssignmentTreeItem) => runAssignmentCommand(async () => {
       const candidates = treeProvider.getAssignments().filter(isBundleAssignment);
@@ -664,7 +759,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     diagnostics,
     vscode.commands.registerCommand(
       "autograde.configureServiceAddress",
-      () => runAssignmentCommand(async () => { sharedSession?.assertCanAuthenticate(); await serviceAddresses.configure(); }),
+      () => learningHome.show("server"),
     ),
     vscode.commands.registerCommand(
       CHECK_SERVER_CONNECTION_COMMAND,
@@ -760,9 +855,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       treeProvider.setAssignments(treeProvider.getAssignments());
       learningHome.refresh();
       serverDownloads?.reconcile();
-      classroom.reconcile(); learningCheckpoints?.reconcile();
+      classroom.reconcile(); learningCheckpoints?.reconcile(); remoteLearning?.reconcile();
     }),
     vscode.workspace.onDidChangeConfiguration((event) => {
+      if (event.affectsConfiguration("autograde.studentPortalBaseUrl")) learningHome.refresh();
       if (event.affectsConfiguration("autograde.examControlBaseUrl")) examMode.clear();
       if (
         !event.affectsConfiguration("autograde.serviceBaseUrl") &&
@@ -1813,7 +1909,7 @@ function watchSubmissionResult(
       const displayed = current.find(item => item.id === assignment.id);
       if (displayed && (!displayed.latestSubmission || displayed.latestSubmission.id === submission.id)) {
         ui.tree.setAssignments(current.map(item => item.id === assignment.id ? { ...item, latestSubmission: {
-          id: submission.id, state: result.state, sourceDigest: result.sourceDigest, headSha: result.headSha,
+          id: submission.id, state: result.state, receivedAt: result.receivedAt ?? submission.receivedAt, sourceDigest: result.sourceDigest, headSha: result.headSha,
           score: result.state === "published" ? result.score : undefined,
           maxScore: result.state === "published" ? result.maxScore : undefined, previousBest: result.previousBest,
         } } : item));
@@ -1933,7 +2029,7 @@ async function runCommand(action: () => Promise<unknown>): Promise<void> {
   try {
     await action();
   } catch (error) {
-    if (error instanceof vscode.CancellationError) {
+    if (error instanceof vscode.CancellationError || error instanceof OperationCancelledError) {
       return;
     }
     showCommandError(error);

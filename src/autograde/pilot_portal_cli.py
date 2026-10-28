@@ -67,6 +67,7 @@ def _create_course_runtime(values, paths, state, course, *, isolated, secret,
         service = StudentPlatformService(state=state, server_secret=secret, course_key=course,
             public_base_url=values["public_base_url"], bundle_store=bundles,
             notify_bundle_submission=notify, instructor_token=instructor,
+            learning_runtime_socket=values.get("learning_runtime_socket"),
             instructor_authorizer=identities.authorize_course if identities else None)
         service._password_verification_slots = password_slots
         return service, processor, grader, resources.pop_all()
@@ -83,7 +84,6 @@ def run(config, *, isolated=False):
     paths = AppPaths.from_value(values["data_root"]).ensure()
     state = PlatformStateStore(paths.database)
     courses = CourseAdminService(state)
-    courses.get_course(values["course_key"])
     secret = create_or_load_auth_secret(paths.platform_auth_secret)
     instructor = create_or_load_instructor_token(paths.platform_instructor_token)
     identities = None
@@ -116,6 +116,8 @@ def run(config, *, isolated=False):
             return service, processor
 
         services = CourseRuntimeRegistry(courses, factory)
+        from .course_deletion_runtime import configure_course_deletion
+        configure_course_deletion(paths, courses, services, values.get('learning_runtime_socket'))
         student_worker = SharedCourseWorker(state, services, worker_count=values["bundle_worker_count"])
         workers.append(student_worker)
         # Validate persisted inputs and acquire course lifecycle locks before bind.
@@ -153,14 +155,20 @@ def run(config, *, isolated=False):
                 web_module_checks['rubric_catalog'] = rubrics.store.check_available
                 if rubrics.assessments:
                     web_module_checks['rubric_assessment'] = rubrics.assessments.check_available
+            # Shared portal authentication must work even after its former
+            # default course (or every course) has been permanently deleted.
+            portal_authorizer = StudentPlatformService(state=state, server_secret=secret,
+                course_key=values['course_key'], public_base_url=values['public_base_url'],
+                instructor_token=instructor)
             controller = InstructorWeb(courses, EnrollmentAdminService(state, secret), assignments,
-                authorize=services[values["course_key"]]._authorize_instructor,
+                authorize=portal_authorizer._authorize_instructor,
                 secret=secret, web_url=values["web_public_base_url"], rubrics=rubrics, identities=identities,
                 exam_papers=exam_papers,
                 student_materials=student_materials,
                 content_service=content_service,
                 extension_distribution=extension_distribution,
                 bundle_store=bundles,
+                learning_runtime_overview=lambda course_key: services[course_key].learning_runtime_overview(),
                 next_ui_policy=NextResultsPolicy(config),
                 submissions=lambda key, auth: services[key].instructor_dashboard_page(auth, portal=True),
                 submission_updates=lambda key, auth: services[key].instructor_dashboard_updates(auth, portal=True),
@@ -207,7 +215,7 @@ def run(config, *, isolated=False):
                 thread.start()
                 threads.append(thread)
             print(json.dumps({"ok": True, "web": values["web_public_base_url"],
-                              "api": values["public_base_url"], "courses": list(COURSES) + [c for c in services if c not in COURSES],
+                              "api": values["public_base_url"], "courses": [c for c in COURSES if c in services] + [c for c in services if c not in COURSES],
                               "roster": roster,
                               "workers": values["bundle_worker_count"],
                               "grading": values["grading_runtime"] if isolated else "pilot-local (trusted code only)",

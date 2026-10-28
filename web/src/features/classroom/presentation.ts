@@ -35,3 +35,21 @@ export function displayTime(value: string | null | undefined) {
   return value ? new Date(value).toLocaleString("ko-KR", { timeZone: "Asia/Seoul", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }) + " KST" : "기록 없음";
 }
 export function stableStudents(students: ClassroomStudent[]) { return [...students].sort((a, b) => a.student_key.localeCompare(b.student_key, "en")); }
+
+export type AttentionFilter = "all" | "attention" | "connection" | "never_connected" | "grading_error" | "grading_wait" | "command";
+export function attentionReasons(student: ClassroomStudent, serverTime: string): string[] {
+  const reasons: string[] = [];
+  if (["stale", "offline"].includes(student.connection.state)) reasons.push("connection");
+  const latest = student.submission.latest;
+  if (latest && ["failed", "rejected", "infra_failed", "assessment_failed"].includes(latest.state)) reasons.push("grading_error");
+  const waited = latest ? Date.parse(serverTime) - Date.parse(latest.received_at) : NaN;
+  if (latest && ["received", "accepted", "queued", "running", "verifying", "pinning"].includes(latest.state) && waited >= 10 * 60 * 1000) reasons.push("grading_wait");
+  if (student.command_attention) reasons.push("command");
+  return reasons;
+}
+export function needsAttention(student: ClassroomStudent, filter: AttentionFilter, serverTime: string): boolean {
+  if (filter === "all") return true;
+  if (filter === "never_connected") return student.connection.state === "never_connected";
+  const reasons = attentionReasons(student, serverTime);
+  return filter === "attention" ? reasons.length > 0 : reasons.includes(filter);
+}

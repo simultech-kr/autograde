@@ -23,6 +23,7 @@ from .instructor_responsive import RESPONSIVE_CSS, result_table
 from .instructor_assignment_catalog import InstructorAssignmentCatalog
 from .instructor_form_recovery import FormRecovery
 from .instructor_browser import SCRIPT_TAG
+from .instructor_portal import STYLE as PORTAL_STYLE, navigation, portal_home, course_workflows, course_summary, environment_page
 
 
 _COOKIE = "autograde_instructor_web"
@@ -137,7 +138,7 @@ class InstructorWeb:
     def __init__(self, course_admin, enrollment_admin, assignment_admin, *, authorize,
                  secret, web_url, submissions=None, submission_review=None, submission_updates=None, rubrics=None, identities=None,
                  next_ui_policy=None, exam_papers=None, student_materials=None, content_service=None,
-                 extension_distribution=None, bundle_store=None):
+                 extension_distribution=None, bundle_store=None, learning_runtime_overview=None):
         self.courses = course_admin
         self.students = enrollment_admin
         self.assignments = assignment_admin
@@ -154,6 +155,7 @@ class InstructorWeb:
         self.content_service = content_service
         self.extension_distribution = extension_distribution
         self.bundle_store = bundle_store
+        self.learning_runtime_overview = learning_runtime_overview
         self.principal = None
         self.next_ui_policy = next_ui_policy if next_ui_policy is not None else lambda: frozenset()
         self.catalog = InstructorAssignmentCatalog(assignment_admin.state) if assignment_admin else None
@@ -273,37 +275,13 @@ class InstructorWeb:
                               course=course, status=409 if isinstance(exc, PlatformConflict) else 400, cookie=cookie)
 
     def _page(self, title, body, *, course=None, cookie=None, status=200, current_path=''):
-        scoped_instructor = self.principal and self.principal.role == 'instructor'
-        links = [('/instructor', '담당 수업' if scoped_instructor else '전체 수업')]
         context = "교수자 관리 · 공유 운영자 계정"
         if course:
-            base = self._base(course)
-            links += [(base, '수업 개요'), (base + '/assignments', '과제 관리'),
-                      (base + '/students', '학생 관리'), (base + '/submissions', '제출·채점 현황'),
-                      (base + '/classroom', '실습 교실'),
-                      (base + '/settings', '수업 설정')]
-            if self.rubrics:
-                links.insert(3, (base + '/rubrics', '루브릭 관리'))
-            if self.exam_papers:
-                links.insert(3, (base + '/exam-papers', '시험지 배포'))
-            if self.student_materials:
-                links.insert(3, (base + '/materials', '학생별 자료 배포'))
-            if self.content_service is not None:
-                links.insert(3, (base + '/content', '콘텐츠'))
-            if self.extension_distribution is not None:
-                links.insert(3, (base + '/extensions', 'IDE 확장 배포'))
             context = f'{course["code"]} · {course.get("name") or "정보 확인 필요"} · {course.get("year") or "학년도 미설정"} / {course.get("semester") or "학기 미설정"} · {course.get("section") or "분반 미설정"}'
         if self.principal:
             identity = f'{self.principal.display_name} ({self.principal.username}) · ' + ('관리자' if self.principal.role == 'admin' else '담당 교수자')
             context = context + ' · ' + identity if course else identity
-        selected = current_path
-        if course and any(current_path.startswith(self._base(course) + '/' + segment) for segment in ('drafts', 'checks')):
-            selected = self._base(course) + '/assignments'
-        active_link = None
-        for url, _ in links:
-            if selected == url or (url not in {'/instructor', self._base(course) if course else ''} and selected.startswith(url + '/')):
-                active_link = url
-        nav = ''.join(f'<a href="{url}" {"aria-current=page" if url == active_link else ""}>{label}</a>' for url, label in links)
+        nav = navigation(self, course, current_path)
         options = '<option value="">수업 선택</option>' + ''.join(
             f'<option value="{_e(c["course_key"])}" {"selected" if course and c["course_key"] == course["course_key"] else ""}>'
             f'{_e(c["code"])} · {_e(c.get("name") or "이름 미설정")} · {_e(c.get("year") or "학년도 미설정")} / {_e(c.get("semester") or "학기 미설정")} · {_e(c.get("section") or "분반 미설정")}</option>'
@@ -318,8 +296,8 @@ class InstructorWeb:
         account_hint = ('개인 교수자 계정으로 인증되었습니다. 브라우저가 인증 정보를 기억하므로 공용 학생 PC에서 사용하지 마세요. '
                         if self.principal else '공유 교수자 계정은 개인별 권한을 제공하지 않습니다. 공용 학생 PC에서 사용하지 마세요. ')
         document = ('<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
-                    f'<title>{_e(title)} · Autograde</title><style>{_STYLE}{THEME_CSS}{RESPONSIVE_CSS}</style></head><body class="responsive-instructor"><a class="skip-link" href="#main-content">본문으로 건너뛰기</a><header class="instructor-header"><div><h1>Autograde 교수자</h1><div class="instructor-context">{_e(context)}</div></div>{switch}</header>'
-                    f'<div class="shell"><nav aria-label="교수자 메뉴">{nav}</nav><main id="main-content" tabindex="-1" data-audience="instructor"><h2>{_e(title)}</h2>{body}'
+                    f'<title>{_e(title)} · Autograde</title><style>{_STYLE}{THEME_CSS}{RESPONSIVE_CSS}{PORTAL_STYLE}</style></head><body class="responsive-instructor"><a class="skip-link" href="#main-content">본문으로 건너뛰기</a><header class="instructor-header"><div><h1>Autograde 교수자 포털</h1><div class="instructor-context">{_e(context)}</div></div>{switch}</header>'
+                    f'<div class="shell"><nav class="portal-navigation" aria-label="교수자 메뉴">{nav}</nav><main id="main-content" tabindex="-1" data-audience="instructor"><h2>{_e(title)}</h2>{body}'
                     '<p class="hint account-notice">' + account_hint +
                     'pilot-local 실행은 보안 격리가 아닙니다.</p></main></div>' + SCRIPT_TAG + '</body></html>')
         return PlatformResponse(status, document, headers)
@@ -350,7 +328,7 @@ class InstructorWeb:
         if method == 'GET' and path == '/instructor/switch':
             return self._redirect(self._base(self.courses.get_course(_value(form, 'course_key'))))
         if method == 'GET' and path == '/instructor':
-            return self._admin_page('/instructor/admin', session)
+            return portal_home(self, form)
         if method == 'GET' and (path == '/instructor/admin' or path.startswith('/instructor/admin/subjects/')):
             return self._admin_page(path, session)
         if method == "POST" and path == "/instructor/courses":
@@ -372,6 +350,10 @@ class InstructorWeb:
             elif course:
                 base = self._base(course)
                 route = path[len(base) + 1:]
+                if route == 'delete':
+                    # Refresh deletion counts and require a new typed code;
+                    # never restore the previous destructive confirmation.
+                    return self._course_request('GET', course, route, {}, session, authorization)
                 if route in {'rubrics/preview', 'rubrics/register'} and self.rubrics:
                     from .instructor_rubric import editor
                     self.rubrics._writable(course)
@@ -449,10 +431,12 @@ class InstructorWeb:
                          f'미제출 {sum(c["not_submitted"] for c in offerings)}</p></section>')
             body += '</div>'
             if not self.principal or self.principal.role == 'admin':
-                body += '<section><h3>교과목·첫 분반 등록</h3>'
+                body += '<section id="course-registration"><h3>교과목·첫 분반 등록</h3>'
                 body += self._form('/instructor/courses', session, self._course_fields({}) + _button('교과목·분반 등록')) + '</section>'
             elif not courses:
                 body += '<p>할당된 교과목·분반이 없습니다. 관리자에게 담당 수업 권한을 요청하세요.</p>'
+            from .instructor_course_deletion import history as deletion_history
+            body += deletion_history(self)
             title = '담당 수업 · 교과목별 현황' if self.principal and self.principal.role == 'instructor' else '관리자 · 교과목별 현황'
             return title, body
         offerings = groups[code]
@@ -500,6 +484,32 @@ class InstructorWeb:
     def _course_request(self, method, course, route, form, session, authorization):
         base = self._base(course)
         key = course['course_key']
+        if route == 'registrations' or route.startswith('registrations/'):
+            from .student_registration_web import instructor_request
+            def authorize_member_recovery():
+                current = self._scoped(authorization)
+                if current.principal and current.principal.role != 'admin':
+                    raise PlatformAccessDenied('공통 회원 비밀번호 복구는 관리자에게 요청하세요.')
+                return current.courses.get_course(key)
+            return instructor_request(self, method, course, route, form, session,
+                                      reauthorize=lambda: self._scoped(authorization).courses.get_course(key),
+                                      reauthorize_reset=authorize_member_recovery)
+        if route == 'delete':
+            from .instructor_course_deletion import request
+            def authorize_deletion():
+                current = self._scoped(authorization)
+                if current.principal and current.principal.role != 'admin':
+                    raise PlatformAccessDenied()
+                return current.courses.get_course(key)
+            return request(self, method, course, form, session, reauthorize=authorize_deletion)
+        if route == 'environments':
+            if method != 'GET':
+                raise PlatformAPIError(405, 'method_not_allowed', '실습 환경 화면은 조회만 지원합니다.')
+            response = environment_page(self, course)
+            # A worker status read may block briefly. Recheck revocations before
+            # returning any student session details obtained during that read.
+            self._scoped(authorization).courses.get_course(key)
+            return response
         if route == 'classroom' and method == 'GET':
             from .instructor_classroom import page
             return page(self, course, session)
@@ -567,6 +577,8 @@ class InstructorWeb:
         if route.startswith('students'):
             return self._student_request(method, course, route, form, session)
         if route.startswith(('assignments', 'assignment-templates', 'grading-templates', 'drafts', 'checks')):
+            if self.assignments is None:
+                raise PlatformNotFound()
             return self._assignment_request(method, course, route, form, session)
         if method == 'POST' and route == 'update':
             fields = {name: _value(form, name) for name in ('code', 'name', 'semester', 'section', 'description') if name in form}
@@ -594,12 +606,19 @@ class InstructorWeb:
         body += '<section><h3>운영 상태</h3><p>보관하면 해당 수업의 인증·수령 코드를 폐기하고 학생 접근을 막습니다. 점수와 제출은 보존합니다. 처리 중 작업이 있으면 보관할 수 없습니다.</p>'
         body += self._form(base + '/status', session, _select('status', '변경할 상태', [('preparation', '준비'), ('active', '운영'), ('archived', '보관')], course['status']) +
                            _checkbox('confirm', '인증 폐기와 학생 접근에 미치는 영향을 확인했습니다.') + _button('수업 상태 변경')) + '</section>'
+        if not self.principal or self.principal.role == 'admin':
+            body += ('<section><h3>교과목 영구 삭제</h3><p>수강·과제·제출·자료와 이 수업의 기록을 함께 삭제합니다. '
+                     '보관을 거치지 않고 삭제 범위를 먼저 확인할 수 있습니다.</p>'
+                     f'<a class="button" href="{base}/delete">삭제 범위 확인</a></section>')
         return '수업 설정', body
 
     def _course_overview(self, course):
         base = self._base(course)
         body = f'<p>수업 상태: <strong>{_e(_STATUS.get(course["status"], course["status"]))}</strong></p>'
-        body += f'<div class="actions"><a class="button" href="{base}/assignments">과제 관리</a><a class="button secondary" href="{base}/submissions">학생 제출·결과 확인</a></div>'
+        body += course_summary(self, course)
+        body += '<div class="portal-section-heading"><h3>수업 업무</h3>'
+        body += f'<a href="/courses/{_e(course["course_key"])}">학생용 수업 화면</a></div>'
+        body += course_workflows(self, course)
         if self.catalog:
             catalog = self.catalog.list(course['course_key'], visibility='open')
             body += f'<section><h3>진행 중인 과제 {catalog["count"]}개</h3><p class="meta">{_e(_timestamp(catalog["generated_at"]))} KST 기준 · 수락·제출 학생 수는 해당 공개본 전체 이력 기준입니다.</p>'
@@ -610,7 +629,6 @@ class InstructorWeb:
             if catalog['count'] > 5:
                 body += f'<a href="{base}/assignments?visibility=open">진행 과제 전체 보기</a>'
             body += '</section>'
-        body += f'<section><h3>수업 운영</h3><p><a href="{base}/students">학생 등록·수강 관리</a></p><p><a href="{base}/settings">수업 정보·운영 상태·학생 접속 링크</a></p></section>'
         return '수업 개요', body
 
     def _password_result(self, result, base, title='학생 등록 완료'):

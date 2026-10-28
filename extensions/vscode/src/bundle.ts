@@ -53,6 +53,8 @@ export interface SubmissionBundle {
   readonly sha256: string;
   readonly fileCount: number;
   readonly sourceBytes: number;
+  /** Paths from the same immutable capture, never a second directory listing. */
+  readonly filePaths?: readonly string[];
 }
 
 export interface ExtractedStarter {
@@ -147,6 +149,7 @@ export async function createSubmissionBundle(workspaceRoot: string): Promise<Sub
     sha256: sha256Hex(archive),
     fileCount: files.length,
     sourceBytes,
+    filePaths: files.map(file => file.relativePath),
   };
 }
 

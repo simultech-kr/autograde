@@ -139,7 +139,7 @@ def test_invalid_filters_fail_safely(setup, values):
 
 def test_home_alias_and_course_switch_reset_context(setup):
     browser, *_ = setup
-    assert '<h2>관리자 · 교과목별 현황</h2>' in browser.get('/instructor').body
+    assert '<h2>교수자 포털</h2>' in browser.get('/instructor').body
     assert '<h2>관리자 · 교과목별 현황</h2>' in browser.get('/instructor/admin').body
     response = browser.web.request('GET','/instructor/switch',{'course_key':'come3105'},browser.cookies,authorization=AUTH)
     assert response.status == 303 and response.headers['Location'] == '/courses/come3105/instructor'

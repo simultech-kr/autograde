@@ -182,7 +182,7 @@ def test_hidden_assignment_shows_history_without_a_misleading_missing_student_co
     assert history['attrs']['data-submitted'] == '1'
     assert history['attrs']['data-unsubmitted'] == ''
     assert '제출 이력 학생 1명' in history['text']
-    assert '숨김 과제는 제출 이력만 표시하며 미제출은 집계하지 않습니다.' in history['text']
+    assert '숨김 과제 · 제출 이력만 표시하며 미제출은 집계하지 않습니다.' in history['text']
     assert '현재 수강 학생' not in history['text'] and '미제출 0명' not in history['text']
     hidden_rows = [row for row in service.instructor_dashboard(AUTH)['rows']
                    if row['assignment_id'] == 'participation_a']

@@ -193,6 +193,7 @@ def test_other_course_instructor_cannot_create_corrected_release(material_http, 
     restricted = MaterialBrowser(env.server)
     restricted.authorization = "Basic " + base64.b64encode(("teacher:" + password).encode()).decode()
     assert restricted.get("/instructor")[0] == 200
+    assert restricted.get(BASE.replace(COURSE, "come3105"))[0] == 200
     response = restricted.post(original + "/revise", revision=str(before["revision"]),
                                change_note=CHANGE_NOTE, confirm="yes")
     assert response[0] == 404, response[2]

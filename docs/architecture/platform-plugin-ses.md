@@ -10,6 +10,10 @@ System Entity Structure(SES, 체계요소구조)로 가능한 조합을 정의�
 사업화 확장: [제공 루브릭 평가](rubric-evaluation-plugin.md)와 [SES 소프트웨어 제품군(SPL)](software-product-line.md)을 추가했다.
 수업별 설정을 넘어 공통 자산·제품 template·고객 사용권·지원 조합·배포 lock으로 제품을 도출한다.
 
+2026-10-28 [학생별 실행공간과 개발도구 모듈](learning-sandbox-modules.md)을 추가 설계한다.
+실행 제공자와 언어별 compiler/runtime/debugger를 조합하되 세션 소유권·저장·정리는 필수 계약으로 둔다.
+새 ID는 설계 후보이며 현행 관리 SES v1 registry·CSV에 추가하거나 실행 가능 상태로 표시하지 않는다.
+
 ## 1. 결정 사항
 
 1. **모든 업무 기능은 플러그인**, 인증·인가·원장 보호 등의 필수 기능도 고정 계약을 가진 필수 플러그인으로 표현한다.

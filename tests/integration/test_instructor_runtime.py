@@ -109,12 +109,12 @@ def test_new_course_after_pool_started_real_http_acceptance_and_archive(runtime)
     key = runtime.courses.create_course(code='new101', name='New course', year=2026, semester='2')['course_key']
     assert key not in runtime.created
     assert request(runtime.web, '/courses/' + key)[0] == 403
-    assert key.encode() not in request(runtime.web, '/')[2]
+    assert key.encode() not in request(runtime.web, '/student')[2]
     runtime.students.add_student(key, student_key='001', password='123456')
     runtime.courses.set_status(key, 'active')
     add_assignment(runtime, key)
     assert runtime.created.count(key) == 1
-    assert key.encode() in request(runtime.web, '/')[2]
+    assert key.encode() in request(runtime.web, '/student')[2]
     _, tokens = connect(runtime.api, claim_assignment(runtime, key, '001', '123456'))
     status, _, body = request(runtime.api, '/v1/accepted-assignments', token=tokens['access_token'])
     assert status == 200 and key.encode() in body
@@ -320,11 +320,13 @@ def test_feature_enabled_real_cli_process_launch_and_readiness(tmp_path, rubric_
             auth = 'Basic ' + base64.b64encode(b'owner:synthetic-owner-password-2026').decode()
         status, headers, body = request(web, '/instructor', authorization=auth)
         assert status == 200, body
-        assert '<h2>관리자 · 교과목별 현황</h2>'.encode() in body
+        assert '<h2>교수자 포털</h2>'.encode() in body
         assert request(web, '/courses/come2201/instructor/rubrics', authorization=auth)[0] == (200 if rubric_enabled else 404)
         assert (tmp_path / 'data' / 'rubric-catalog.sqlite3').exists() is rubric_enabled
         assert request(api, '/courses/come2201/instructor/rubrics', authorization=auth)[0] == 404
         assert request(web, '/courses/come2201/instructor/submissions', authorization=auth)[0] == 200
+        status, headers, body = request(web, '/instructor/admin', authorization=auth)
+        assert status == 200 and b'action="/instructor/courses"' in body
         instructor_cookie, instructor_csrf = cookie(headers), csrf(body)
         origin = f'http://127.0.0.1:{web_port}'
         status, headers, body = request(web, '/instructor/courses', method='POST', authorization=auth,

@@ -6,7 +6,7 @@ import { normalizeServiceAddressInput } from "./helpers";
 const DEFAULT_SERVICE_ADDRESS = "http://127.0.0.1:20000";
 const CHANGE_ADDRESS_ACTION = "로그아웃하고 주소 변경";
 
-/** Prompts for, validates, and machine-locally stores one service origin. */
+/** Validates one service origin; interactive callers may supply an inline form value. */
 export class ServiceAddressController {
   public constructor(
     private readonly client: AutogradeClient,
@@ -14,11 +14,11 @@ export class ServiceAddressController {
     private readonly onAddressChanged: () => Promise<void>,
   ) {}
 
-  public async configure(): Promise<void> {
+  public async configure(entered?: string): Promise<boolean> {
     const configuration = vscode.workspace.getConfiguration("autograde");
     const currentValue = configuration.get<string>("serviceBaseUrl", DEFAULT_SERVICE_ADDRESS);
     const allowInsecureHttpPilot = configuration.get<boolean>("allowInsecureHttpPilot", false);
-    const entered = await vscode.window.showInputBox({
+    if (entered === undefined) entered = await vscode.window.showInputBox({
       title: "Autograde 서버 주소 설정",
       prompt:
         "HTTPS 주소 또는 IP와 port를 입력하세요. scheme을 생략하면 HTTPS를 사용하며 IPv6 port는 [주소]:port 형식입니다.",
@@ -28,7 +28,7 @@ export class ServiceAddressController {
       validateInput: (value) => serviceAddressValidationMessage(value, allowInsecureHttpPilot),
     });
     if (entered === undefined) {
-      return;
+      return false;
     }
 
     const normalized = normalizeServiceAddressInput(entered, allowInsecureHttpPilot);
@@ -40,7 +40,7 @@ export class ServiceAddressController {
     }
     if (normalized === currentNormalized) {
       void vscode.window.showInformationMessage(`Autograde 서버 주소가 이미 ${normalized}(으)로 설정되어 있습니다.`);
-      return;
+      return true;
     }
 
     if (await this.client.tokens.hasSession()) {
@@ -55,10 +55,10 @@ export class ServiceAddressController {
         CHANGE_ADDRESS_ACTION,
       );
       if (action !== CHANGE_ADDRESS_ACTION) {
-        return;
+        return false;
       }
       if (!(await this.endCurrentSession())) {
-        return;
+        return false;
       }
     }
 
@@ -74,6 +74,7 @@ export class ServiceAddressController {
     void vscode.window.showInformationMessage(
       `Autograde 서버 주소를 ${normalized}(으)로 설정했습니다.`,
     );
+    return true;
   }
 }
 

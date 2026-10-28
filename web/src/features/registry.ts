@@ -1,5 +1,4 @@
 export const modules = Object.freeze([
-  { id: "courses", label: "수업", capability: "results.read", href: "/app" },
   { id: "results", label: "제출·채점 현황", capability: "results.read", href: "/app" },
   { id: "classroom", label: "실습 교실", capability: "classroom.read", href: "/app/classroom" },
 ]);

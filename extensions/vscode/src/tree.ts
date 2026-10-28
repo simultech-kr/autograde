@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 
 import { isAssignmentDownloadable, isBundleAssignment } from "./helpers";
 import type { Assignment } from "./types";
+import { publicSubmissionScore, submissionLabel, submissionTime } from "./learningJourney";
 import { AssignmentDocumentState } from "./assignmentDocument";
 
 export class AssignmentTreeItem extends vscode.TreeItem {
@@ -100,8 +101,12 @@ export class AssignmentsTreeProvider implements vscode.TreeDataProvider<Assignme
     }
     if (assignment.latestSubmission) {
       const submission = assignment.latestSubmission;
-      const score = formatScore(submission.score, submission.maxScore);
-      details.push(new DetailTreeItem("최근 제출", score ? `${submission.state} · ${score}` : submission.state, "history"));
+      const score = publicSubmissionScore(submission);
+      details.push(new DetailTreeItem("이번 공식 제출", score ? `${submissionLabel(submission.state)} · ${score}` : submissionLabel(submission.state), "history"));
+      details.push(new DetailTreeItem("접수번호", submission.id, "symbol-key"));
+      if (submission.receivedAt) details.push(new DetailTreeItem("접수 시각", submissionTime(submission.receivedAt), "clock"));
+      const best = submission.previousBest;
+      if (best) details.push(new DetailTreeItem("이전 제출 중 최고점", publicSubmissionScore({state: "published", score: best.score, maxScore: best.maxScore}) ?? "공개 기록 없음", "history"));
       const resultItem = new DetailTreeItem("채점 결과 보기", undefined, "output");
       resultItem.command = {
         command: "autograde.viewLatestResult",
@@ -118,9 +123,9 @@ export class AssignmentsTreeProvider implements vscode.TreeDataProvider<Assignme
 function describeAssignment(assignment: Assignment): string | undefined {
   const submission = assignment.latestSubmission;
   if (submission) {
-    return formatScore(submission.score, submission.maxScore) ?? submission.state;
+    return publicSubmissionScore(submission) ?? submissionLabel(submission.state);
   }
-  return assignment.status;
+  return "공식 제출 전";
 }
 
 function buildTooltip(assignment: Assignment): vscode.MarkdownString {
@@ -144,15 +149,12 @@ function formatDate(value: string): string {
   return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString();
 }
 
-function formatScore(score?: number, maxScore?: number): string | undefined {
-  return score === undefined ? undefined : maxScore === undefined ? String(score) : `${score} / ${maxScore}`;
-}
-
 function iconForStatus(status?: string): string {
   switch (status?.toLowerCase()) {
     case "published":
-    case "graded":
       return "pass-filled";
+    case "graded":
+      return "clock";
     case "running":
     case "queued":
     case "accepted":

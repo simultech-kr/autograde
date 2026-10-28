@@ -331,3 +331,20 @@ class ScopedCourses:
     def set_status(self, key, status):
         self.get_course(key)
         return self.service.set_status(key, status)
+
+    def deletion_preview(self, key):
+        self.get_course(key)
+        if self.principal.role != 'admin':
+            raise PlatformAccessDenied()
+        return self.service.deletion_preview(key)
+
+    def delete_course(self, key, **fields):
+        self.get_course(key)
+        if self.principal.role != 'admin':
+            raise PlatformAccessDenied()
+        return self.service.delete_course(key, **fields)
+
+    def deletion_history(self):
+        if self.principal.role != 'admin':
+            raise PlatformAccessDenied()
+        return self.service.deletion_history()

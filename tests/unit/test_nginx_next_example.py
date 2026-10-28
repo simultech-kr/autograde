@@ -25,7 +25,14 @@ def test_next_routes_do_not_intercept_legacy_or_student_api():
     assert "proxy_cache off;" in api
     assert "proxy_read_timeout 45s;" in api
     assert 'error_log /dev/null crit;' in api
-    assert text.count('error_log /dev/null crit;') == 4
+    assert text.count('error_log /dev/null crit;') == 5
+    student = text.split('location ^~ /student/api/ {')[1].split('}')[0]
+    assert 'proxy_pass http://127.0.0.1:18081;' in student
+    assert 'client_max_body_size 64k;' in student
+    assert 'proxy_intercept_errors off;' in student
+    assert 'proxy_cache off;' in student
+    assert 'proxy_set_header Cookie "";' not in student
+    assert 'proxy_set_header Authorization "";' not in student
 
 
 def test_fallback_does_not_depend_on_node_and_is_not_a_post_replay():
@@ -33,6 +40,7 @@ def test_fallback_does_not_depend_on_node_and_is_not_a_post_replay():
     assert "error_page 502 503 504 =503 @autograde_next_unavailable;" in text
     fallback = text.split("location @autograde_next_unavailable {")[1].split("}")[0]
     assert "return 503" in fallback and 'href="/instructor"' in fallback
+    assert 'href="/student"' in fallback
     assert "proxy_pass" not in fallback
     assert 'Cache-Control "no-store"' in fallback
 

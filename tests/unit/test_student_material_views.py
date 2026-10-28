@@ -88,14 +88,20 @@ def ui():
 @pytest.fixture
 def portal():
     service = MaterialService()
-    session = SimpleNamespace(credential=SimpleNamespace(student_id=7, student_key='0001'), csrf='csrf-token')
+    session = SimpleNamespace(credential=SimpleNamespace(student_id=7, student_key='0001'),
+                              csrf='csrf-token', member_session=False)
     obj = SimpleNamespace(student_materials=service, web_url=WEB, services={'come2201': object()},
                           courses=None, lock=nullcontext(), exam_papers=object(), sessions={'session': session},
+                          members=None, secret=b'synthetic-cookie-secret',
                           _page=CoursePortal._page, _course_label=lambda key: 'COME2201',
-                          _session=lambda course, cookies: ('session', session),
-                          _cookie=lambda course, raw: 'cookie=' + raw)
+                          _session=lambda course, cookies: ('session', session))
+    obj._cookie = lambda course, raw, **kwargs: CoursePortal._cookie(obj, course, raw, **kwargs)
+    obj._login_headers = lambda course, raw: CoursePortal._login_headers(obj, course, raw)
+    obj._revoke_browser_sessions = lambda cookies: CoursePortal._revoke_browser_sessions(obj, cookies)
+    obj._logout_session = lambda *args, **kwargs: CoursePortal._logout_session(obj, *args, **kwargs)
     obj._entry = lambda course, message='', status=200, **kwargs: PlatformResponse(status, {'entry': kwargs, 'message': message}, {})
     obj._login_session = lambda course, form, cookies, **kwargs: ('session-token', session)
+    obj._student_nav = lambda course, current: CoursePortal._student_nav(obj, course, current)
     return obj
 
 
@@ -216,6 +222,8 @@ def test_student_listing_uses_authenticated_student_and_escape(portal):
     assert f'{BASE}/{ID}/download' in response.body
     assert 'name="student_id"' not in response.body and 'name="student_key"' not in response.body
     assert '/exam-papers' in response.body and '공용 PC' in response.body
+    assert f'href="{BASE}" aria-current="page"' in response.body
+    assert 'href="/courses/come2201/portal"' in response.body
 
 
 def test_student_download_receives_own_file_and_session_identity(portal):
@@ -245,7 +253,10 @@ def test_student_get_download_denied_and_post_login_redirects(portal):
     assert response.status == 405
     response = student.request(portal, 'POST', BASE + '/login', {}, {}, WEB)
     assert response.status == 303 and response.headers['Location'] == BASE
-    assert response.headers['Set-Cookie'] == 'cookie=session-token'
+    assert response.headers['Set-Cookie'] == (
+        'autograde_portal_come2201=; Path=/courses/come2201; Max-Age=0; HttpOnly; SameSite=Lax; Secure',
+        'autograde_portal_come2201=session-token; Path=/; Max-Age=600; HttpOnly; SameSite=Lax; Secure',
+    )
 
 
 def test_expired_session_returns_material_login_and_logout_invalidates(portal):

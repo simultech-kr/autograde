@@ -54,6 +54,21 @@ location ^~ /instructor/api/v1/ {
     access_log off;
     error_log /dev/null crit;
 }
+location ^~ /student/api/ {
+    # The student shell uses Python's HttpOnly cookies and same-origin CSRF.
+    # Never rewrite Origin or forward these credentials to the Node shell.
+    client_max_body_size 64k;
+    limit_req zone=portal_web burst=100 nodelay;
+    proxy_pass http://127.0.0.1:18081;
+    proxy_set_header Host $http_host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_intercept_errors off;
+    proxy_buffering off;
+    proxy_cache off;
+    proxy_read_timeout 30s;
+    access_log off;
+    error_log /dev/null crit;
+}
 location @autograde_next_unavailable {
     error_log /dev/null crit;
     default_type text/html;
@@ -62,7 +77,7 @@ location @autograde_next_unavailable {
     add_header Content-Security-Policy "default-src 'none'; frame-ancestors 'none'; base-uri 'none'" always;
     add_header Referrer-Policy "same-origin" always;
     add_header X-Content-Type-Options "nosniff" always;
-    return 503 '<!doctype html><html lang="ko"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Autograde 화면 연결 지연</title><h1>새 화면에 연결할 수 없습니다</h1><p>학생 제출 API는 별도로 동작합니다. 기존 교수자 화면을 이용해 주세요.</p><a href="/instructor">기존 교수자 화면 열기</a></html>';
+    return 503 '<!doctype html><html lang="ko"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Autograde 화면 연결 지연</title><h1>새 화면에 연결할 수 없습니다</h1><p>학생 제출 API는 별도로 동작합니다. 기존 화면을 이용해 주세요.</p><a href="/student">학생 포털</a> · <a href="/instructor">교수자 포털</a></html>';
 }
 # Phase 3 only: before enabling /instructor/api/v1/.../uploads or CSV aliases,
 # use narrower locations with BOTH scoped body limits AND

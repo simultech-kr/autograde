@@ -17,6 +17,8 @@ import { MAX_STUDENT_MATERIAL_BYTES, MAX_STUDENT_MATERIALS, parseStudentMaterial
   type StudentMaterial, type StudentMaterialsCatalog } from "./studentMaterials";
 import { parseLearningCheckpoint, parseLearningCheckpoints, type LearningCheckpoint, type LearningCheckpointReceipt, type LearningCheckpointScope } from "./learningCheckpoint";
 import { sha256Hex } from "./bundle";
+import { parseRuntimeInfo, parseRuntimeSession, parseRuntimeResult, parseRuntimeClosed, runtimeIdentifier, validateRuntimeRun,
+  type LearningRuntimeInfo, type LearningRuntimeSession, type LearningRuntimeResult, type LearningRuntimeClosed, type RuntimeRunRequest } from "./remoteLearning";
 import type {
   Assignment,
   AssignmentClaim,
@@ -853,6 +855,41 @@ export class AutogradeClient {
     const response = await this.authorizedRequest<unknown>(`/v1/assignments/${encodeURIComponent(scope.assignmentId)}/learning-checkpoints`, {method: "GET"}, {signal});
     this.checkLearningScope(scope, signal);
     return parseLearningCheckpoints(response, scope.assignmentId);
+  }
+
+  public async getLearningRuntime(scope: LearningCheckpointScope, signal: AbortSignal): Promise<LearningRuntimeInfo> {
+    this.checkLearningScope(scope, signal);
+    const value = await this.authorizedRequest<unknown>(`/v1/assignments/${encodeURIComponent(runtimeIdentifier(scope.assignmentId))}/learning-runtime`,
+      {method: "GET"}, {signal, maxResponseBytes: 32 * 1024});
+    this.checkLearningScope(scope, signal);
+    return parseRuntimeInfo(value);
+  }
+  public async createLearningRuntime(scope: LearningCheckpointScope, checkpointId: string, signal: AbortSignal): Promise<LearningRuntimeSession> {
+    this.checkLearningScope(scope, signal);
+    const value = await this.authorizedRequest<{session: unknown}>(`/v1/assignments/${encodeURIComponent(runtimeIdentifier(scope.assignmentId))}/learning-runtime/sessions`,
+      {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({checkpoint_id: runtimeIdentifier(checkpointId)})},
+      {signal, timeoutMs: 60_000, maxResponseBytes: 32 * 1024});
+    this.checkLearningScope(scope, signal);
+    const session = parseRuntimeSession(value?.session, checkpointId);
+    if (session.status !== "ready") throw new Error("원격 실행공간 준비 완료를 확인하지 못했습니다.");
+    return session;
+  }
+  public async runLearningRuntime(scope: LearningCheckpointScope, sessionId: string, checkpointId: string, request: RuntimeRunRequest, signal: AbortSignal): Promise<LearningRuntimeResult> {
+    this.checkLearningScope(scope, signal);
+    const input = validateRuntimeRun(request);
+    const value = await this.authorizedRequest<unknown>(`/v1/assignments/${encodeURIComponent(runtimeIdentifier(scope.assignmentId))}/learning-runtime/sessions/${encodeURIComponent(runtimeIdentifier(sessionId))}/run`,
+      {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({checkpoint_id: runtimeIdentifier(checkpointId), ...input})},
+      {signal, timeoutMs: 90_000, maxResponseBytes: 2 * 1024 * 1024});
+    this.checkLearningScope(scope, signal);
+    return parseRuntimeResult(value, sessionId, checkpointId);
+  }
+  public async closeLearningRuntime(scope: LearningCheckpointScope, sessionId: string, checkpointId: string, signal: AbortSignal): Promise<LearningRuntimeClosed> {
+    this.checkLearningScope(scope, signal);
+    const value = await this.authorizedRequest<unknown>(`/v1/assignments/${encodeURIComponent(runtimeIdentifier(scope.assignmentId))}/learning-runtime/sessions/${encodeURIComponent(runtimeIdentifier(sessionId))}/close`,
+      {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({checkpoint_id: runtimeIdentifier(checkpointId)})},
+      {signal, timeoutMs: 60_000, maxResponseBytes: 32 * 1024});
+    this.checkLearningScope(scope, signal);
+    return parseRuntimeClosed(value, checkpointId);
   }
 
   public async getLearningCheckpointBundle(scope: LearningCheckpointScope, checkpoint: LearningCheckpoint, signal: AbortSignal): Promise<Uint8Array> {

@@ -1589,7 +1589,7 @@ def _verifier(value: str, field: str) -> str:
 def _password_hash(value: str) -> str:
     normalized = _required_text(value, "password_hash")
     if len(normalized) > 512 or not normalized.startswith(
-        ("scrypt$v1$", "scrypt$v2$")
+        ("scrypt$v1$", "scrypt$v2$", "scrypt$v3$")
     ):
         raise ValueError("password_hash must use the supported scrypt format")
     return normalized

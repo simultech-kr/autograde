@@ -56,20 +56,22 @@ export class AssignmentClaimController {
     private readonly tokenPoller: DeviceTokenPoller = pollForDeviceToken,
   ) {}
 
-  public async redeem(): Promise<void> {
+  public async redeem(entered?: string): Promise<boolean> {
     if (this.redeemInProgress) {
       void vscode.window.showInformationMessage("과제 수령을 이미 진행하고 있습니다. 현재 수령 코드 입력창 또는 진행 알림을 먼저 확인하세요.");
-      return;
+      return false;
     }
     this.redeemInProgress = true;
     try {
-      await this.redeemOnce();
+      const operation = this.redeemOnce(entered);
+      entered = undefined;
+      return await operation;
     } finally {
       this.redeemInProgress = false;
     }
   }
 
-  private async redeemOnce(): Promise<void> {
+  private async redeemOnce(entered?: string): Promise<boolean> {
     const serviceBaseUrl = this.client.transport.getBaseUrl();
     let sessionGeneration = this.client.tokens.getSessionGeneration?.();
     const ensureCurrentSession = (): void => {
@@ -84,20 +86,22 @@ export class AssignmentClaimController {
       );
     }
 
-    let entered: string | undefined = await vscode.window.showInputBox({
+    if (entered === undefined) entered = await vscode.window.showInputBox({
       title: "수령 코드로 과제 받기",
       prompt:
         `접속할 서버: ${new URL(serviceBaseUrl).origin}\n` +
-        "학생 웹(20010번)에서 받은 과제 수령 코드를 입력하세요. VS Code 서버는 20000번입니다.",
+        "학생 포털에서 받은 과제 수령 코드를 입력하세요. 웹 비밀번호는 입력하지 않습니다.",
       placeHolder: "AK1-XXXX-XXXX-XXXX",
       password: true,
       ignoreFocusOut: true,
       validateInput: claimCodeValidationMessage,
     });
     if (entered === undefined) {
-      return;
+      return false;
     }
 
+    const validation = claimCodeValidationMessage(entered);
+    if (validation) { entered = undefined; throw new Error(validation); }
     let ephemeralClaimCode: string | undefined = normalizeClaimCode(entered);
     if (!ephemeralClaimCode) {
       throw new Error(claimCodeValidationMessage(entered) ?? "올바른 수령 코드를 입력하세요.");
@@ -222,6 +226,7 @@ export class AssignmentClaimController {
     } catch (error) {
       throw claimStageError("assignment", error);
     }
+    return true;
   }
 }
 

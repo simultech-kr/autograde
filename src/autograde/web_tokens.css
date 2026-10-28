@@ -1,5 +1,6 @@
 /* Shared by the Python pages and the Next.js application.
    Keep semantic colour roles here; component layout belongs to each renderer. */
+[data-theme="light"],
 :root {
   color-scheme: light;
   --page: #ffffff;
@@ -63,4 +64,30 @@
     --focus: #f2c66d;
     --shadow-sm: none;
   }
+}
+
+/* Explicit student preference uses the same palette as the system dark theme.
+   test_web_design_tokens checks these values against the block above. */
+[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #182333;
+  --surface: #182333;
+  --surface-raised: #1b293a;
+  --text: #ecf2fa;
+  --muted: #b5c3d5;
+  --border: #33465e;
+  --control-border: #8396ae;
+  --link: #acceff;
+  --accent: #abcaff;
+  --on-accent: #102339;
+  --soft: #203149;
+  --secondary: #26364a;
+  --error: #ffadb5;
+  --error-bg: #3e2029;
+  --warning: #f5c68a;
+  --warning-bg: #392c1c;
+  --success: #a1e2bd;
+  --success-bg: #17382c;
+  --focus: #f2c66d;
+  --shadow-sm: none;
 }

@@ -8,5 +8,6 @@
   "extensions.autoCheckUpdates": false,
   "extensions.autoUpdate": false,
   "extensions.autoRestart": false,
-  "update.mode": "none"
+  "update.mode": "none",
+  "autograde.studentPortalBaseUrl": "https://ai.cbchoi.info:20010"
 }

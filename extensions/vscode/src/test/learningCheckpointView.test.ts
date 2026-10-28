@@ -120,3 +120,20 @@ test("bounded exit save fails honestly when offline; busy assignment operations 
     assert.equal(f.view.autosaver.getStatus().savedAt, undefined); assert.equal(f.state.uploads, 1);
   } finally {await f.close();}
 });
+
+test("execution receives the exact acknowledged capture and refuses stale scopes or failed document saves", async()=>{
+  const f=await fixture();
+  try {
+    const own={uri:uri(path.join(f.current,"main.cpp")),isDirty:true,async save(){await writeFile(this.uri.fsPath,"new exact code");this.isDirty=false;return true;}};
+    documents=[own];
+    const saved=await f.view.saveForExecution(f.state.scope!);
+    assert.deepEqual(saved.filePaths,["main.cpp"]);
+    assert.equal(saved.checkpoint.archive_sha256,(await createSubmissionBundle(f.current)).sha256);
+    assert.equal(f.state.uploads,1);
+    own.isDirty=true;own.save=async()=>false;
+    await assert.rejects(f.view.saveForExecution(f.state.scope!),/현재 코드의 서버 저장/);
+    assert.equal(f.state.uploads,1);
+    const old=f.state.scope!;f.state.scope={...old,generation:old.generation+1};
+    await assert.rejects(f.view.saveForExecution(old),/과제가 변경/);
+  } finally {await f.close();}
+});

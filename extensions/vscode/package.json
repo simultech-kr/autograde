@@ -2,7 +2,7 @@
   "name": "autograde-vscode",
   "displayName": "Autograde",
   "description": "C/C++ 실습 과제 수령·다운로드·제출·채점 피드백을 VS Code에서. Linux, macOS, Windows WSL2 수업용 Autograde 확장.",
-  "version": "0.5.16",
+  "version": "0.5.20",
   "private": true,
   "publisher": "autograde",
   "repository": {
@@ -58,7 +58,9 @@
     "onCommand:autograde.manageCourseExtensions",
     "onCommand:autograde.saveLearningCheckpoint",
     "onCommand:autograde.restoreLearningCheckpoint",
-    "onCommand:autograde.openServerDownloads"
+    "onCommand:autograde.openServerDownloads",
+    "onCommand:autograde.remoteLearning",
+    "onCommand:autograde.openStudentPortal"
   ],
   "contributes": {
     "commands": [
@@ -229,6 +231,19 @@
         "title": "Autograde: Server Assignments and Materials",
         "shortTitle": "서버 과제·자료 다운로드",
         "icon": "$(cloud-download)"
+      },
+      {
+        "command": "autograde.remoteLearning",
+        "title": "Autograde: Remote C/C++ Learning Space",
+        "shortTitle": "원격 C/C++/Python 실습 · 실행",
+        "enablement": "autograde.authenticated && isWorkspaceTrusted",
+        "icon": "$(remote)"
+      },
+      {
+        "command": "autograde.openStudentPortal",
+        "title": "Autograde: Open Student Portal",
+        "shortTitle": "학생 포털 · 내 수업",
+        "icon": "$(globe)"
       }
     ],
     "configuration": {
@@ -244,13 +259,19 @@
           "type": "string",
           "default": "http://127.0.0.1:20000",
           "scope": "machine",
-          "markdownDescription": "Autograde 서비스의 기본 URL입니다. 사이드바의 **서버 주소 설정**에서 IP와 선택적인 port도 입력할 수 있습니다. 주소만 이 컴퓨터에 저장되며 로그인 token은 저장되지 않습니다. 기본적으로 로컬 개발 주소가 아니면 HTTPS만 허용됩니다."
+          "markdownDescription": "Autograde 서비스의 기본 URL입니다. 학습 홈의 **서버 설정**에서 IP와 선택적인 port를 직접 입력할 수 있습니다. 주소만 이 컴퓨터에 저장되며 로그인 token은 저장되지 않습니다. 기본적으로 로컬 개발 주소가 아니면 HTTPS만 허용됩니다."
         },
         "autograde.allowInsecureHttpPilot": {
           "type": "boolean",
           "default": false,
           "scope": "machine",
           "markdownDescription": "**위험:** 암호화되지 않은 HTTP 접속을 RFC1918 사설 IPv4 주소에 한해 허용합니다. 신뢰된 같은 LAN에서 짧게 진행하는 파일럿에서만 켜고, 인터넷 공개나 공유 네트워크에서는 사용하지 마세요."
+        },
+        "autograde.studentPortalBaseUrl": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "markdownDescription": "교수자가 안내한 학생 웹의 HTTPS 주소와 포트입니다. 채점 API 주소에서 포트를 추정하지 않습니다. 사용자 설정만 읽고 작업 영역 설정은 무시합니다. 브라우저 로그인은 IDE와 별개이며 토큰·학번은 URL로 보내지 않습니다."
         }
       }
     },
@@ -275,12 +296,12 @@
       {
         "view": "autograde.assignments",
         "when": "!autograde.authenticated",
-        "contents": "학생 웹(20010번)에서 새 수령 코드를 받아 연결하세요. VS Code 서버 주소는 20000번입니다. 일반 VS Code의 기존 과제 파일은 이어서 사용할 수 있습니다. 공용 Autograde IDE는 종료 후 파일이 정리되며 서버 저장본을 복원할 수 있습니다.\n[학습 홈](command:autograde.openLearningHome)\n[서버 과제·자료 다운로드](command:autograde.openServerDownloads)\n[서버 주소 설정](command:autograde.configureServiceAddress)\n[서버 연결 확인](command:autograde.checkServerConnection)\n[수령 코드 입력 및 다운로드](command:autograde.redeemAssignmentClaim)"
+        "contents": "학생 포털에서 새 수령 코드를 받아 연결하세요. 웹 주소와 채점 서버 주소는 교수자의 안내를 따릅니다. 일반 VS Code의 기존 과제 파일은 이어서 사용할 수 있습니다. 공용 Autograde IDE는 종료 후 파일이 정리되며 서버 저장본을 복원할 수 있습니다.\n[학습 홈](command:autograde.openLearningHome)\n[학생 포털 · 내 수업](command:autograde.openStudentPortal)\n[서버 과제·자료 다운로드](command:autograde.openServerDownloads)\n[서버 주소 설정](command:autograde.configureServiceAddress)\n[서버 연결 확인](command:autograde.checkServerConnection)\n[수령 코드 입력 및 다운로드](command:autograde.redeemAssignmentClaim)"
       },
       {
         "view": "autograde.assignments",
         "when": "autograde.authenticated",
-        "contents": "현재 인증에서 표시할 수락 과제가 없습니다. 수락 이력에서 과제를 확인하고 해당 과제의 새 수령 코드로 연결하세요.\n[학습 홈](command:autograde.openLearningHome)\n[서버 과제·자료 다운로드](command:autograde.openServerDownloads)\n[수락 이력 / 과제 전환](command:autograde.acceptedAssignmentHistory)\n[서버 주소 설정](command:autograde.configureServiceAddress)\n[서버 연결 확인](command:autograde.checkServerConnection)\n[수령 코드 입력 및 다운로드](command:autograde.redeemAssignmentClaim)\n[과제 새로고침](command:autograde.refreshAssignments)"
+        "contents": "현재 인증에서 표시할 수락 과제가 없습니다. 수락 이력에서 과제를 확인하고 해당 과제의 새 수령 코드로 연결하세요.\n[학습 홈](command:autograde.openLearningHome)\n[학생 포털 · 내 수업](command:autograde.openStudentPortal)\n[서버 과제·자료 다운로드](command:autograde.openServerDownloads)\n[수락 이력 / 과제 전환](command:autograde.acceptedAssignmentHistory)\n[서버 주소 설정](command:autograde.configureServiceAddress)\n[서버 연결 확인](command:autograde.checkServerConnection)\n[수령 코드 입력 및 다운로드](command:autograde.redeemAssignmentClaim)\n[과제 새로고침](command:autograde.refreshAssignments)"
       }
     ],
     "menus": {
@@ -364,6 +385,11 @@
           "command": "autograde.downloadDiagnostics",
           "when": "view == autograde.assignments && autograde.authenticated",
           "group": "2_settings@2"
+        },
+        {
+          "command": "autograde.openStudentPortal",
+          "when": "view == autograde.assignments",
+          "group": "2_settings@0"
         }
       ],
       "view/item/context": [

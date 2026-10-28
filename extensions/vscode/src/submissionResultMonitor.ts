@@ -60,7 +60,7 @@ export class SubmissionResultMonitor {
     const initial = options.submission;
     const watch: Watch = { ...options, scope,
       result: { state: initial.state === "published" ? "graded" : initial.state,
-        sourceDigest: initial.sourceDigest, headSha: initial.headSha,
+        sourceDigest: initial.sourceDigest, headSha: initial.headSha, receivedAt: initial.receivedAt,
         previousBest: initial.previousBest, rubric: [], diagnostics: [] },
       failures: 0, expiresAt: this.now() + this.maxWatchMs, paused: false };
     this.watch = watch;
@@ -123,10 +123,11 @@ export class SubmissionResultMonitor {
         throw new ApiError("조회한 결과의 접수번호 또는 제출 파일 정보가 다릅니다.", 409, "submission_mismatch");
       }
       let result: GradeResult = { state: submission.state, sourceDigest: submission.sourceDigest,
-        headSha: submission.headSha, previousBest: submission.previousBest, rubric: [], diagnostics: [] };
+        headSha: submission.headSha, receivedAt: submission.receivedAt, previousBest: submission.previousBest, rubric: [], diagnostics: [] };
       if (["graded", "published"].includes(submission.state)) {
         try {
           result = await this.client.getResult(watch.submission.id, controller.signal);
+          result = {...result, receivedAt: submission.receivedAt ?? result.receivedAt};
         } catch (error) {
           if (!(error instanceof ApiError && [404, 409, 425].includes(error.status))) throw error;
           result = { ...result, state: submission.state === "published" ? "result_pending" : "graded" };

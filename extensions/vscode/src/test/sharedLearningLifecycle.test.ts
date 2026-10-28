@@ -15,7 +15,8 @@ const noOp = () => {}, disposable = () => ({dispose: noOp});
 const commands = new Map<string, (...args: unknown[]) => unknown>();
 const ui = {choice: undefined as string | undefined, quits: 0, exports: 0, signins: 0, claims: 0,
   revoked: 0, warnings: [] as string[], errors: [] as string[], workspace: "", exportRoot: "",
-  failRevoke: false, assignments: [] as Assignment[], inspected: ""};
+  failRevoke: false, assignments: [] as Assignment[], inspected: "", serverOrigin: "https://test.invalid", homeForms: [] as unknown[]};
+let homeInputs: {claim(code: string, expectedServer: string): Promise<void>; configureServer(address: string): Promise<void>};
 class Tokens {
   public loggedIn = false; public generation = 0;
   public hasSession = async () => this.loggedIn;
@@ -62,7 +63,7 @@ const vscode = {
       task({report: noOp}, {isCancellationRequested: false, onCancellationRequested: disposable})},
 };
 const api = {...actualApi,
-  HttpTransport: class {public getBaseUrl = () => "https://test.invalid";},
+  HttpTransport: class {public getBaseUrl = () => ui.serverOrigin;},
   TokenManager: class extends Tokens {constructor() {super(); tokens = this;}}, AutogradeClient: Client,
 };
 const replacements: Record<string, unknown> = {
@@ -74,7 +75,7 @@ const replacements: Record<string, unknown> = {
   }},
   "./assignmentClaim": {AssignmentClaimController: class {
     constructor(private client: Client, _version: string, private redeemed: (id?: string) => Promise<void>) {}
-    async redeem() {ui.claims++; this.client.tokens.loggedIn = true; this.client.tokens.generation++; await this.redeemed(ui.assignments[0]?.id);}
+    async redeem() {ui.claims++; this.client.tokens.loggedIn = true; this.client.tokens.generation++; await this.redeemed(ui.assignments[0]?.id); return true;}
   }},
   "./git": {GitPreflightError: class extends Error {}, cloneRepository: async (_url: string, target: string) => {await mkdir(target);},
     inspectRepository: async (root: string) => {ui.inspected = root; throw new Error("synthetic inspection stop");}},
@@ -83,7 +84,10 @@ const replacements: Record<string, unknown> = {
   "./submissionResultMonitor": {SubmissionResultMonitor: View},
   "./examModeView": {ExamModeView: View}, "./studentMaterialsView": {StudentMaterialsView: View},
   "./contentSyncView": {CONTENT_SYNC_COMMAND: "autograde.syncContent", ContentSyncView: View},
-  "./learningHomeView": {LearningHomeView: View},
+  "./learningHomeView": {LearningHomeView: class extends View {
+    constructor(_state: unknown, callbacks: typeof homeInputs) {super(); homeInputs = callbacks;}
+    override show = async (form?: unknown) => {ui.homeForms.push(form);};
+  }},
   "./classroomActivity": {ClassroomActivityReporter: class extends View {getCommandContext() {return undefined;}}, classroomEnvironment: () => undefined},
   "./classroomCommands": {ClassroomCommands: View, CLASSROOM_COMMAND_LABELS: {}},
   "./learningExportView": {LEARNING_EXPORT_COMMAND: "autograde.exportLearning", LearningExportView: class extends View {
@@ -100,7 +104,7 @@ const extension = require("../extension") as typeof import("../extension");
 loader._load = originalLoad;
 
 async function fixture(used = false) {
-  commands.clear(); Object.assign(ui, {choice: undefined, quits: 0, exports: 0, signins: 0, claims: 0, revoked: 0, warnings: [], errors: [], failRevoke: false, assignments: [], inspected: ""});
+  commands.clear(); Object.assign(ui, {choice: undefined, quits: 0, exports: 0, signins: 0, claims: 0, revoked: 0, warnings: [], errors: [], failRevoke: false, assignments: [], inspected: "", serverOrigin: "https://test.invalid", homeForms: []});
   const parent = await mkdtemp(path.join(await realpath(os.tmpdir()), "ag-lifecycle-test-"));
   const id = randomBytes(12).toString("hex"), root = path.join(parent, `e-${id}`), workspace = path.join(root, "workspace");
   await mkdir(root, {mode: 0o700}); await mkdir(workspace, {mode: 0o700}); await mkdir(path.join(root, "materials"), {mode: 0o700});
@@ -135,10 +139,13 @@ test("actual activation keeps cancel and export-before-end separate from quittin
 test("actual claim success locks reauthentication and account/address replacement for this shared session", async () => {
   const f = await fixture();
   try {
-    await f.command("autograde.redeemAssignmentClaim"); assert.equal(ui.claims, 1);
+    await f.command("autograde.redeemAssignmentClaim"); assert.equal(ui.claims, 0);
+    assert.ok(ui.homeForms.includes("claim"));
+    await homeInputs.claim("AK1-2345-6789-ABCD", ui.serverOrigin); assert.equal(ui.claims, 1);
     assert.deepEqual(ui.errors, []);
     assert.equal(JSON.parse(await readFile(path.join(f.root, SHARED_AUTH_USED), "utf8")).authenticated, true);
     await f.command("autograde.redeemAssignmentClaim"); await f.command("autograde.signIn"); await f.command("autograde.configureServiceAddress");
+    await assert.rejects(homeInputs.configureServer("https://other.invalid"), /새 IDE 세션/);
     assert.equal(ui.claims, 1); assert.equal(ui.signins, 0); assert.match(ui.errors.join(" "), /새 IDE 세션/);
   } finally {await f.dispose();}
 });
@@ -161,9 +168,31 @@ test("shared Git claim and submit use the selected child repository, not the out
   const f = await fixture();
   try {
     ui.assignments = [{id: "git-1", title: "Git 과제", repository: {ready: true, name: "student-repo", cloneUrl: "https://github.com/example/student-repo.git"}}];
-    await f.command("autograde.redeemAssignmentClaim"); assert.deepEqual(ui.errors, []);
+    await f.command("autograde.redeemAssignmentClaim");
+    await homeInputs.claim("AK1-2345-6789-ABCD", ui.serverOrigin); assert.deepEqual(ui.errors, []);
     const repository = path.join(f.workspace, "student-repo"); assert.equal((await lstat(repository)).isDirectory(), true);
     await f.command("autograde.submitCurrentCommit");
     assert.equal(ui.inspected, repository); assert.match(ui.errors.join(" "), /synthetic inspection stop/);
   } finally {await f.dispose();}
+});
+
+test("inline claim rejects a stale rendered server before any authentication", async () => {
+  const f = await fixture();
+  try {
+    await assert.rejects(homeInputs.claim("AK1-2345-6789-ABCD", "https://previous.invalid"), /서버나 로그인이 변경/);
+    assert.equal(ui.claims, 0); assert.equal(tokens.loggedIn, false);
+  } finally {await f.dispose();}
+});
+
+test("inline claim rechecks origin and identity after asynchronous workspace preparation", async () => {
+  for (const change of ["origin", "identity"]) {
+    const f = await fixture();
+    try {
+      const pending = homeInputs.claim("AK1-2345-6789-ABCD", ui.serverOrigin);
+      if (change === "origin") ui.serverOrigin = "https://other.invalid";
+      else tokens.generation++;
+      await assert.rejects(pending, /서버나 로그인이 변경/);
+      assert.equal(ui.claims, 0); assert.equal(tokens.loggedIn, false);
+    } finally {await f.dispose();}
+  }
 });

@@ -143,6 +143,88 @@ test("public HTTP and credential-bearing input never reach configuration storage
   assert.deepEqual(updates, []);
 });
 
+test("an address entered in the learning home is normalized and saved without an input prompt", async () => {
+  resetUi();
+  const events: string[] = [];
+  const controller = new ServiceAddressController(
+    clientWithSession(false, events),
+    async () => { assert.fail("a signed-out address change must not end a session"); },
+    async () => { events.push("changed"); },
+  );
+
+  assert.equal(await controller.configure(" 203.0.113.10:20000 "), true);
+
+  assert.equal(inputCalls.length, 0);
+  assert.deepEqual(events, ["hasSession", "clear", "changed"]);
+  assert.deepEqual(updates, [{ key: "serviceBaseUrl", value: "https://203.0.113.10:20000", target: GLOBAL_TARGET }]);
+});
+
+test("invalid direct addresses never open a prompt, clear the session, or reach storage", async () => {
+  for (const address of ["", " \t ", "https://user:secret@example.edu", "http://203.0.113.10:20000", "http://192.168.1.10:20000"]) {
+    resetUi();
+    const events: string[] = [];
+    const controller = new ServiceAddressController(
+      clientWithSession(true, events),
+      async () => { assert.fail("invalid input must not end the session"); },
+      async () => { assert.fail("invalid input must not update the address"); },
+    );
+
+    await assert.rejects(controller.configure(address));
+
+    assert.equal(inputCalls.length, 0);
+    assert.deepEqual(events, []);
+    assert.deepEqual(warningCalls, []);
+    assert.deepEqual(updates, []);
+    assert.equal(storedAddress, "http://127.0.0.1:18080");
+  }
+});
+
+test("direct authenticated address changes preserve confirmation and shared-session cleanup", async () => {
+  for (const outcome of ["decline", "cleanup-cancel", "confirmed"] as const) {
+    resetUi();
+    if (outcome !== "decline") warningResponse = "로그아웃하고 주소 변경";
+    const events: string[] = [];
+    const controller = new ServiceAddressController(
+      clientWithSession(true, events),
+      async () => {
+        events.push("end");
+        assert.equal(storedAddress, "http://127.0.0.1:18080");
+        assert.deepEqual(updates, []);
+        return outcome === "confirmed";
+      },
+      async () => { events.push("changed"); },
+    );
+
+    assert.equal(await controller.configure("https://grade.example.edu"), outcome === "confirmed");
+
+    assert.equal(inputCalls.length, 0);
+    assert.equal(warningCalls.length, 1);
+    assert.equal((warningCalls[0]?.[1] as { modal?: boolean }).modal, true);
+    assert.deepEqual(events, outcome === "decline" ? ["hasSession"]
+      : outcome === "cleanup-cancel" ? ["hasSession", "end"]
+        : ["hasSession", "end", "clear", "changed"]);
+    assert.equal(updates.length, outcome === "confirmed" ? 1 : 0);
+    assert.equal(storedAddress, outcome === "confirmed" ? "https://grade.example.edu" : "http://127.0.0.1:18080");
+  }
+});
+
+test("saving the current address directly does not disturb the current session", async () => {
+  resetUi();
+  const events: string[] = [];
+  const controller = new ServiceAddressController(
+    clientWithSession(true, events),
+    async () => { assert.fail("unchanged origin must not end the session"); },
+    async () => { assert.fail("unchanged origin must not trigger an address change"); },
+  );
+
+  assert.equal(await controller.configure("http://127.0.0.1:18080/"), true);
+
+  assert.equal(inputCalls.length, 0);
+  assert.deepEqual(events, []);
+  assert.deepEqual(warningCalls, []);
+  assert.deepEqual(updates, []);
+});
+
 function clientWithSession(hasSession: boolean, events: string[]): AutogradeClient {
   return {
     tokens: {

@@ -129,7 +129,7 @@ def stats(samples):
 
 
 class PilotFixture:
-    def __init__(self, root):
+    def __init__(self, root, *, learning_runtime_socket=None, starter_files=None):
         self.root = root
         self.state = PlatformStateStore(root / "synthetic.sqlite3")
         self.bundles = BundleStore(root / "bundles")
@@ -143,13 +143,15 @@ class PilotFixture:
             self.identities.set_grant("reviewer", course, allowed=True)
         starter = root / "starter"
         starter.mkdir()
-        (starter / "answer.txt").write_text("Synthetic admission fixture only.\n")
+        for name, content in (starter_files or {"answer.txt": "Synthetic admission fixture only.\n"}).items():
+            (starter / name).write_text(content)
         self.starter = self.bundles.create_from_directory(starter, kind="starter")
         self.source = self.bundles.create_from_directory(starter, kind="submission")
         self.now = datetime.now(timezone.utc)
         self.services = {course: StudentPlatformService(
             state=self.state, server_secret=SECRET, course_key=course,
             public_base_url=API_ORIGIN, bundle_store=self.bundles,
+            learning_runtime_socket=learning_runtime_socket,
             instructor_authorizer=self.identities.authorize_course)
             for course in (COURSE, OTHER_COURSE)}
         self.courses = CourseAdminService(self.state)
@@ -159,6 +161,7 @@ class PilotFixture:
             authorize=self.services[COURSE]._authorize_instructor, secret=SECRET,
             web_url=WEB_ORIGIN, identities=self.identities,
             next_ui_policy=lambda: self.policy,
+            learning_runtime_overview=lambda key: self.services[key].learning_runtime_overview(),
             submissions=lambda key, auth: self.services[key].instructor_dashboard_page(auth, portal=True),
             submission_updates=lambda key, auth: self.services[key].instructor_dashboard_updates(auth, portal=True))
         self.portal = CoursePortal(self.services, SECRET, WEB_ORIGIN, API_ORIGIN,

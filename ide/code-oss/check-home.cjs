@@ -14,7 +14,7 @@ const [compiledHome, playwrightModule, executablePath, output] = args.map(value 
 const { renderLearningHome, learningHomeBlockedReason } = require(compiledHome);
 const { chromium } = require(playwrightModule);
 const widths = [320, 375, 768, 1440];
-const baseActions = ['configure', 'connection', 'claim', 'downloads', 'open', 'checkpointRestore', 'accepted', 'extensions', 'submit', 'result', 'history', 'exportLearning', 'checkpointSave', 'exam'];
+const baseActions = ['portal', 'remoteLearning', 'configure', 'connection', 'claim', 'downloads', 'open', 'checkpointRestore', 'accepted', 'extensions', 'submit', 'result', 'history', 'exportLearning', 'checkpointSave', 'exam'];
 const nonce = 'autograde-synthetic-browser-test';
 const themes = {
   light: {
@@ -39,6 +39,7 @@ function syntheticHtml(state, theme) {
     --vscode-font-family: Arial, sans-serif; --vscode-font-size: 14px;
     --vscode-foreground: ${theme.foreground}; --vscode-editor-background: ${theme.background};
     --vscode-descriptionForeground: ${theme.description}; --vscode-widget-border: ${theme.border};
+    --vscode-input-foreground: ${theme.foreground}; --vscode-input-background: ${theme.background}; --vscode-input-border: ${theme.border};
     --vscode-contrastBorder: ${theme.border}; --vscode-button-border: ${theme.border};
     --vscode-button-secondaryForeground: ${theme.secondaryForeground};
     --vscode-button-secondaryBackground: ${theme.secondaryBackground};
@@ -89,7 +90,9 @@ function syntheticHtml(state, theme) {
                 await page.goto('about:blank');
                 await page.setContent(syntheticHtml(state, theme), { waitUntil: 'load' });
                 assert.equal(await page.getByRole('heading', { level: 1 }).count(), 1, `${label}: title`);
-                assert.equal(await page.getByRole('button').count(), actions.length, `${label}: action count`);
+                assert.deepEqual((await page.locator('button[data-action]').evaluateAll(nodes => [...new Set(nodes.map(node => node.dataset.action))])).sort(), [...actions].sort(), `${label}: available action set`);
+                // Secondary tools intentionally collapse; test their controls after expanding them.
+                await page.locator('details.tools > summary').evaluateAll(nodes => nodes.forEach(node => node.click()));
                 assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false, `${label}: page horizontal overflow`);
                 const clipped = await page.locator('button, section, main').evaluateAll(nodes => nodes
                   .filter(node => node.scrollWidth > node.clientWidth + 1 || node.getBoundingClientRect().left < -1 || node.getBoundingClientRect().right > innerWidth + 1)
@@ -107,12 +110,13 @@ function syntheticHtml(state, theme) {
                 const enabled = actions.filter(action => !learningHomeBlockedReason(action, state));
                 if (enabled.length) {
                   await page.keyboard.press('Tab');
-                  assert.equal(await page.locator(`button[data-action="${enabled[0]}"]`).evaluate(node => node === document.activeElement), true, `${label}: first keyboard action`);
-                  const focus = await page.locator(`button[data-action="${enabled[0]}"]`).evaluate(node => getComputedStyle(node).outlineStyle);
+                  const first = page.locator('button[data-action]:enabled').first();
+                  assert.equal(await first.evaluate(node => node === document.activeElement), true, `${label}: first keyboard action`);
+                  const focus = await first.evaluate(node => getComputedStyle(node).outlineStyle);
                   assert.notEqual(focus, 'none', `${label}: visible keyboard focus`);
                 }
                 for (const action of actions) {
-                  const button = page.locator(`button[data-action="${action}"]`);
+                  const button = page.locator(`button[data-action="${action}"]`).first();
                   const reason = learningHomeBlockedReason(action, state);
                   assert.equal(await button.isDisabled(), !!reason, `${label}/${action}: availability`);
                   const before = await page.evaluate(() => window.__messages.length);
@@ -125,7 +129,7 @@ function syntheticHtml(state, theme) {
                     await button.click();
                     const messages = await page.evaluate(() => window.__messages);
                     assert.equal(messages.length, before + 1, `${label}/${action}: single dispatch`);
-                    assert.deepEqual(messages.at(-1), { type: 'learningAction', action }, `${label}/${action}: fixed message`);
+                    assert.deepEqual(messages.at(-1), { type: 'learningAction', action, nonce }, `${label}/${action}: fixed message`);
                     dispatchedActions++;
                   }
                 }

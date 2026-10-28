@@ -35,6 +35,15 @@ def test_component_styles_do_not_redefine_shared_design_tokens():
         assert not names.intersection(declarations), str(stylesheet)
 
 
+def test_explicit_student_theme_uses_the_shared_system_palette():
+    css = TOKENS.read_text(encoding='utf-8')
+    assert '[data-theme="light"],\n:root {' in css
+    system_dark = re.findall(r':root\s*\{([^}]+)\}', css)[1]
+    explicit_dark = re.search(r'\[data-theme="dark"\]\s*\{([^}]+)\}', css).group(1)
+    declarations = lambda block: dict(re.findall(r'(--[a-z-]+)\s*:\s*([^;]+);', block))
+    assert declarations(explicit_dark) == declarations(system_dark)
+
+
 @pytest.mark.parametrize('token', ['--page', '--surface', '--surface-raised', '--text', '--muted',
                                   '--border', '--control-border', '--accent', '--on-accent',
                                   '--error', '--error-bg', '--warning', '--warning-bg',

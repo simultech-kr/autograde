@@ -31,7 +31,7 @@ class Elements(HTMLParser):
 
 def instructor():
     return InstructorWeb(
-        SimpleNamespace(list_courses=lambda: [COURSE]), None, None,
+        SimpleNamespace(list_courses=lambda: [COURSE]), None, SimpleNamespace(state=None),
         authorize=lambda value: None, secret=b'test-design-secret' * 2,
         web_url='https://grade.example.edu:20010',
     )
@@ -86,7 +86,8 @@ def test_student_shell_is_semantic_and_keeps_form_actions_and_enhancements(enhan
     assert len(elements.all('head')) == len(elements.all('body')) == len(elements.all('main')) == 1
     assert elements.all('main')[0] == {'id': 'main-content', 'tabindex': '-1', 'data-audience': 'student'}
     assert any(link.get('href') == '#main-content' for link in elements.all('a'))
-    assert any(link.get('href') == '/' and link.get('class') == 'student-brand' for link in elements.all('a'))
+    assert any(link.get('href') == '/student' and link.get('class') == 'student-brand' for link in elements.all('a'))
+    assert any(link.get('href') == '/' for link in elements.all('a'))  # Explicit role-switch entry remains available.
     assert content in response.body
     assert '실습 &lt;선택&gt;' in response.body
     assert (STUDENT_SCRIPT in response.body) is enhanced

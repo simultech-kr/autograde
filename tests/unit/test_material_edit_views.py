@@ -98,6 +98,8 @@ def test_student_direct_file_update_shows_notice_without_new_material_edition(fl
     assert '배포본 v1 · 내 파일 v2' in html
     assert '파일 수정본 v2 · 다시 다운로드하세요' in html
     assert f'action="{STUDENT_BASE}/{FIRST}/download"' in html
+    assert any(link.get('href') == STUDENT_BASE and link.get('aria-current') == 'page'
+               for link in Elements(html).all('a'))
     assert '/download/1/1' not in html
 
 

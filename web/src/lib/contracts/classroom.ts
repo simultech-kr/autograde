@@ -19,6 +19,7 @@ export type ClassroomSubmission = {
 export type ClassroomStudent = {
   student_key: string; student_name: string;
   commands_version?: string;
+  command_attention?: boolean;
   connection: { state: ConnectionState; last_seen_at: string | null; environment: { os: string; remote_name: string; ide: string } | null };
   activity: ClassroomActivity | null;
   submission: { state: string; submitted: boolean; latest: ClassroomSubmission | null; previous_best: PreviousBest | null };
@@ -70,6 +71,7 @@ function student(value: unknown): ClassroomStudent {
   const commandsVersion = v.commands_version === undefined ? undefined : str(v.commands_version);
   if (commandsVersion !== undefined && !/^[a-f0-9]{64}$/.test(commandsVersion)) throw new ContractError();
   return { student_key: str(v.student_key), student_name: str(v.student_name), commands_version: commandsVersion,
+    command_attention: v.command_attention === undefined ? false : bool(v.command_attention),
     connection: { state: state as ConnectionState, last_seen_at: nullable(c.last_seen_at, time), environment: nullable(c.environment, value => {
       const e = obj(value); return { os: str(e.os), remote_name: str(e.remote_name), ide: str(e.ide) };
     }) }, activity: nullable(v.activity, activity),

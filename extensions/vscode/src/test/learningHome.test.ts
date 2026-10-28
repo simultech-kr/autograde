@@ -4,8 +4,9 @@ import * as path from "node:path";
 import test from "node:test";
 import { LEARNING_HOME_COMMAND, learningHomeAction, learningHomeBlockedReason, learningHomeCommand, renderLearningHome, shouldOpenLearningHome, type LearningHomeAction } from "../learningHome";
 
-const ready = { authenticated: true, trusted: true, hasWorkspace: true };
+const ready = { authenticated: true, trusted: true, hasWorkspace: true, serviceBaseUrl: "https://grade.example.test" };
 const expected = {
+  portal: "autograde.openStudentPortal",
   downloads: "autograde.openServerDownloads",
   configure: "autograde.configureServiceAddress", connection: "autograde.checkServerConnection",
   claim: "autograde.redeemAssignmentClaim", open: "autograde.openAssignment",
@@ -15,6 +16,7 @@ const expected = {
   materials: "autograde.studentMaterials",
   content: "autograde.syncContent",
   extensions: "autograde.manageCourseExtensions",
+  remoteLearning: "autograde.remoteLearning",
   exportLearning: "autograde.exportLearning",
   checkpointSave: "autograde.saveLearningCheckpoint", checkpointRestore: "autograde.restoreLearningCheckpoint",
   endSession: "autograde.endLearningSession",
@@ -64,7 +66,7 @@ test("session, trust, workspace and busy restrictions are rechecked independentl
   }
 });
 
-test("rendered home is theme-aware, responsive, nonce-protected and never requests or persists credentials", () => {
+test("rendered home is theme-aware, responsive, nonce-protected and never persists submitted codes", () => {
   const html = renderLearningHome(ready, "safe-nonce");
   for (const action of Object.keys(expected).filter(action => !["endSession", "materials", "content"].includes(action))) assert.ok(html.includes(`data-action="${action}"`));
   assert.match(html, /data-action="downloads" class="primary"/);
@@ -84,7 +86,9 @@ test("rendered home is theme-aware, responsive, nonce-protected and never reques
   const requests = renderLearningHome({...ready, classroomCommandStatus: '<img src=x onerror=evil>'}, "safe");
   assert.match(requests, /교수자 요청/); assert.match(requests, /수락하거나 거절/);
   assert.match(requests, /&lt;img src=x onerror=evil&gt;/); assert.doesNotMatch(requests, /<img/);
-  assert.doesNotMatch(html, /<input|<form|https?:\/\/|command:|localStorage|setState|fetch\(/);
+  assert.doesNotMatch(html, /command:|localStorage|sessionStorage|setState|fetch\(/);
+  assert.match(html, /id="claim-code" type="password" maxlength="128" autocomplete="off"/);
+  assert.match(html, /form-action 'none'/);
   assert.doesNotMatch(html, / disabled/);
   const unauthenticated = renderLearningHome({authenticated: false, trusted: false, hasWorkspace: false}, "safe");
   assert.match(unauthenticated, /수령 코드 연결 필요/);

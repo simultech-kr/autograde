@@ -45,6 +45,24 @@ def respond(setup, command, status, code=None, result=None, *, at=NOW, **changes
     return setup[1].respond(**setup[2], command_id=command['command_id'], payload=payload, at=at)
 
 
+def test_classroom_attention_clears_after_successful_retry_without_exposing_message(setup):
+    command = create(setup, 'open_assignment')['command']
+    poll(setup)
+    respond(setup, command, 'accepted')
+    respond(setup, command, 'failed', 'action_failed')
+    classroom = ClassroomState(setup[0][0])
+    row = classroom.snapshot(COURSE, at=NOW)['students'][0]
+    assert row['command_attention'] is True
+    assert 'commands' not in row and 'message' not in row
+    later = NOW + timedelta(seconds=2)
+    retry = setup[1].create(COURSE, 's001', dict(kind='open_assignment', assignment_id='basn_lab01',
+        request_key=str(uuid4()), message='retry private instructor message'), 'teacher', at=later)['command']
+    setup[1].poll(**setup[2], client_session_id=setup[3], at=later)
+    respond(setup, retry, 'accepted', at=later)
+    respond(setup, retry, 'completed', 'assignment_opened', at=later)
+    assert classroom.snapshot(COURSE, at=later)['students'][0]['command_attention'] is False
+
+
 def test_confirmed_notice_lifecycle_idempotency_and_snapshot(setup):
     before = ClassroomState(setup[0][0]).snapshot(COURSE, at=NOW)
     payload = dict(kind='notice', message='수업 안내', request_key=str(uuid4()))

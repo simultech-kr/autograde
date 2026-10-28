@@ -55,6 +55,7 @@ for (const ending of ['cleanup', 'stale recovery']) test(`bundled service addres
   const settingsPath = path.join(a.runtime, 'user-data/User/settings.json');
   const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
   assert.equal(settings['autograde.serviceBaseUrl'], serviceAddress);
+  assert.equal(settings['autograde.studentPortalBaseUrl'], 'https://ai.cbchoi.info:20010');
 
   const privateFiles = ['workspace/answer.cpp', 'materials/slides.pdf',
     'r/user-data/User/globalStorage/autograde/session.json', 'r/user-data/Backups/unsaved-code'];
@@ -72,6 +73,7 @@ for (const ending of ['cleanup', 'stale recovery']) test(`bundled service addres
   assert.equal(b.root, a.root);
   assert.notEqual(b.sessionId, a.sessionId);
   assert.equal(JSON.parse(fs.readFileSync(path.join(b.runtime, 'user-data/User/settings.json'), 'utf8'))['autograde.serviceBaseUrl'], serviceAddress);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(b.runtime, 'user-data/User/settings.json'), 'utf8'))['autograde.studentPortalBaseUrl'], 'https://ai.cbchoi.info:20010');
   assert.deepEqual(fs.readdirSync(b.workspace), []);
   assert.deepEqual(fs.readdirSync(b.materials), []);
   for (const relative of privateFiles) assert.equal(fs.existsSync(path.join(b.root, relative)), false, relative);

@@ -3,6 +3,7 @@ export interface Assignment {
   readonly key?: string;
   readonly title: string;
   readonly courseLabel?: string;
+  readonly courseKey?: string;
   readonly status?: string;
   readonly ready?: boolean;
   readonly deliveryMode?: string;
@@ -44,6 +45,7 @@ export interface AssignedRepository {
 
 export interface SubmissionSummary {
   readonly id: string;
+  readonly receivedAt?: string;
   readonly state: string;
   readonly headSha?: string;
   readonly sourceDigest?: string;
@@ -61,6 +63,7 @@ export interface PreviousBestScore {
 
 export interface GradeResult {
   readonly state: string;
+  readonly receivedAt?: string;
   readonly headSha?: string;
   readonly sourceDigest?: string;
   readonly score?: number;

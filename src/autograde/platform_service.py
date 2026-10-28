@@ -107,7 +107,7 @@ class PlatformResponse:
 
     status: int
     body: str | Mapping[str, Any] | None
-    headers: Mapping[str, str] = field(default_factory=dict)
+    headers: Mapping[str, str | tuple[str, ...]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -334,6 +334,7 @@ class StudentPlatformService:
         notify_bundle_submission: SubmissionNotifier | None = None,
         instructor_token: str | None = None,
         instructor_authorizer: Callable | None = None,
+        learning_runtime_socket: str | Path | None = None,
         now: Callable[[], datetime] = _utc_now,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -355,6 +356,7 @@ class StudentPlatformService:
         self.notify_submission = notify_submission
         self.bundle_store = bundle_store
         self._learning_checkpoint_store = None
+        self.learning_runtime_socket = str(learning_runtime_socket) if learning_runtime_socket else None
         self.notify_bundle_submission = notify_bundle_submission
         self._instructor_token = (
             _required_string(instructor_token, "instructor_token", maximum=512)
@@ -376,6 +378,31 @@ class StudentPlatformService:
         )
 
     # Public JSON API -------------------------------------------------
+
+    def get_learning_runtime(self, access_token, assignment_id):
+        from .learning_runtime import request
+        return request(self, access_token, assignment_id, "status")
+
+    def create_learning_runtime(self, access_token, assignment_id, payload):
+        from .learning_runtime import request
+        return request(self, access_token, assignment_id, "create", payload)
+
+    def run_learning_runtime(self, access_token, assignment_id, session_id, payload):
+        from .learning_runtime import request
+        return request(self, access_token, assignment_id, "run", payload, session_id)
+
+    def close_learning_runtime(self, access_token, assignment_id, session_id, payload):
+        from .learning_runtime import request
+        return request(self, access_token, assignment_id, "close", payload, session_id)
+
+    def learning_runtime_overview(self):
+        """Course-only projection; caller must authorize the instructor first."""
+        from .learning_runtime import overview
+        return overview(self)
+
+    def learning_runtime_student_overview(self, credential):
+        from .learning_runtime import overview
+        return overview(self, credential=credential)
 
     def _checkpoint_owner(self, access_token: str, assignment_id: str):
         safe_id = self._safe_identifier(assignment_id, "assignment_id")

@@ -97,7 +97,7 @@ def material_http(tmp_path):
                           courses=courses, instructor=instructor, student_materials=materials)
     with serving(portal, WEB) as server:
         admin = MaterialBrowser(server, instructor=True)
-        assert admin.get("/instructor")[0] == 200
+        assert admin.get(BASE)[0] == 200  # CSRF belongs to the material registration form.
         yield SimpleNamespace(server=server, admin=admin, materials=materials, students=students,
                               courses=courses, services=services, portal=portal, instructor=instructor,
                               state=state, clock=clock)

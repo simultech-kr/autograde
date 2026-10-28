@@ -1,18 +1,36 @@
 import type { ReactNode } from "react";
+import type { Course } from "../lib/contracts/instructor";
+import { courseNavigation, type InstructorSection } from "../features/navigation";
 import styles from "./instructor-ui.module.css";
 
-export function AppShell({ children, testId }: { children: ReactNode; testId?: string }) {
+export function AppShell({ children, testId, course, section, resultsEnabled = false }: {
+  children: ReactNode; testId?: string; course?: Course;
+  section?: InstructorSection; resultsEnabled?: boolean;
+}) {
+  const links = courseNavigation(course, section, resultsEnabled);
   return (
-    <div className={styles.shell} data-testid={testId}>
+    <div className={styles.shell} data-testid={testId} data-portal="instructor">
       <header className={styles.header}>
-        <a className={styles.brand} href="/app">
+        <a className={styles.brand} href="/instructor">
           <span className={styles.mark} aria-hidden="true">A</span>
           <span>Autograde</span>
-          <span className={styles.audience}>교수자</span>
+          <span className={styles.audience}>교수자 포털</span>
         </a>
-        <a className={styles.legacy} href="/app/classroom">실습 교실</a>
-        <a className={styles.legacy} href="/instructor">기존 관리 화면 ↗</a>
+        <nav className={styles.portalNav} aria-label="포털 이동">
+          <a href="/">포털 홈</a>
+          <a href="/app/student">학생 포털</a>
+        </nav>
       </header>
+      {links.length > 0 && course && <div className={styles.courseBar} data-testid="course-navigation">
+        <p className={styles.courseContext}>
+          <span>선택한 수업</span>
+          <strong>{course.name || course.code || course.course_key}{course.section ? ` · ${course.section}분반` : ""}</strong>
+          <span className={styles.courseCode}>{course.course_key}</span>
+        </p>
+        <nav className={styles.courseNav} aria-label="수업 메뉴">
+          {links.map(link => <a key={link.id} href={link.href} aria-current={link.current ? "page" : undefined}>{link.label}</a>)}
+        </nav>
+      </div>}
       <main id="main" tabIndex={-1} className={styles.main}>{children}</main>
     </div>
   );

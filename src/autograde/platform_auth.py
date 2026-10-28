@@ -236,6 +236,20 @@ def validate_student_password(password: str) -> str:
     return password_bytes.decode("ascii")
 
 
+def hash_member_password(password: str, *, salt: bytes | None = None) -> str:
+    """Self-managed account password; legacy course PIN policy remains unchanged."""
+    value = _student_password_bytes(password, enforce_policy=False, max_bytes=512)
+    if not 8 <= len(value.decode('utf-8')) <= 128:
+        raise ValueError('회원 비밀번호는 8~128자로 입력하세요.')
+    actual_salt = secrets.token_bytes(_PASSWORD_SALT_BYTES) if salt is None else salt
+    if not isinstance(actual_salt, bytes) or len(actual_salt) != _PASSWORD_SALT_BYTES:
+        raise ValueError('password salt must contain exactly 16 bytes')
+    digest = hashlib.scrypt(value, salt=actual_salt, n=_PASSWORD_SCRYPT_N,
+        r=_PASSWORD_SCRYPT_R, p=_PASSWORD_SCRYPT_P, maxmem=_PASSWORD_SCRYPT_MAXMEM, dklen=_PASSWORD_HASH_BYTES)
+    return '$'.join(('scrypt', 'v3', str(_PASSWORD_SCRYPT_N), str(_PASSWORD_SCRYPT_R),
+        str(_PASSWORD_SCRYPT_P), _b64url(actual_salt), _b64url(digest)))
+
+
 def verify_student_password(password: str, encoded_hash: str) -> bool:
     """Verify a password without returning early on malformed stored values."""
 
@@ -245,7 +259,7 @@ def verify_student_password(password: str, encoded_hash: str) -> bool:
         if (
             len(parts) != 7
             or parts[0] != "scrypt"
-            or parts[1] not in {"v1", "v2"}
+            or parts[1] not in {"v1", "v2", "v3"}
             or parts[2:5]
             != [
                 str(_PASSWORD_SCRYPT_N),
@@ -254,7 +268,8 @@ def verify_student_password(password: str, encoded_hash: str) -> bool:
             ]
         ):
             raise ValueError("unsupported password hash")
-        current_policy_hash = parts[1] == "v2"
+        current_policy_hash = parts[1] in {"v2", "v3"}
+        member_policy = parts[1] == 'v3'
         salt = _b64url_decode(parts[5])
         expected = _b64url_decode(parts[6])
         if len(salt) != _PASSWORD_SALT_BYTES or len(expected) != _PASSWORD_HASH_BYTES:
@@ -262,14 +277,15 @@ def verify_student_password(password: str, encoded_hash: str) -> bool:
     except (AttributeError, ValueError, binascii.Error):
         valid_format = False
         current_policy_hash = False
+        member_policy = False
         salt = b"\0" * _PASSWORD_SALT_BYTES
         expected = b"\0" * _PASSWORD_HASH_BYTES
 
     policy_matches = False
     try:
-        password_bytes = _student_password_bytes(password, enforce_policy=False)
+        password_bytes = _student_password_bytes(password, enforce_policy=False, max_bytes=512 if member_policy else 256)
         normalized = password_bytes.decode("utf-8")
-        policy_matches = _is_six_digit_student_password(normalized)
+        policy_matches = 8 <= len(normalized) <= 128 if member_policy else _is_six_digit_student_password(normalized)
     except (TypeError, ValueError, UnicodeError):
         valid_format = False
         password_bytes = b"invalid-password"
@@ -294,15 +310,15 @@ def _is_six_digit_student_password(value: str) -> bool:
     )
 
 
-def _student_password_bytes(password: str, *, enforce_policy: bool) -> bytes:
+def _student_password_bytes(password: str, *, enforce_policy: bool, max_bytes=256) -> bytes:
     if not isinstance(password, str):
         raise TypeError("password must be a string")
     normalized = unicodedata.normalize("NFC", password)
     if any(ord(character) < 32 or ord(character) == 127 for character in normalized):
         raise ValueError("password must not contain control characters")
     encoded = normalized.encode("utf-8", "strict")
-    if not encoded or len(encoded) > 256:
-        raise ValueError("password must contain between 1 and 256 UTF-8 bytes")
+    if not encoded or len(encoded) > max_bytes:
+        raise ValueError(f"password must contain between 1 and {max_bytes} UTF-8 bytes")
     if enforce_policy and not _is_six_digit_student_password(normalized):
         raise ValueError("Autograde 전용 비밀번호는 숫자 6자리여야 합니다")
     return encoded

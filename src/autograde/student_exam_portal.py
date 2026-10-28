@@ -39,13 +39,13 @@ def _listing(portal, course, session):
     body += (f'<nav class="assignment-links" aria-label="시험지 목록 안내"><a href="{base}">목록 새로고침</a>'
              f'<a href="/courses/{course}">실습 과제 받기</a>' +
              (f'<a href="/courses/{course}/materials">내 자료 받기</a>' if portal.student_materials is not None else '') +
-             '<a href="/">다른 교과목 선택</a></nav>'
+             '<a href="/student">다른 교과목 선택</a></nav>'
              '<p class="progress-hint">로그인은 10분 후 만료됩니다. 다운로드가 안 되면 다시 인증한 뒤 재시도하세요. '
              '공용 PC에서는 로그아웃하고 내려받은 파일은 교수자의 시험 운영 지침에 따라 처리하세요.</p>'
              f'<form method="post" action="{base}/logout">'
              f'<input type="hidden" name="csrf" value="{escape(session.csrf, quote=True)}">'
              '<button class="secondary">로그아웃</button></form>')
-    return portal._page('시험지 받기', body)
+    return portal._page('시험지 받기', body, navigation=portal._student_nav(course, 'exam-papers'))
 
 
 def request(portal, method, path, form, cookies, origin):
@@ -66,7 +66,7 @@ def request(portal, method, path, form, cookies, origin):
             raw, session = portal._login_session(course, form, cookies, destination='exam-papers')
             # PRG keeps passwords out of browser form-resubmission history.
             return PlatformResponse(303, None, {
-                'Location': f'/courses/{course}/exam-papers', 'Set-Cookie': portal._cookie(course, raw)})
+                'Location': f'/courses/{course}/exam-papers', **portal._login_headers(course, raw)})
         with portal.lock:
             try:
                 key, session = portal._session(course, cookies)
@@ -81,8 +81,7 @@ def request(portal, method, path, form, cookies, origin):
                         or not hmac.compare_digest(session.csrf.encode(), supplied.encode())):
                     raise PlatformAPIError(403, 'invalid_csrf', '시험지 목록을 새로 열고 다시 시도하세요.')
                 if action == 'logout' and not download:
-                    portal.sessions.pop(key, None)
-                    return portal._entry(course, '로그아웃되었습니다.', destination='exam-papers')
+                    return portal._logout_session(course, key, session, form, cookies, origin, destination='exam-papers')
                 if download and action.startswith('ep_'):
                     artifact = portal.exam_papers.download(course, action, session.credential.student_id)
                     return PlatformFileResponse(200, artifact, 'application/pdf', {

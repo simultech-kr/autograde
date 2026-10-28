@@ -5,6 +5,7 @@ import { AppShell, PageHeading } from "../../components/InstructorUI";
 import { ApiError, bootstrap, entryURL, results, terminalError } from "../../lib/api/client";
 import { ContractError, type Bootstrap, type Results } from "../../lib/contracts/instructor";
 import { availableModules } from "../registry";
+import { selectedCourse } from "../navigation";
 import { defaultQuery, filterKey, formatTime, pageURL, parseQuery, pollDelay, statusNames, statuses, type ResultsQuery, type Sort, type Status } from "./query";
 import { AssignmentDownloadsLink, refreshPresentation, ResultsTable, SummaryCards } from "./ResultsView";
 import styles from "./dashboard.module.css";
@@ -129,7 +130,7 @@ export function InstructorDashboard() {
   const refreshState = refreshPresentation({ changed, paused, automatic, failed: Boolean(error), loading, lastSuccess });
 
   return (
-    <AppShell testId="dashboard">
+    <AppShell testId="dashboard" course={selectedCourse(identity?.courses, course)} section="results" resultsEnabled={identity?.capabilities.includes("results.read")}>
       <PageHeading
         eyebrow="수업 운영 / 제출 현황"
         title="제출·채점 현황"
@@ -152,7 +153,7 @@ export function InstructorDashboard() {
               <button onClick={() => setBootEpoch(n => n + 1)}>다시 연결</button>
             )}
             {identity && !error.terminal && <button onClick={refresh}>다시 조회</button>}
-            <a className={styles.inlineLink} href="/instructor">기존 교수자 화면</a>
+            <a className={styles.inlineLink} href="/instructor">교수자 포털</a>
           </div>
         </section>
       )}

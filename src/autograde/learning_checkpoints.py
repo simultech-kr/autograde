@@ -24,6 +24,7 @@ import tempfile
 import threading
 
 from .platform_bundle import BundleStore, BundleStorageError, BundleLimitError
+from .course_file_guard import course_file_guard, CourseFileBusy, CourseFilesDeleted
 
 
 class CheckpointError(RuntimeError):
@@ -62,7 +63,41 @@ class LearningCheckpointStore:
     def _owner(self, course_key, student_identity, assignment_id):
         identity = json.dumps([course_key, student_identity, assignment_id], separators=(",", ":"))
         namespace = hashlib.sha256(identity.encode()).hexdigest()
-        return self._directory(self._directory(self.root) / namespace)
+        owner = self._directory(self._directory(self.root) / namespace)
+        expected = {"course_key": course_key, "assignment_id": assignment_id}
+        # Store ownership before any Git/archive write. A first save may fail
+        # before publishing index.json; deletion must still identify its files.
+        with self._locked(owner):
+            try:
+                fd = os.open(owner / "owner.json", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            except FileNotFoundError:
+                temporary = owner / (".owner-" + secrets.token_hex(16))
+                fd = os.open(temporary, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
+                try:
+                    with os.fdopen(fd, "w") as output:
+                        json.dump(expected, output, separators=(",", ":"))
+                        output.flush()
+                        os.fsync(output.fileno())
+                    os.replace(temporary, owner / "owner.json")
+                    directory_fd = os.open(owner, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+                    try:
+                        os.fsync(directory_fd)
+                    finally:
+                        os.close(directory_fd)
+                finally:
+                    temporary.unlink(missing_ok=True)
+            else:
+                with os.fdopen(fd, "rb") as source:
+                    info = os.fstat(source.fileno())
+                    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                        raise BundleStorageError("checkpoint owner metadata is not a private regular file")
+                    raw = source.read(4097)
+                try:
+                    if len(raw) > 4096 or json.loads(raw) != expected:
+                        raise ValueError("owner mismatch")
+                except (ValueError, TypeError) as exc:
+                    raise BundleStorageError("checkpoint owner metadata differs from its scope") from exc
+        return owner
 
     @contextmanager
     def _locked(self, owner):
@@ -231,7 +266,24 @@ class LearningCheckpointStore:
             "checkpoint_id", "assignment_id", "archive_sha256", "created_at", "file_count", "source_bytes", "version", "git_commit",
         )}
 
+    @contextmanager
+    def _course_guard(self, course_key):
+        try:
+            with course_file_guard(self.root.parent, course_key):
+                yield
+        except CourseFileBusy as exc:
+            raise CheckpointError(429, "checkpoint_busy", str(exc), retry_after=2) from exc
+        except CourseFilesDeleted as exc:
+            raise CheckpointError(410, "course_deleted", str(exc)) from exc
+
     def save(self, *, course_key, student_identity, assignment_id, idempotency_key, source, content_length, clock, authorize):
+        with self._course_guard(course_key):
+            authorize()  # Before creating even the first owner directory.
+            return self._save_guarded(course_key=course_key, student_identity=student_identity,
+                assignment_id=assignment_id, idempotency_key=idempotency_key, source=source,
+                content_length=content_length, clock=clock, authorize=authorize)
+
+    def _save_guarded(self, *, course_key, student_identity, assignment_id, idempotency_key, source, content_length, clock, authorize):
         if not self._upload_slots.acquire(blocking=False):
             raise CheckpointError(429, "checkpoint_busy", "서버가 학습내용을 저장 중입니다. 잠시 후 다시 시도하세요.", retry_after=2)
         try:
@@ -303,6 +355,10 @@ class LearningCheckpointStore:
             self._upload_slots.release()
 
     def history(self, *, course_key, student_identity, assignment_id):
+        with self._course_guard(course_key):
+            return self._history_guarded(course_key=course_key, student_identity=student_identity, assignment_id=assignment_id)
+
+    def _history_guarded(self, *, course_key, student_identity, assignment_id):
         owner = self._owner(course_key, student_identity, assignment_id)
         with self._locked(owner):
             items = [self._public(item) for item in self._ledger(owner)["checkpoints"]]
@@ -310,6 +366,11 @@ class LearningCheckpointStore:
                 "retention": {"max_versions": self.MAX_VERSIONS, "max_source_bytes": self.MAX_SOURCE_BYTES}}
 
     def download(self, *, course_key, student_identity, assignment_id, checkpoint_id):
+        with self._course_guard(course_key):
+            return self._download_guarded(course_key=course_key, student_identity=student_identity,
+                                          assignment_id=assignment_id, checkpoint_id=checkpoint_id)
+
+    def _download_guarded(self, *, course_key, student_identity, assignment_id, checkpoint_id):
         owner = self._owner(course_key, student_identity, assignment_id)
         with self._locked(owner):
             item = next((item for item in self._ledger(owner)["checkpoints"] if item["checkpoint_id"] == checkpoint_id), None)

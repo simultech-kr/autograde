@@ -76,7 +76,7 @@ def setup(tmp_path):
     web = InstructorWeb(courses, students, assignments, authorize=auth_service._authorize_instructor,
                         secret=b'w' * 32, web_url=WEB)
     browser = Browser(web)
-    browser.get('/instructor')
+    browser.get('/instructor/admin')  # Obtain CSRF from the actual course registration form.
     return browser, state, courses, students, assignments
 
 

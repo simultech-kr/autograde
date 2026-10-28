@@ -14,7 +14,7 @@ from .platform_service import PlatformAPIError, PlatformResponse, StudentPlatfor
 from .platform_state import PlatformNotFound, utc_iso
 from .web_theme import THEME_CSS
 from .student_browser import SCRIPT_TAG
-from .student_portal_view import STYLE, claim_body, deadline, urgency
+from .student_portal_view import STYLE, claim_body, deadline, urgency, navigation, role_landing, course_chooser
 
 COURSES = ("come3105", "come2201")
 
@@ -29,6 +29,7 @@ class CourseAPI:
         "report_download_diagnostic", "get_assignment_document", "report_classroom_event",
         "poll_classroom_commands", "respond_classroom_command",
         "save_learning_checkpoint", "list_learning_checkpoints", "get_learning_checkpoint_bundle",
+        "get_learning_runtime", "create_learning_runtime", "run_learning_runtime", "close_learning_runtime",
     })
 
     def __init__(self, services: Mapping[str, StudentPlatformService], secret: bytes, *, courses=None, student_materials=None, content_service=None, extension_distribution=None):
@@ -38,7 +39,7 @@ class CourseAPI:
         self.content_service = content_service
         self.extension_distribution = extension_distribution
         self.secret = secret
-        self.state = next(iter(services.values())).state
+        self.state = courses.state if courses is not None else next(iter(services.values())).state
 
     def _service(self, kind: str, value: Any) -> StudentPlatformService:
         if not isinstance(value, str) or not value or len(value) > 256:
@@ -125,6 +126,7 @@ class WebSession:
     csrf: str
     expires: float
     course_revision: int | None = None
+    member_session: bool = False
 
 
 class CoursePortal:
@@ -144,14 +146,53 @@ class CoursePortal:
         self.clock = clock
         self.sessions: dict[str, WebSession] = {}
         self.lock = threading.RLock()
+        from .student_registration_web import StudentMembership
+        self.members = StudentMembership(self) if services or courses is not None else None
 
     def _cookie(self, course, value, *, clear=False):
         secure = "; Secure" if self.web_url.startswith("https://") else ""
-        return (f"autograde_portal_{course}={value}; Path=/courses/{course}; "
+        # All authentication grants must be visible at the account-switch and
+        # logout endpoints. A path-scoped grant could restore a previous student
+        # after the next student's common login had ended on a shared PC.
+        return (f"autograde_portal_{course}={value}; Path=/; "
                 f"Max-Age={0 if clear else 600}; HttpOnly; SameSite=Lax{secure}")
 
+    def _login_headers(self, course, raw):
+        from .student_registration_web import ENTRY_COOKIE
+        values = []
+        if self.members:
+            values.extend((self.members.cookie('', clear=True),
+                           self.members.cookie('', clear=True, name=ENTRY_COOKIE)))
+        # Expire the old scoped cookie to avoid a duplicate-name cookie masking
+        # the new root grant. Active cookie is last for legacy response clients.
+        scoped = self._cookie(course, '', clear=True).replace('Path=/;', f'Path=/courses/{course};')
+        values.extend((scoped, self._cookie(course, raw)))
+        return {'Set-Cookie': tuple(values)}
+
+    def _revoke_browser_sessions(self, cookies):
+        """Invalidate every browser-present student grant before switching users."""
+        with self.lock:
+            for name, value in cookies.items():
+                if name.startswith('autograde_portal_') and isinstance(value, str) and 0 < len(value) <= 1024:
+                    self.sessions.pop(secret_digest(self.secret, 'portal-session', value), None)
+            if self.members:
+                from .student_registration_web import COOKIE
+                raw = cookies.get(COOKIE, '')
+                if isinstance(raw, str) and 0 < len(raw) <= 1024:
+                    with self.members.lock:
+                        self.members.sessions.pop(secret_digest(self.secret, 'member-session', raw), None)
+                    for course in self.services:
+                        self.sessions.pop(secret_digest(self.secret, 'member-course', raw + ':' + course), None)
+
+    def _logout_session(self, course, key, session, form, cookies, origin, *, destination=None):
+        if session.member_session and self.members:
+            return self.members.request('POST', '/student/logout', form, cookies, origin)
+        self._revoke_browser_sessions(cookies)
+        self.sessions.pop(key, None)
+        return self._entry(course, '로그아웃되었습니다.', destination=destination)
+
     @staticmethod
-    def _page(title, body, *, status=200, cookie=None, enhanced=False):
+    def _page(title, body, *, status=200, cookie=None, enhanced=False, wide=False, navigation="", audience="student"):
         headers = {"Content-Type": "text/html; charset=utf-8"}
         if cookie:
             headers["Set-Cookie"] = cookie
@@ -175,13 +216,16 @@ class CoursePortal:
             '.assignment-links{display:flex;gap:16px;flex-wrap:wrap;margin:20px 0}'
             '.error{color:#aa2434}small{color:#536173}code{font-size:1.2em;overflow-wrap:anywhere}'
             f'{THEME_CSS}{STYLE}</style></head><body><a class="skip-link" href="#main-content">본문으로 건너뛰기</a>'
-            '<main id="main-content" tabindex="-1" data-audience="student"><a class="student-brand" href="/">Autograde · 학생 실습실</a>'
-            f'<h1>{html.escape(title)}</h1>{body}</main>{SCRIPT_TAG if enhanced else ""}</body></html>'
+            f'<main id="main-content" tabindex="-1" data-audience="{html.escape(audience, quote=True)}"' + (' class="portal-wide"' if wide else '') + '>'
+            f'<a class="student-brand" href="{("/" if audience == "public" else "/student")}">Autograde · {("수업 포털" if audience == "public" else "학생 포털")}</a>'
+            f'{navigation}<h1>{html.escape(title)}</h1>{body}'
+            '<footer class="portal-footer"><a href="/">포털 시작</a> · 공용 PC에서는 이용 후 로그아웃하세요.</footer>'
+            f'</main>{SCRIPT_TAG if enhanced else ""}</body></html>'
         )
         return PlatformResponse(status, document, headers)
 
     def _entry(self, course, message="", status=200, *, destination=None):
-        if destination not in {None, 'exam-papers', 'materials'}:
+        if destination not in {None, 'exam-papers', 'materials', 'portal', 'results'}:
             raise ValueError('invalid portal destination')
         csrf = new_api_token()
         entry = {"course": course, "csrf": csrf}
@@ -190,17 +234,18 @@ class CoursePortal:
         signed = sign_browser_value(self.secret, "portal-entry", entry,
                                     lifetime_seconds=600)
         login_path = f'/courses/{course}/' + (destination + '/login' if destination else 'login')
-        title = {'exam-papers': '시험지 받기', 'materials': '내 자료 받기', None: '과제 받기'}[destination]
-        button = {'exam-papers': '시험지 확인', 'materials': '내 자료 확인', None: '과제 확인'}[destination]
+        title = {'exam-papers': '시험지 받기', 'materials': '내 자료 받기', 'portal': '학생 포털 로그인', 'results': '제출 현황 로그인', None: '과제 받기'}[destination]
+        button = {'exam-papers': '시험지 확인', 'materials': '내 자료 확인', 'portal': '내 수업으로 이동', 'results': '내 제출 현황 확인', None: '과제 확인'}[destination]
         body = (f'<p>{html.escape(self._course_label(course))}</p>'
                 + (f'<p class="error" role="alert">{html.escape(message)}</p>' if message else '') +
                 f'<form method="post" action="{login_path}">'
                 f'<input type="hidden" name="csrf" value="{csrf}">'
                 '<label>학번<input name="student_key" maxlength="255" autocomplete="off" required></label>'
-                '<label>학생 전용 비밀번호<input name="password" type="password" inputmode="numeric" '
-                'pattern="[0-9]{6}" minlength="6" maxlength="6" autocomplete="off" required></label>'
-                '<p><small>교수자에게 받은 숫자 6자리 비밀번호를 입력하세요.</small></p>'
+                '<label>수업 비밀번호<input name="password" type="password" '
+                'minlength="6" maxlength="128" autocomplete="off" required></label>'
+                '<p><small>교수자에게 받은 6자리 비밀번호 또는 이 수업에서 등록한 회원 비밀번호를 입력하세요.</small></p>'
                 f'<button>{button}</button></form>')
+        body += '<p><a href="/student/login">공통 회원 로그인</a> · <a href="/student/register">학생 회원가입</a> · <a href="/student/account">수강 명단 연결 상태</a></p>'
         links = []
         if destination:
             links.append(f'<a href="/courses/{course}">실습 과제 받기</a>')
@@ -211,7 +256,17 @@ class CoursePortal:
         if links:
             body += '<nav class="assignment-links">' + ''.join(links) + '</nav>'
         return self._page(title, body,
-                          status=status, cookie=self._cookie(course, signed))
+                          status=status, cookie=self._cookie(course, signed), navigation=self._student_nav(course, destination or 'assignments'))
+
+    def _student_nav(self, course, current):
+        return navigation(course, current, materials=self.student_materials is not None, exams=self.exam_papers is not None)
+
+    def _origin_denied(self, course, *, destination=None):
+        # Rejected cross-site POSTs must not replace a valid login with an
+        # entry cookie. Only the explicit same-origin GET opens a new form.
+        target = f'/courses/{course}' + (f'/{destination}' if destination else '')
+        return self._page('접속 주소 확인', '<p>학생 포털 주소에서 다시 시도하세요.</p>'
+                          f'<p><a href="{html.escape(target, quote=True)}">수업 화면으로 돌아가기</a></p>', status=403)
 
     def _login_session(self, course, form, cookies, *, destination=None):
         """Share credential checks without accepting an arbitrary return URL."""
@@ -224,7 +279,22 @@ class CoursePortal:
         student = form["student_key"].strip()
         if not student or len(student) > 255:
             raise ValueError("invalid student")
-        credential = self.services[course].authenticate_student_password(student, form["password"])
+        if self.members and len(form['password']) >= 8:
+            self.services[course]._require_secure_password_claim_transport()
+            # Common account authentication also works at a direct course link.
+            # It still requires the same active, course-scoped enrollment.
+            from .student_registration import RegistrationError
+            from .platform_state import PlatformAccessDenied
+            try:
+                account = self.members.store.authenticate(student, form['password'])
+                credential = self.services[course].state.get_student_password_credential(student_key=student, course_key=course)
+                if account['student_id'] != credential.student_id or (credential.locked_until and credential.locked_until > utc_iso()):
+                    raise PlatformAccessDenied()
+            except (RegistrationError, PlatformAccessDenied, PlatformNotFound) as exc:
+                raise PlatformAPIError(getattr(exc, 'status', 403), 'assignment_claim_denied', '학번·비밀번호와 수강 상태를 확인하세요.') from exc
+        else:
+            credential = self.services[course].authenticate_student_password(student, form["password"])
+        self._revoke_browser_sessions(cookies)
         with self.lock:
             for key in [k for k, v in self.sessions.items() if v.expires <= self.clock()]:
                 self.sessions.pop(key, None)
@@ -249,6 +319,13 @@ class CoursePortal:
             details['section'] + '분반' if details['section'] else '분반 미설정') if value)
 
     def _session(self, course, cookies):
+        if self.members:
+            member_session = self.members.course_session(course, cookies)
+            if member_session is not None:
+                key, session = member_session
+                if session.credential.locked_until and session.credential.locked_until > utc_iso():
+                    raise PlatformAPIError(403, 'login_required', '인증 시도가 잠시 제한되었습니다.')
+                return key, session
         raw = cookies.get(f"autograde_portal_{course}", "")
         key = secret_digest(self.secret, "portal-session", raw) if raw else ""
         now = self.clock()
@@ -308,16 +385,32 @@ class CoursePortal:
                  f'<a href="/courses/{course}">과제 목록 새로고침</a>'
                  + (f'<a href="/courses/{course}/exam-papers">시험지 받기</a>' if self.exam_papers is not None else '') +
                  (f'<a href="/courses/{course}/materials">내 자료 받기</a>' if self.student_materials is not None else '') +
-                 '<a href="/">다른 교과목 선택</a></nav>')
+                 '<a href="/student">다른 교과목 선택</a></nav>')
         body += (f'<form method="post" action="/courses/{course}/logout">'
                  f'<input type="hidden" name="csrf" value="{session.csrf}"><button class="secondary">로그아웃</button></form>')
-        return self._page("과제 선택", body, status=status, enhanced=bool(available))
+        body += '<p>'
+        if not session.member_session:
+            body += f'<a href="/courses/{course}/activate-account">기존 학생 · 회원 계정 만들기</a> · '
+        body += '<a href="/student/account">내 수강 교과목</a></p>'
+        return self._page("과제 선택", body, status=status, enhanced=bool(available), navigation=self._student_nav(course, 'assignments'))
 
     def portal_request(self, method, path, form, cookies, origin=None, authorization=None):
         if self.instructor is not None:
             response = self.instructor.request(method, path, form, cookies, origin, authorization)
             if response is not None:
                 return response
+        if self.members:
+            response = self.members.request(method, path, form, cookies, origin)
+            if response is not None:
+                return response
+        from .student_portal_api import request as student_api_request
+        response = student_api_request(self, method, path, form, cookies, origin)
+        if response is not None:
+            return response
+        from .student_portal import request as student_portal_request
+        response = student_portal_request(self, method, path, form, cookies, origin)
+        if response is not None:
+            return response
         if self.student_materials is not None:
             from .student_material_portal import request as material_request
             response = material_request(self, method, path, form, cookies, origin)
@@ -354,16 +447,18 @@ class CoursePortal:
         if review and method == 'GET' and review[1] in self.services:
             return self.services[review[1]].instructor_submission_page(
                 authorization or '', review[2], int(review[3]) if review[3] else None)
-        if path in {"/", "/courses"} and method == "GET":
+        if path == "/" and method == "GET":
+            return self._page('Autograde 수업 포털', role_landing(instructors=self.instructor is not None), wide=True, audience='public')
+        if path in {"/student", "/courses"} and method == "GET":
             courses = ([c["course_key"] for c in self.courses.list_courses(active_only=True)]
                        if self.courses is not None else self.services)
-            return self._page("교과목 선택", "".join(
-                f'<article><a href="/courses/{html.escape(course, quote=True)}">{html.escape(self._course_label(course))}</a></article>' for course in courses))
+            return self._page("교과목 선택", course_chooser([
+                (course, self._course_label(course)) for course in courses if course in self.services]), wide=True)
         if path.endswith('/instructor/submissions'):
             path = path[:-len('/submissions')]
         match = re.fullmatch(r"/courses/([A-Za-z0-9][A-Za-z0-9._~-]{0,127})(?:/(login|assignments|claims|logout|instructor))?", path)
         if not match or match[1] not in self.services:
-            return self._page("페이지 없음", '<p><a href="/">교과목 선택으로 돌아가기</a></p>', status=404)
+            return self._page("페이지 없음", '<p><a href="/student">교과목 선택으로 돌아가기</a></p>', status=404)
         course, action = match[1], match[2]
         if self.courses is not None and action != "instructor" and not self.courses.is_active(course):
             return self._page("수업 이용 불가", "<p>현재 운영 중인 수업이 아닙니다. 교수자에게 문의하세요.</p>", status=403)
@@ -385,14 +480,14 @@ class CoursePortal:
             body = re.sub(r'(<body\b[^>]*>)', lambda match: match[1] + f'<nav aria-label="수업 선택">{links}</nav>', body, count=1)
             body = body.replace('href="/instructor"', f'href="/courses/{course}/instructor"')
             return PlatformResponse(page.status, body, page.headers)
-        if method == "POST" and origin is not None and origin != self.web_url:
-            return self._entry(course, "접속 주소를 확인하고 다시 시도하세요.", 403)
+        if method == "POST" and origin != self.web_url:
+            return self._origin_denied(course)
         try:
             if method == "POST" and action == "login":
                 raw, session = self._login_session(course, form, cookies)
                 with self.lock:
                     page = self._assignments(course, session)
-                return PlatformResponse(page.status, page.body, {**page.headers, "Set-Cookie": self._cookie(course, raw)})
+                return PlatformResponse(page.status, page.body, {**page.headers, **self._login_headers(course, raw)})
             with self.lock:
                 key, session = self._session(course, cookies)
                 if method == "GET" and action == "assignments":
@@ -403,8 +498,7 @@ class CoursePortal:
                 if set(form) != expected or not hmac.compare_digest(session.csrf.encode(), form.get("csrf", "").encode()):
                     raise ValueError("invalid CSRF")
                 if action == "logout":
-                    self.sessions.pop(key)
-                    return self._entry(course, "로그아웃되었습니다.")
+                    return self._logout_session(course, key, session, form, cookies, origin)
                 try:
                     assignment = service.state.get_bundle_assignment(form["assignment_id"])
                 except PlatformNotFound as exc:
@@ -414,8 +508,10 @@ class CoursePortal:
                 grant, code = service.create_authenticated_assignment_claim(session.credential, form["assignment_id"])
                 self.sessions.pop(key)
                 body = claim_body(self._course_label(course), assignment, code, self.api_url,
-                                  grant.expires_at, course)
-                return self._page("과제 수령 코드", body, cookie=self._cookie(course, "", clear=True), enhanced=True)
+                                  grant.expires_at, course,
+                                  member_csrf=session.csrf if session.member_session else None)
+                return self._page("과제 수령 코드", body, cookie=self._cookie(course, "", clear=True), enhanced=True,
+                                  navigation=self._student_nav(course, 'assignments'))
         except (ValueError, InvalidSignedValue, PlatformAPIError) as exc:
             status = exc.status if isinstance(exc, PlatformAPIError) else 403
             if isinstance(exc, PlatformAPIError) and exc.code in {'assignment_claim_denied', 'assignment_claim_unavailable'}:

@@ -557,6 +557,7 @@ export function normalizeAssignments(payload: unknown): Assignment[] {
       courseLabel:
         (course && firstString(course, ["name", "title", "course_key", "key"])) ??
         firstString(raw, ["course_name", "course_key"]),
+      courseKey: (course && firstString(course, ["course_key", "key"])) ?? firstString(raw, ["course_key"]),
       status: firstString(raw, ["status", "state"]),
       ready: assignmentReady,
       deliveryMode:
@@ -623,8 +624,10 @@ export function normalizeSubmission(payload: unknown): SubmissionSummary | undef
     return undefined;
   }
   const sourceSha = firstString(raw, ["source_sha"]);
+  const receivedAt = firstString(raw, ["received_at"]);
   return {
     id,
+    receivedAt: receivedAt && Number.isFinite(Date.parse(receivedAt)) ? receivedAt : undefined,
     previousBest: previousBest(raw.previous_best),
     state: firstString(raw, ["state", "status"]) ?? "received",
     headSha:
@@ -646,7 +649,9 @@ export function normalizeGradeResult(payload: unknown): GradeResult | undefined 
   const rubricRaw = raw.rubric;
   const diagnosticsRaw = Array.isArray(raw.diagnostics) ? raw.diagnostics : [];
   const sourceSha = firstString(raw, ["source_sha"]);
+  const receivedAt = firstString(raw, ["received_at"]);
   return {
+    receivedAt: receivedAt && Number.isFinite(Date.parse(receivedAt)) ? receivedAt : undefined,
     previousBest: previousBest(raw.previous_best),
     state: firstString(raw, ["state", "status"]) ?? "published",
     headSha:

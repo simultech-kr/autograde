@@ -58,7 +58,9 @@ def test_lists_switches_direct_paths_and_create_are_scoped(personal, tmp_path):
     page, cookies = get(web, BASE + '/rubrics/new')
     assert post(web, '/instructor/courses', page, cookies, code='forbidden', name='X', year='2026', semester='2', section='01').status == 403
     owner, _ = get(web, '/instructor', auth=basic('owner'))
-    assert 'come2201' in owner.body and 'come3105' in owner.body and '/instructor/courses' in owner.body
+    assert 'come2201' in owner.body and 'come3105' in owner.body
+    assert '/instructor/admin#course-registration' in owner.body
+    assert '/instructor/courses' in get(web, '/instructor/admin', auth=basic('owner'))[0].body
     assert web.principal is None and web.courses.get_course('come3105')
     (tmp_path / 'personal-home.html').write_text(get(web, '/instructor')[0].body)
     (tmp_path / 'personal-course.html').write_text(get(web)[0].body)

@@ -243,6 +243,11 @@ class ContentService:
             temp.unlink(missing_ok=True)
 
     def upload(self, course_key, collection_id, *, revision, path, data, actor):
+        from .course_file_guard import course_file_guard
+        with course_file_guard(self.root.parent, course_key):
+            return self._upload_guarded(course_key, collection_id, revision=revision, path=path, data=data, actor=actor)
+
+    def _upload_guarded(self, course_key, collection_id, *, revision, path, data, actor):
         path, actor = content_path(path), _actor(actor)
         if not isinstance(data, bytes) or len(data) > MAX_FILE_BYTES:
             raise ValueError("콘텐츠 파일은 25 MiB 이하여야 합니다.")
@@ -389,6 +394,12 @@ class ContentService:
         return commit, tree_sha256
 
     def publish(self, course_key, collection_id, *, revision, idempotency_key, actor, reauthorize=None):
+        from .course_file_guard import course_file_guard
+        with course_file_guard(self.root.parent, course_key):
+            return self._publish_guarded(course_key, collection_id, revision=revision,
+                                         idempotency_key=idempotency_key, actor=actor, reauthorize=reauthorize)
+
+    def _publish_guarded(self, course_key, collection_id, *, revision, idempotency_key, actor, reauthorize=None):
         actor = _actor(actor)
         if not isinstance(idempotency_key, str) or re.fullmatch(r"[A-Za-z0-9_-]{8,100}", idempotency_key) is None:
             raise ValueError("공개 재시도 키는 영문·숫자·밑줄·하이픈 8~100자여야 합니다.")

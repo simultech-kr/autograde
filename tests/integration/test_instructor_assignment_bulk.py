@@ -216,7 +216,7 @@ def test_bulk_review_ticket_cannot_be_forged_or_reused_in_another_scope(setup, f
         endpoint = APPLY.replace('come2201', 'come3105')
     else:
         caller = Browser(browser.web)
-        caller.get('/instructor')
+        caller.get(BASE + '/assignments')
     assert caller.post(endpoint, ticket=reviewed, confirm='yes').status == 400
     assert state.get_bundle_assignment('ticket_target').active
 

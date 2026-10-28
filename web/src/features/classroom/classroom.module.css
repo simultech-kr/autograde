@@ -1,5 +1,4 @@
-.links,.filters,.live,.summary,.tabs,.controlButtons { display:flex; flex-wrap:wrap; gap:12px; align-items:center; }
-.links { margin-bottom:20px; }
+.filters,.live,.summary,.tabs,.controlButtons { display:flex; flex-wrap:wrap; gap:12px; align-items:center; }
 .filters { margin:16px 0; align-items:end; }
 .filters label { display:flex; flex-direction:column; gap:6px; flex:1 1 210px; max-width:420px; min-width:0; }
 .filters select,.filters input { width:100%; }

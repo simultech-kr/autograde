@@ -784,3 +784,39 @@ test("checkpoint semantic dedup validates the received digest while retaining st
   controller.abort(); await assert.rejects(client.getLearningCheckpoints(scope, controller.signal), /취소/);
   assert.equal(transport.calls.length, 1);
 });
+
+test("remote learning APIs use authenticated scoped endpoints and exact checkpoint IDs", async () => {
+  const session = {id:"space_one",status:"ready",checkpoint_id:"cp_1",created_at:"2026-10-28T10:00:00Z",expires_at:"2026-10-28T11:00:00Z"};
+  const output = {exit_code:0,stdout:"hello",stderr:""};
+  const transport = new FakeTransport([{enabled:true,provider:"remote_linux",languages:["c","cpp"],session:null}, {session},
+    {session:{...session,checkpoint_id:"cp_2"},checkpoint_id:"cp_2",status:"completed",compile:output,run:output},
+    {status:"closed",checkpoint_id:"cp_3",cleanup_verified:true}]);
+  const tokens = new TokenManager(transport); await tokens.storeSession({access_token:"access",refresh_token:"refresh",expires_in:3600},transport.baseUrl);
+  const client = new AutogradeClient(transport,tokens), scope = {baseUrl:transport.baseUrl,generation:tokens.getSessionGeneration(),assignmentId:"a1",rootPath:"/private/student",scheme:"file",authority:""};
+  const signal = new AbortController().signal;
+  assert.equal((await client.getLearningRuntime(scope,signal)).enabled,true);
+  assert.equal((await client.createLearningRuntime(scope,"cp_1",signal)).id,"space_one");
+  assert.equal((await client.runLearningRuntime(scope,"space_one","cp_2",{language:"cpp",sources:["main.cpp"],stdin:"42\n"},signal)).checkpoint_id,"cp_2");
+  assert.equal((await client.closeLearningRuntime(scope,"space_one","cp_3",signal)).cleanup_verified,true);
+  assert.deepEqual(transport.calls.map(call=>call.endpoint),[
+    "/v1/assignments/a1/learning-runtime","/v1/assignments/a1/learning-runtime/sessions",
+    "/v1/assignments/a1/learning-runtime/sessions/space_one/run","/v1/assignments/a1/learning-runtime/sessions/space_one/close"]);
+  assert.ok(transport.calls.every(call=>call.bearerToken==="access"&&call.options?.expectedBaseUrl===transport.baseUrl&&call.options?.signal===signal));
+  assert.equal(transport.calls[2]?.options?.timeoutMs,90_000);
+  assert.deepEqual(JSON.parse(String(transport.calls[2]?.init.body)),{checkpoint_id:"cp_2",language:"cpp",sources:["main.cpp"],stdin:"42\n"});
+  assert.ok(transport.calls.every(call=>!String(call.init.body).includes("/private")));
+  await tokens.clear();await assert.rejects(client.getLearningRuntime(scope,signal),/세션이 변경/);assert.equal(transport.calls.length,4);
+});
+
+test("remote API rejects wrong result versions, unverified cleanup and invalid requests before dispatch", async()=>{
+  const session = {id:"space_one",status:"ready",checkpoint_id:"cp_old",created_at:"2026-10-28T10:00:00Z",expires_at:"2026-10-28T11:00:00Z"};
+  const transport = new FakeTransport([{session},{status:"closed",checkpoint_id:"cp_1",cleanup_verified:false}]);
+  const tokens = new TokenManager(transport);await tokens.storeSession({access_token:"access",refresh_token:"refresh",expires_in:3600},transport.baseUrl);
+  const client = new AutogradeClient(transport,tokens), scope = {baseUrl:transport.baseUrl,generation:tokens.getSessionGeneration(),assignmentId:"a1",rootPath:"/private/student",scheme:"file",authority:""};
+  const signal = new AbortController().signal;
+  await assert.rejects(client.createLearningRuntime(scope,"cp_1",signal),/일치/);
+  await assert.rejects(client.closeLearningRuntime(scope,"space_one","cp_1",signal),/삭제/);
+  await assert.rejects(client.runLearningRuntime(scope,"space_one","cp_1",{language:"cpp",sources:["../../secret.cpp"],stdin:""},signal));
+  await assert.rejects(client.closeLearningRuntime(scope,"../other","cp_1",signal));
+  assert.equal(transport.calls.length,2);
+});

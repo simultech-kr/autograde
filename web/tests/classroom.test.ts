@@ -2,12 +2,30 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { parseClassroom, parseClassroomDetail, parseClassroomCommand } from "../src/lib/contracts/classroom.ts";
 import { classroomURL, createClassroomCommand } from "../src/lib/api/classroom.ts";
-import { connectionLabels, stableStudents, submissionLabel, submissionScore, commandStatusLabel, commandResultLabel, checkLabel } from "../src/features/classroom/presentation.ts";
+import { connectionLabels, stableStudents, submissionLabel, submissionScore, commandStatusLabel, commandResultLabel, checkLabel, attentionReasons, needsAttention } from "../src/features/classroom/presentation.ts";
 
 const attempt = { submission_id: "sub-new", received_at: "2026-10-25T10:00:00Z", state: "received", score: null, max_score: null, code_version: "a".repeat(64), delivery_mode: "bundle" };
 const student = { student_key: "TEST-001", student_name: "Test <script>", connection: { state: "online", last_seen_at: "2026-10-25T10:00:00Z", environment: { os: "macos", remote_name: "none", ide: "vscode" } }, activity: { kind: "file_saved", received_at: "2026-10-25T10:00:00Z", assignment_id: "a1" }, submission: { state: "received", submitted: true, latest: attempt, previous_best: { submission_id: "sub-old", received_at: "2026-10-24T10:00:00Z", score: 90, max_score: 100 } } };
 const meta = { contract_version: "1", request_id: "request-1", course_key: "come2201", version: "a".repeat(64), server_time: "2026-10-25T10:00:00Z", selected_assignment_id: "a1" };
 const fixture = () => ({ ...meta, summary: { total: 1, online: 1, stale: 0, offline: 0, never_connected: 0, submitted: 1, pending: 1 }, students: [structuredClone(student)], assignments: [{ assignment_id: "a1", title: "Observer", assignment_key: "week1", release_id: "r1", delivery_mode: "bundle" }] });
+
+test("attention filtering separates IDE delay, server grading delay and request failure", () => {
+  const row = parseClassroom(fixture()).students[0];
+  assert.deepEqual(attentionReasons(row, meta.server_time), []);
+  assert.equal(needsAttention(row, "grading_wait", "2026-10-25T10:10:00Z"), true);
+  row.submission.latest!.state = "published";
+  assert.equal(needsAttention(row, "grading_wait", "2026-10-25T11:00:00Z"), false);
+  row.connection.state = "stale"; row.command_attention = true;
+  assert.deepEqual(attentionReasons(row, meta.server_time), ["connection", "command"]);
+  row.connection.state = "never_connected"; row.command_attention = false;
+  assert.equal(needsAttention(row, "attention", meta.server_time), false);
+  assert.equal(needsAttention(row, "never_connected", meta.server_time), true);
+  row.submission.latest!.state = "infra_failed";
+  assert.equal(needsAttention(row, "grading_error", meta.server_time), true);
+  row.submission.latest!.state = "queued";
+  assert.equal(needsAttention(row, "grading_wait", "2026-10-25T09:50:00Z"), false);
+  assert.equal(needsAttention(row, "grading_wait", "invalid"), false);
+});
 
 test("snapshot contract distinguishes IDE report, official submission and previous best", () => {
   const data = parseClassroom(fixture()), row = data.students[0];

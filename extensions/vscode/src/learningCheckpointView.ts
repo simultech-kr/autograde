@@ -5,7 +5,7 @@ import * as vscode from "vscode";
 import type { AutogradeClient } from "./api";
 import { containsPath, validateExistingAssignment } from "./assignmentWorkspace";
 import { createSubmissionBundle, extractSubmissionBundle, writeWorkspaceMarker, type SubmissionBundle } from "./bundle";
-import { LearningCheckpointAutosaver, learningCheckpointLabel, sameLearningScope, type LearningCheckpointScope, type LearningCheckpointStatus } from "./learningCheckpoint";
+import { LearningCheckpointAutosaver, learningCheckpointLabel, sameLearningScope, type LearningCheckpointScope, type LearningCheckpointStatus, type SavedLearningSnapshot } from "./learningCheckpoint";
 import { saveAssignmentDocuments } from "./submissionPreflight";
 
 export const SAVE_LEARNING_CHECKPOINT_COMMAND = "autograde.saveLearningCheckpoint";
@@ -107,6 +107,18 @@ export class LearningCheckpointView {
         timer = setTimeout(() => { this.autosaver.abortCurrent(); resolve(false); }, timeoutMs);
       })]);
     } finally { if (timer) clearTimeout(timer); }
+  }
+  /** Capture this assignment now; never choose the newest history item from another upload. */
+  async saveForExecution(scope: LearningCheckpointScope): Promise<SavedLearningSnapshot> {
+    if (!sameLearningScope(scope, this.scope())) throw new Error("연결된 과제가 변경되었습니다.");
+    let saved = await this.saveNow(false);
+    // Save participants may edit a document while it is being saved. Re-capture once;
+    // continuous edits must leave the operation incomplete rather than use an old receipt.
+    if (!saved && this.autosaver.getStatus().state === "waiting" && this.autosaver.getStatus().savedAt
+      && sameLearningScope(scope, this.scope())) saved = await this.saveNow(false);
+    const snapshot = saved && sameLearningScope(scope, this.scope()) ? this.autosaver.getSavedSnapshot() : undefined;
+    if (!snapshot) throw new Error("현재 코드의 서버 저장을 확인하지 못했습니다. 편집을 잠시 멈추고, 저장 상태와 연결을 확인한 뒤 다시 시도하세요. 연속 저장 제한이면 10초 후 재시도하세요.");
+    return snapshot;
   }
   async restore(): Promise<void> {
     const scope = this.scope();

@@ -8,7 +8,7 @@ import pytest
 from autograde import instructor_student_materials as instructor
 from autograde import student_material_portal as student
 from autograde.instructor_web import InstructorWeb
-from autograde.platform_service import PlatformResponse
+from autograde.platform_portal import CoursePortal
 from autograde.platform_state import PlatformConflict, PlatformNotFound
 
 
@@ -155,12 +155,14 @@ def test_revision_route_rejects_wrong_method_and_student_selector(method, route)
 
 
 def portal_for(row):
-    session = SimpleNamespace(csrf='student-csrf', credential=SimpleNamespace(student_id=1, student_key='001'))
+    session = SimpleNamespace(csrf='student-csrf', member_session=False,
+                              credential=SimpleNamespace(student_id=1, student_key='001'))
     portal = SimpleNamespace(student_materials=SimpleNamespace(list_for_student=lambda *args: [row]),
                              _course_label=lambda course: 'COME2201',
-                             _page=lambda title, body, status=200: PlatformResponse(status, body),
+                             _page=CoursePortal._page, exam_papers=None,
                              services={'come2201': object()}, courses=None, lock=RLock(),
                              web_url='https://grade.example.edu:20010', _session=lambda *args: ('session', session))
+    portal._student_nav = lambda course, current: CoursePortal._student_nav(portal, course, current)
     return portal, session
 
 
@@ -171,6 +173,8 @@ def test_student_sees_current_revision_notice_and_safe_change_note():
     assert '수정본 v2 · 다시 다운로드하세요' in html
     assert '&lt;b&gt;정정&lt;/b&gt;<br>새 파일 확인' in html
     assert f'action="{STUDENT_BASE}/{SECOND}/download"' in html
+    assert any(link.get('href') == STUDENT_BASE and link.get('aria-current') == 'page'
+               for link in Elements(html).all('a'))
     assert FIRST not in html
 
 

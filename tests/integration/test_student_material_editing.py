@@ -290,6 +290,7 @@ def test_historical_files_are_private_course_scoped_and_not_student_addressable(
     other = MaterialBrowser(env.server)
     other.authorization = "Basic " + base64.b64encode(("teacher:" + password).encode()).decode()
     assert other.get("/instructor")[0] == 200
+    assert other.get(BASE.replace(COURSE, "come3105"))[0] == 200
     assert other.get(target)[0] == 404
     assert other.post(path, revision=str(material(env, path)["revision"]), **FIELDS)[0] == 404
 

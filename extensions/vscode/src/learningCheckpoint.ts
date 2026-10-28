@@ -11,6 +11,10 @@ export interface LearningCheckpoint {
   readonly version: number;
 }
 export interface LearningCheckpointReceipt extends LearningCheckpoint { readonly received_archive_sha256?: string; }
+export interface SavedLearningSnapshot {
+  readonly checkpoint: LearningCheckpointReceipt;
+  readonly filePaths: readonly string[];
+}
 export interface LearningCheckpointScope {
   readonly baseUrl: string;
   readonly generation: number;
@@ -68,6 +72,7 @@ export class LearningCheckpointAutosaver {
   private observedEdit = false;
   private editRevision = 0;
   private savedHash?: string;
+  private savedSnapshot?: SavedLearningSnapshot;
   private attemptedHash?: string;
   private attemptKey = "";
   private attempts = 0;
@@ -85,6 +90,10 @@ export class LearningCheckpointAutosaver {
   }, private readonly clock: Clock = {setTimeout, clearTimeout}) {}
 
   getStatus(): LearningCheckpointStatus { return this.status; }
+  getSavedSnapshot(): SavedLearningSnapshot | undefined {
+    this.reconcile();
+    return this.status.state === "saved" ? this.savedSnapshot : undefined;
+  }
   private safeScope(): LearningCheckpointScope | undefined { try { return this.options.currentScope(); } catch { return undefined; } }
   reconcile(): void {
     if (this.disposed) return;
@@ -93,6 +102,7 @@ export class LearningCheckpointAutosaver {
     this.revision++; this.flight?.controller.abort(); this.clearTimer();
     this.scope = next ? {...next} : undefined;
     this.baseline = this.savedHash = this.attemptedHash = undefined; this.observedEdit = false; this.editRevision = 0;
+    this.savedSnapshot = undefined;
     this.attempts = 0; this.blocked = false;
     this.update({state: next ? "waiting" : "inactive"});
     if (next && !this.flight) void this.run(false);
@@ -118,6 +128,7 @@ export class LearningCheckpointAutosaver {
   abortCurrent(): void { this.flight?.controller.abort(); }
   dispose(): void {
     this.disposed = true; this.revision++; this.scope = undefined;
+    this.savedSnapshot = undefined;
     this.flight?.controller.abort(); this.clearTimer();
     this.update({state: "inactive"});
   }
@@ -152,6 +163,7 @@ export class LearningCheckpointAutosaver {
         if (!current()) return;
         if ((receipt.received_archive_sha256 ?? receipt.archive_sha256) !== bundle.sha256) throw new Error("서버 저장본 검증에 실패했습니다.");
         this.savedHash = bundle.sha256; this.attempts = 0;
+        this.savedSnapshot = {checkpoint: receipt, filePaths: [...(bundle.filePaths ?? [])]};
         this.update({state: capturedEditRevision === this.editRevision ? "saved" : "waiting", savedAt: receipt.created_at});
       } catch (error) {
         if (!this.current(scope, revision)) return;

@@ -199,8 +199,17 @@ class ClassroomState:
                 previous = [item for item in history[1:] if item['state'] == 'published' and item['published_at'] and item['score'] is not None]
                 best = max(previous, key=lambda item: item['score']) if previous else None
                 official = bool(latest is not None and latest['any_receipt_recorded'])
+                recent_commands = commands.get(row['id'], [])
+                # Use the newest request per action/assignment, so a successful
+                # retry clears the earlier failure. Do not send command text in
+                # the classroom summary; details remain in the student dialog.
+                newest_commands = {}
+                for command in recent_commands:
+                    newest_commands.setdefault((command['kind'], command['assignment_id']), command)
+                command_attention = any(command['status'] in {'failed', 'expired'} for command in newest_commands.values())
                 student = dict(student_key=row['student_key'], student_name=row['student_name'],
                     commands_version=ClassroomCommands.history_version(commands.get(row['id'], [])),
+                    command_attention=command_attention,
                     connection=connections.get(row['id'], dict(state='never_connected', last_seen_at=None, environment=None)),
                     activity=next(iter(activities.get(row['id'], [])), None),
                     submission=dict(state=('not_assigned' if not eligible else latest['state'] if latest

@@ -64,6 +64,7 @@ async function main() {
       throw error;
     }
     assert.equal(await anonymousPage.getByTestId('result-row').count(), 0);
+    assert.equal(await anonymousPage.getByTestId('course-navigation').count(), 0);
     await anonymous.close();
     check('Fresh unauthenticated context shows explicit authentication entry and no results');
 
@@ -91,6 +92,12 @@ async function main() {
     assert.ok(responses.some(r => r.url.includes(resultPath) && r.status === 200));
     assert.equal(new URL(page.url()).pathname, '/app');
     check('Fresh credential context follows real Python Basic entry 303 → bootstrap → paginated results');
+
+    const courseNav = page.getByTestId('course-navigation');
+    assert.equal(await courseNav.getByRole('link', {name: '수업 홈', exact: true}).getAttribute('href'), '/courses/come2201/instructor');
+    assert.equal(await courseNav.locator('[aria-current="page"]').innerText(), '제출·채점');
+    assert.equal(await page.getByRole('navigation', {name: '포털 이동'}).getByRole('link', {name: '학생 포털'}).getAttribute('href'), '/app/student');
+    check('Authorized portal navigation retains current course and identifies the active section');
 
     for (const row of await page.getByTestId('result-row').all()) {
       assert.match(await row.getByTestId('current-score').innerText(), /^0\s*\/\s*100/);
@@ -146,6 +153,7 @@ async function main() {
     assert.equal(scoped.status(), 200);
     assert.equal((await scoped.json()).rows.length, 0);
     await page.getByTestId('course-select').selectOption('come3105');
+    await page.waitForFunction(() => document.querySelector('[data-testid="course-navigation"] a')?.getAttribute('href') === '/courses/come3105/instructor');
     await page.waitForFunction(() => document.querySelectorAll('[data-testid="result-row"]').length === 0);
     assert.equal(await page.getByTestId('student-search').inputValue(), '');
     await page.getByTestId('course-select').selectOption('come2201');
@@ -237,6 +245,12 @@ async function main() {
         await page.setViewportSize({width, height: width > 1000 ? 1050 : 900});
         const overflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
         assert.equal(overflow, false, `document overflows at ${width}px in ${mode}`);
+        const navBounds = await courseNav.locator('a').evaluateAll(links => links.map(link => {
+          const rect = link.getBoundingClientRect(); return {left: rect.left, right: rect.right, height: rect.height};
+        }));
+        assert.equal(navBounds.length, 6);
+        for (const link of navBounds) assert.ok(link.left >= 0 && link.right <= width + 1 && link.height >= 40,
+          `portal navigation clipped or too small at ${width}px in ${mode}`);
         assert.equal(await page.getByTestId('result-row').count(), 20);
         const flat = await page.locator('section[aria-label="제출 요약"]').evaluate(section => {
           const parent = getComputedStyle(section);

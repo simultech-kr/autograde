@@ -61,10 +61,14 @@ def initialize_course_admin(state: PlatformStateStore, connection=None) -> None:
         for statement in COURSE_ADMIN_SCHEMA.split(';'):
             if statement.strip():
                 db.execute(statement)
+        from .course_deletion import initialize as initialize_deletion
+        initialize_deletion(state, db)
         for key in ('come3105', 'come2201'):
             db.execute("INSERT OR IGNORE INTO admin_courses "
                        "(course_key,code,status,legacy,created_at,updated_at) "
-                       "VALUES (?,?,'active',1,?,?)", (key, key, utc_iso(), utc_iso()))
+                       "SELECT ?,?,'active',1,?,? WHERE NOT EXISTS "
+                       "(SELECT 1 FROM admin_course_deletions WHERE course_key=?)",
+                       (key, key, utc_iso(), utc_iso(), key))
 
 
 def _text(value: Any, field: str, limit: int, *, required=True) -> str:
@@ -89,9 +93,32 @@ def _course(db, course_key, *, writable=False):
 
 
 class CourseAdminService:
-    def __init__(self, state: PlatformStateStore, *, before_activate=None):
+    def __init__(self, state: PlatformStateStore, *, before_activate=None,
+                 file_planner=None, before_delete=None, after_delete=None, remote_cleanup_required=False,
+                 cleanup_context=None, after_delete_context=None):
         self.state = state
         self.before_activate = before_activate
+        self.file_planner = file_planner
+        self.before_delete = before_delete
+        self.after_delete = after_delete
+        self.remote_cleanup_required = bool(remote_cleanup_required)
+        self.cleanup_context = cleanup_context
+        self.after_delete_context = after_delete_context
+        from .course_deletion import initialize as initialize_deletion
+        initialize_deletion(state)
+
+    def deletion_preview(self, course_key):
+        from .course_deletion import preview
+        return preview(self, course_key)
+
+    def delete_course(self, course_key, *, confirm_course, expected_state, reauthorize=None):
+        from .course_deletion import delete
+        return delete(self, course_key, confirm_course=confirm_course, expected_state=expected_state,
+                      reauthorize=reauthorize)
+
+    def deletion_history(self):
+        from .course_deletion import history
+        return history(self)
 
     def list_courses(self, *, active_only=False):
         with self.state._connection() as db:
@@ -252,7 +279,7 @@ class CourseAdminService:
         for requests, assignments in (('bundle_submission_requests', 'bundle_assignment_releases'),
                                       ('submission_requests', 'platform_assignments')):
             if db.execute(f"SELECT 1 FROM {requests} r JOIN {assignments} a ON a.assignment_id=r.assignment_id "
-                          "WHERE a.course_key=? AND r.state IN ('received','accepted','queued','running') LIMIT 1", (key,)).fetchone():
+                          "WHERE a.course_key=? AND r.state IN ('received','verifying','pinning','accepted','queued','running') LIMIT 1", (key,)).fetchone():
                 raise PlatformConflict('course has unfinished submissions')
         if db.execute("SELECT 1 FROM bundle_release_checks c JOIN bundle_assignment_releases a "
                       "ON a.assignment_id=c.assignment_id WHERE a.course_key=? AND c.status='pending' LIMIT 1", (key,)).fetchone():

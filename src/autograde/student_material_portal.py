@@ -59,7 +59,7 @@ def _listing(portal, course, session):
              f'<a href="/courses/{course}">실습 과제 받기</a>')
     if getattr(portal, 'exam_papers', None) is not None:
         body += f'<a href="/courses/{course}/exam-papers">공통 시험지 받기</a>'
-    body += ('<a href="/">다른 교과목 선택</a></nav>'
+    body += ('<a href="/student">다른 교과목 선택</a></nav>'
              '<p class="progress-hint">다운로드 후 브라우저의 다운로드 목록에서 파일을 확인하세요. '
              'ZIP은 저장 후 필요한 파일을 직접 확인하세요. 이 화면에서 답안을 제출하거나 채점하지 않습니다.</p>'
              '<p class="progress-hint">로그인은 10분 후 만료됩니다. 다운로드가 안 되면 다시 인증한 뒤 재시도하세요. '
@@ -67,7 +67,7 @@ def _listing(portal, course, session):
              f'<form method="post" action="{base}/logout">'
              f'<input type="hidden" name="csrf" value="{escape(session.csrf, quote=True)}">'
              '<button class="secondary">로그아웃</button></form>')
-    return portal._page('내 자료 받기', body)
+    return portal._page('내 자료 받기', body, navigation=portal._student_nav(course, 'materials'))
 
 
 def request(portal, method, path, form, cookies, origin):
@@ -87,7 +87,7 @@ def request(portal, method, path, form, cookies, origin):
         if method == 'POST' and action == 'login' and not download:
             raw, session = portal._login_session(course, form, cookies, destination='materials')
             return PlatformResponse(303, None, {
-                'Location': f'/courses/{course}/materials', 'Set-Cookie': portal._cookie(course, raw)})
+                'Location': f'/courses/{course}/materials', **portal._login_headers(course, raw)})
         with portal.lock:
             try:
                 key, session = portal._session(course, cookies)
@@ -102,8 +102,7 @@ def request(portal, method, path, form, cookies, origin):
                         or not hmac.compare_digest(session.csrf.encode(), supplied.encode())):
                     raise PlatformAPIError(403, 'invalid_csrf', '내 자료 목록을 새로 열고 다시 시도하세요.')
                 if action == 'logout' and not download:
-                    portal.sessions.pop(key, None)
-                    return portal._entry(course, '로그아웃되었습니다.', destination='materials')
+                    return portal._logout_session(course, key, session, form, cookies, origin, destination='materials')
                 if download and action.startswith('mat_'):
                     student_id = session.credential.student_id
                     # File identity is derived only from the authenticated session;

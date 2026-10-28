@@ -460,6 +460,17 @@
   font-size: 0.8125rem;
 }
 
+@media (min-width: 1025px) {
+  .context {
+    padding-top: 0;
+    margin-bottom: var(--space-2);
+  }
+
+  .summary {
+    margin-bottom: var(--space-3);
+  }
+}
+
 @media (max-width: 1024px) {
   .metrics {
     grid-template-columns: repeat(2, minmax(0, 1fr));

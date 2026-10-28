@@ -9,13 +9,13 @@ import { renderToStaticMarkup } from "react-dom/server";
 import ts from "typescript";
 import type { ResultRow } from "../src/lib/contracts/instructor.ts";
 import { assignmentDownloadsURL, submissionDownloadURL } from "../src/features/results/downloads.ts";
-import { sampleResults } from "./fixtures.ts";
+import { sampleBootstrap, sampleResults } from "./fixtures.ts";
 
 // Node's native TypeScript runner does not transform JSX or CSS modules. Load
 // only these repository presentation modules in memory; no app, network,
 // browser globals, generated files, or new test dependency is needed.
 const sourceRoot = fileURLToPath(new URL("../src/", import.meta.url));
-const allowed = ["features/results/ResultsView.tsx", "components/InstructorUI.tsx", "features/results/query.ts", "features/results/downloads.ts"]
+const allowed = ["features/results/ResultsView.tsx", "components/InstructorUI.tsx", "features/results/query.ts", "features/results/downloads.ts", "features/navigation.ts"]
   .map(file => resolve(sourceRoot, file));
 const require = createRequire(import.meta.url);
 const cache = new Map<string, { exports: unknown }>();
@@ -42,6 +42,7 @@ function load(file: string): unknown {
   return module.exports;
 }
 const { AssignmentDownloadsLink, ResultsTable, SummaryCards, resultPresentation, refreshPresentation } = load(allowed[0]) as typeof import("../src/features/results/ResultsView");
+const { AppShell } = load(allowed[1]) as typeof import("../src/components/InstructorUI");
 const row = (patch: Partial<ResultRow> = {}): ResultRow => ({ ...sampleResults.rows[0], ...patch });
 const render = (value: ResultRow) => renderToStaticMarkup(createElement(ResultsTable, { rows: [value] }));
 const renderCourse = (value: ResultRow, courseKey = sampleResults.course_key) =>
@@ -51,6 +52,30 @@ const cell = (html: string, testId: string) => {
   assert.ok(match, `Missing ${testId} cell`);
   return match[1];
 };
+
+test("public portal shell exposes audience entries without any course or student context", () => {
+  const html = renderToStaticMarkup(createElement(AppShell, { children: createElement("h1", null, "제출·채점 현황") }));
+  assert.match(html, /href="\/instructor"/);
+  assert.match(html, /교수자 포털/);
+  assert.match(html, /href="\/"[^>]*>포털 홈/);
+  assert.match(html, /href="\/app\/student"[^>]*>학생 포털/);
+  assert.doesNotMatch(html, /course-navigation|\/courses\/|course_key=|csrf|SAMPLE-001|로그아웃/);
+  assert.match(html, /<main id="main" tabindex="-1"/);
+});
+
+test("portal shell marks the current screen and escapes selected-course labels", () => {
+  const html = renderToStaticMarkup(createElement(AppShell, {
+    children: "내용", section: "results", resultsEnabled: true,
+    course: { ...sampleBootstrap.courses[0], name: '<img src=x onerror="alert(1)">', section: "01" },
+  }));
+  assert.match(html, /data-testid="course-navigation"/);
+  assert.match(html, /aria-label="수업 메뉴"/);
+  assert.equal((html.match(/aria-current="page"/g) || []).length, 1);
+  assert.match(html, /href="\/app\?course_key=come2201" aria-current="page"/);
+  assert.match(html, /href="\/app\/classroom\?course_key=come2201"/);
+  assert.match(html, /&lt;img src=x onerror=&quot;alert\(1\)&quot;&gt;/);
+  assert.doesNotMatch(html, /<img|기존 관리 화면/);
+});
 
 test("summary separates student headcount from five latest-state metrics and explains overlapping totals", () => {
   const html = renderToStaticMarkup(createElement(SummaryCards, { summary: sampleResults.summary }));

@@ -46,6 +46,12 @@ class CourseRuntimeRegistry(Mapping):
         self[key]
         return self._processors[key]
 
+    def invalidate(self, key):
+        """Drop deleted-course caches; existing callers still recheck SQLite."""
+        with self._lock:
+            self._services.pop(key, None)
+            self._processors.pop(key, None)
+
 
 class _CourseProcessor:
     course_key = "portal-shared"

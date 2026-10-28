@@ -6,8 +6,9 @@ import { ApiError } from "../../lib/api/client";
 import { classroom, classroomBootstrap, classroomDetail, classroomEntry, classroomURL, type CommandRequest } from "../../lib/api/classroom";
 import { ContractError, type Bootstrap } from "../../lib/contracts/instructor";
 import { parseClassroom, type ClassroomDetail, type ClassroomSnapshot, type ClassroomStudent } from "../../lib/contracts/classroom";
-import { activityLabel, connectionLabels, displayTime, stableStudents, submissionLabel, submissionScore } from "./presentation";
+import { activityLabel, connectionLabels, displayTime, stableStudents, submissionLabel, submissionScore, needsAttention, type AttentionFilter } from "./presentation";
 import { availableModules } from "../registry";
+import { selectedCourse } from "../navigation";
 import { ClassroomControls } from "./ClassroomControls";
 import styles from "./classroom.module.css";
 
@@ -29,6 +30,7 @@ export function ClassroomDashboard() {
   const [identity, setIdentity] = useState<Bootstrap | null>(null), [course, setCourse] = useState(""), [assignment, setAssignment] = useState("");
   const [data, setData] = useState<ClassroomSnapshot | null>(null), [error, setError] = useState<Failure | null>(null), [stream, setStream] = useState<Stream>("connecting");
   const [filter, setFilter] = useState("all"), [search, setSearch] = useState(""), [selected, setSelected] = useState<string | null>(null);
+  const [attention, setAttention] = useState<AttentionFilter>("all");
   const [detail, setDetail] = useState<ClassroomDetail | null>(null), [detailError, setDetailError] = useState(""), [tab, setTab] = useState("overview");
   const [boot, setBoot] = useState(0), [refresh, setRefresh] = useState(0), [lastSuccess, setLastSuccess] = useState("");
   const [detailRefresh, setDetailRefresh] = useState(0);
@@ -66,7 +68,7 @@ export function ClassroomDashboard() {
     window.history.replaceState(null, "", `/app/classroom?${params}`);
     const available = () => navigator.onLine !== false && !document.hidden;
     const clear = () => { generation++; source?.close(); source = null; controller?.abort(); clearTimeout(timer); clearTimeout(watchdog); };
-    const terminal = (err: unknown) => { stopped = true; clear(); setData(null); setDetail(null); setSelected(null); setStream("denied"); setError(failure(err)); };
+    const terminal = (err: unknown) => { stopped = true; clear(); setData(null); setDetail(null); setSelected(null); setIdentity(null); setStream("denied"); setError(failure(err)); };
     const apply = (value: ClassroomSnapshot) => {
       if (value.course_key !== course || value.selected_assignment_id !== (assignment || null)) throw new ContractError();
       setData(old => old?.course_key === course && old.selected_assignment_id === (assignment || null) && old.version === value.version ? old : value);
@@ -130,11 +132,11 @@ export function ClassroomDashboard() {
     if (!selected && dialog.current?.open) { dialog.current.close(); lastButton.current?.focus(); }
   }, [selected]);
   const open = (student: string) => { lastButton.current = document.activeElement instanceof HTMLButtonElement ? document.activeElement : null; setTab("overview"); setDetail(null); setDetailError(""); setSelected(student); };
-  const clearSelection = () => { setSelected(null); setDetail(null); setData(null); setLastSuccess(""); };
-  const students = stableStudents(validData?.students || []).filter(s => (!search || `${s.student_key} ${s.student_name}`.includes(search)) && (!assignment || filter === "all" || (filter === "submitted" ? s.submission.submitted : !s.submission.submitted && s.submission.state !== "not_assigned")));
-  return <AppShell testId="classroom-dashboard">
+  const clearSelection = () => { setSelected(null); setDetail(null); setData(null); setLastSuccess(""); setAttention("all"); };
+  const attentionCount = validData?.students.filter(s => needsAttention(s, "attention", validData.server_time)).length || 0;
+  const students = stableStudents(validData?.students || []).filter(s => (!search || `${s.student_key} ${s.student_name}`.includes(search)) && needsAttention(s, attention, validData?.server_time || "") && (!assignment || filter === "all" || (filter === "submitted" ? s.submission.submitted : !s.submission.submitted && s.submission.state !== "not_assigned")));
+  return <AppShell testId="classroom-dashboard" course={selectedCourse(identity?.courses, course)} section="classroom" resultsEnabled={identity?.capabilities.includes("results.read")}>
     <PageHeading eyebrow="수업 운영 / 실습 교실" title="학생 활동" description="IDE 연결·수업 활동·공식 제출을 확인하고 학생에게 IDE 작업을 요청합니다." label="실시간 · 학생 확인 후 실행" />
-    <nav className={styles.links}><a href={`/app${course ? `?course_key=${encodeURIComponent(course)}` : ""}`}>제출·채점 현황</a><a href={course ? `/courses/${encodeURIComponent(course)}/instructor` : "/instructor"}>수업 관리</a>{course && <a href={`/courses/${encodeURIComponent(course)}/instructor/extensions`}>IDE 확장 배포</a>}</nav>
     {error && <div role="alert" className={styles.notice}><p>{error.message}</p>{error.terminal || !identity ? <a href={classroomEntry(course)}>교수자 인증</a> : <button onClick={() => setRefresh(n => n + 1)}>다시 연결</button>}{!identity && !error.terminal && <button onClick={() => setBoot(n => n + 1)}>다시 조회</button>}</div>}
     {!identity && !error && <p role="status">교수자 접근 권한 확인 중… <a href={classroomEntry(course)}>교수자 인증</a></p>}
     {identity && <>
@@ -148,7 +150,9 @@ export function ClassroomDashboard() {
       {stream !== "live" && validData && <p className={styles.notice}>브라우저의 수신이 중단되었거나 재연결 중입니다. 카드는 마지막 확인 상태이며, 학생 IDE의 연결 종료를 뜻하지 않습니다.</p>}
       {validData && <>
         <div className={styles.summary}><span>수강생 <strong>{validData.summary.total}명</strong></span><span>IDE 연결 <strong>{validData.summary.online}명</strong></span><span>신호 지연 <strong>{validData.summary.stale}명</strong></span><span>공식 제출 <strong>{assignment ? `${validData.summary.submitted}명` : "과제 선택"}</strong></span></div>
-        <div className={styles.filters}><label>학생 검색<input aria-label="학생 검색" value={search} onChange={e => setSearch(e.target.value)} placeholder="학번 또는 이름" /></label><label>제출 상태<select aria-label="제출 상태" value={filter} onChange={e => setFilter(e.target.value)} disabled={!assignment}><option value="all">전체</option><option value="submitted">제출</option><option value="unsubmitted">미제출</option></select></label><span>{students.length}명 · 학번순 고정</span></div>
+        <div className={styles.filters}><label>학생 검색<input aria-label="학생 검색" value={search} onChange={e => setSearch(e.target.value)} placeholder="학번 또는 이름" /></label><label>제출 상태<select aria-label="제출 상태" value={filter} onChange={e => setFilter(e.target.value)} disabled={!assignment}><option value="all">전체</option><option value="submitted">제출</option><option value="unsubmitted">미제출</option></select></label>
+          <label>조치 필요<select aria-label="조치 필요" value={attention} onChange={e => setAttention(e.target.value as AttentionFilter)}><option value="all">전체 학생</option><option value="attention">조치 필요 {attentionCount}명</option><option value="connection">IDE 신호 지연·연결 끊김</option><option value="never_connected">연결 기록 없음</option><option value="grading_error" disabled={!assignment}>제출·채점 오류</option><option value="grading_wait" disabled={!assignment}>채점 접수 후 10분 이상 대기</option><option value="command">IDE 요청 실패·만료</option></select></label><span role="status">{students.length}명 · 학번순 고정</span></div>
+        {attention !== "all" && <p className={styles.footnote}>마지막 서버 확인 상태를 기준으로 분류합니다. 요청 실패·만료는 최근 20개 요청 중 같은 작업·과제의 마지막 상태이며, 과제 선택 시 채점 상태도 확인합니다. 학생 카드에서 원인과 처리 결과를 확인하세요.</p>}
         <div className={styles.grid} aria-label="학생별 현재 상태">{students.map(s => <StudentCard key={s.student_key} student={s} onOpen={() => open(s.student_key)} />)}</div>
         {!students.length && <p className={styles.notice}>표시할 학생이 없습니다. 수강 명단 또는 검색 조건을 확인하세요.</p>}
         <p className={styles.footnote}>카드 선택 → 코드·제출 / 활동·분석 / IDE 요청. 접속 여부나 저장 횟수만으로 출석·집중도·성실도를 판단하지 않습니다.</p>

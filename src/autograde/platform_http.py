@@ -60,6 +60,7 @@ from .platform_events import emit_operator_event
 
 
 DEFAULT_MAX_REQUEST_BYTES = 64 * 1024
+DEFAULT_MAX_RUNTIME_REQUEST_BYTES = 512 * 1024
 DEFAULT_MAX_RESPONSE_BYTES = 1024 * 1024
 DEFAULT_MAX_BUNDLE_REQUEST_BYTES = 25 * 1024 * 1024
 DEFAULT_MAX_FILE_RESPONSE_BYTES = 100 * 1024 * 1024
@@ -134,7 +135,7 @@ class HTTPResult:
 
     status: int
     body: Any = None
-    headers: Mapping[str, str] = field(default_factory=dict)
+    headers: Mapping[str, str | tuple[str, ...]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -144,7 +145,7 @@ class HTTPFileResult:
     status: int
     path: Path
     content_type: str = "application/octet-stream"
-    headers: Mapping[str, str] = field(default_factory=dict)
+    headers: Mapping[str, str | tuple[str, ...]] = field(default_factory=dict)
     retained_checkpoint: bool = False
 
 
@@ -207,6 +208,9 @@ class PlatformHTTPServer(ThreadingHTTPServer):
         self.facade = facade
         self.readiness_check = readiness_check
         self.max_request_bytes = max_request_bytes
+        # The runtime accepts 64 KiB UTF-8 stdin; JSON escaping can expand it
+        # sixfold. Keep this protocol budget separate from ordinary API JSON.
+        self.max_runtime_request_bytes = min(DEFAULT_MAX_RUNTIME_REQUEST_BYTES, max_bundle_request_bytes)
         self.max_response_bytes = max_response_bytes
         self.max_bundle_request_bytes = max_bundle_request_bytes
         self.max_file_response_bytes = max_file_response_bytes
@@ -500,7 +504,7 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
     ) -> tuple[Optional[str], Mapping[str, str], frozenset[str]]:
         facade = self.platform_server.facade
         if callable(getattr(facade, "portal_request", None)) and path not in {"/healthz", "/readyz"}:
-            if path in {"/", "/courses"} or path.startswith("/courses/") or (
+            if path in {"/", "/student", "/courses"} or path.startswith(("/courses/", "/student/")) or (
                 getattr(facade, "instructor", None) is not None
                 and (path == "/instructor" or path.startswith("/instructor/"))
             ):
@@ -683,6 +687,8 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
                 )
         if len(parts) == 5 and parts[:3] == ["", "v1", "assignments"]:
             identifier = self._identifier(parts[3])
+            if identifier is not None and parts[4] == "learning-runtime" and callable(getattr(facade, "get_learning_runtime", None)):
+                return ("learning_runtime_status", {"assignment_id": identifier}, frozenset({"GET"}))
             if identifier is not None and parts[4] == "learning-checkpoints" and callable(getattr(facade, "save_learning_checkpoint", None)) and callable(getattr(facade, "list_learning_checkpoints", None)):
                 return ("learning_checkpoints", {"assignment_id": identifier}, frozenset({"GET", "POST"}))
             if identifier is not None and parts[4] == "document" and callable(getattr(facade, "get_assignment_document", None)):
@@ -721,6 +727,14 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
             assignment_id, checkpoint_id = self._identifier(parts[3]), self._identifier(parts[5])
             if assignment_id is not None and checkpoint_id is not None and callable(getattr(facade, "get_learning_checkpoint_bundle", None)):
                 return ("learning_checkpoint_bundle", {"assignment_id": assignment_id, "checkpoint_id": checkpoint_id}, frozenset({"GET"}))
+        if len(parts) == 6 and parts[:3] == ["", "v1", "assignments"] and parts[4:] == ["learning-runtime", "sessions"]:
+            assignment_id = self._identifier(parts[3])
+            if assignment_id is not None and callable(getattr(facade, "create_learning_runtime", None)):
+                return ("learning_runtime_create", {"assignment_id": assignment_id}, frozenset({"POST"}))
+        if len(parts) == 8 and parts[:3] == ["", "v1", "assignments"] and parts[4:6] == ["learning-runtime", "sessions"] and parts[7] in {"run", "close"}:
+            assignment_id, session_id = self._identifier(parts[3]), self._identifier(parts[6])
+            if assignment_id is not None and session_id is not None and callable(getattr(facade, parts[7] + "_learning_runtime", None)):
+                return ("learning_runtime_" + parts[7], {"assignment_id": assignment_id, "session_id": session_id}, frozenset({"POST"}))
         if len(parts) == 5 and parts[:4] == ["", "v1", "me", "sessions"]:
             identifier = self._identifier(parts[4])
             if identifier is not None:
@@ -790,6 +804,7 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
                              'sort', 'page', 'page_size', 'version'} if next_api else
                             participation_fields if participation_page else
                             {'course_key'} if path == '/instructor/switch' else
+                            {'q', 'status'} if path == '/instructor' else
                             {'assignment_id'} if re.fullmatch(r'/courses/[a-z0-9_-]{1,96}/instructor/classroom', path) else
                             {'q', 'visibility', 'page'} if re.fullmatch(r'/courses/[a-z0-9_-]{1,96}/instructor/assignments', path) else set())
             if query and (self.command != 'GET' or
@@ -808,6 +823,7 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
                                            self.headers.get("Authorization"))
                     upload = re.fullmatch(r"/courses/[^/]+/instructor/drafts/[^/]+/(?:uploads/(starter|solution|negative)|grading-template)", path)
                     csv_upload = re.fullmatch(r"/courses/[^/]+/instructor/students/import/preview", path)
+                    membership_roster_upload = re.fullmatch(r"/courses/[a-z0-9_-]{1,96}/instructor/registrations/roster", path)
                     exam_upload = re.fullmatch(r"/courses/[a-z0-9_-]{1,96}/instructor/exam-papers/ep_[A-Za-z0-9_-]+/upload", path)
                     material_upload = re.fullmatch(r"/courses/[a-z0-9_-]{1,96}/instructor/materials/mat_[A-Za-z0-9_-]+/(upload|upload-batch)", path)
                     content_upload = re.fullmatch(r"/courses/[a-z0-9_-]{1,96}/instructor/content/cc_[0-9a-f]{32}/upload", path)
@@ -817,7 +833,7 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
                         # Narrow JSON mutation route; all other instructor API
                         # routes remain GET-only. CSRF checked by the facade.
                         form = self._read_json_object(max_bytes=8192)
-                    elif upload or csv_upload or exam_upload or material_upload or content_upload or extension_upload:
+                    elif upload or csv_upload or membership_roster_upload or exam_upload or material_upload or content_upload or extension_upload:
                         if not facade.admin_upload_slots.acquire(blocking=False):
                             raise PlatformHTTPError(503, "upload_busy", "파일 처리 중입니다. 잠시 후 다시 시도하세요.")
                         try:
@@ -836,7 +852,8 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
                             try:
                                 form = parse_instructor_upload(self.headers.get("Content-Type", ""), body, file_limit=limit,
                                                                capture_filename=bool(material_upload or content_upload or extension_upload),
-                                                               allow_content_path=bool(content_upload))
+                                                               allow_content_path=bool(content_upload),
+                                                               allow_roster_mode=bool(membership_roster_upload))
                             except InstructorUploadUnavailable as exc:
                                 emit_operator_event("instructor_upload_unavailable", component="http", exception=exc.__cause__ or exc)
                                 raise PlatformHTTPError(503, "upload_unavailable", str(exc)) from exc
@@ -994,6 +1011,19 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
                 self._ensure_no_body()
                 return facade.list_learning_checkpoints(token, parameters["assignment_id"]), 200
             return self._invoke_bundle_submission(facade, token, self._idempotency_key(), parameters["assignment_id"], checkpoint=True), 200
+        if route == "learning_runtime_status":
+            if query:
+                raise PlatformHTTPError(400, "invalid_request", "Unexpected query parameter")
+            self._ensure_no_body()
+            return facade.get_learning_runtime(self._bearer_token(), parameters["assignment_id"]), 200
+        if route in {"learning_runtime_create", "learning_runtime_run", "learning_runtime_close"}:
+            if query:
+                raise PlatformHTTPError(400, "invalid_request", "Unexpected query parameter")
+            token, payload = self._bearer_token(), self._read_json_object(runtime=route == "learning_runtime_run")
+            if route == "learning_runtime_create":
+                return facade.create_learning_runtime(token, parameters["assignment_id"], payload), 200
+            operation = facade.run_learning_runtime if route == "learning_runtime_run" else facade.close_learning_runtime
+            return operation(token, parameters["assignment_id"], parameters["session_id"], payload), 200
         if route == "learning_checkpoint_bundle":
             self._ensure_no_body()
             return facade.get_learning_checkpoint_bundle(self._bearer_token(), parameters["assignment_id"], parameters["checkpoint_id"]), 200
@@ -1131,10 +1161,11 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
                 length,
             )
 
-    def _read_json_object(self, max_bytes=None) -> Mapping[str, Any]:
+    def _read_json_object(self, max_bytes=None, *, runtime=False) -> Mapping[str, Any]:
+        limit = self.platform_server.max_runtime_request_bytes if runtime else self.platform_server.max_request_bytes
         body = self._read_body(
             expected_media_type="application/json",
-            max_bytes=min(self.platform_server.max_request_bytes, max_bytes) if max_bytes is not None else self.platform_server.max_request_bytes,
+            max_bytes=min(limit, max_bytes) if max_bytes is not None else limit,
         )
 
         def unique_object(pairs: Sequence[tuple[str, Any]]) -> MutableMapping[str, Any]:
@@ -1434,7 +1465,8 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", content_type)
         for name, value in headers.items():
             if name.casefold() not in _SECURITY_HEADER_NAMES:
-                self.send_header(name, value)
+                for item in value if isinstance(value, tuple) else (value,):
+                    self.send_header(name, item)
         self.end_headers()
         if body:
             try:
@@ -1502,7 +1534,8 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", content_type)
             for name, value in headers.items():
                 if name.casefold() not in _SECURITY_HEADER_NAMES:
-                    self.send_header(name, value)
+                    for item in value if isinstance(value, tuple) else (value,):
+                        self.send_header(name, item)
             self.end_headers()
             with os.fdopen(descriptor, "rb", closefd=True) as source:
                 descriptor = None
@@ -1648,10 +1681,10 @@ def _safe_error_message(value: Any) -> str:
     return normalized
 
 
-def _safe_headers(value: Mapping[str, str]) -> MutableMapping[str, str]:
+def _safe_headers(value: Mapping[str, str | tuple[str, ...]]) -> MutableMapping[str, str | tuple[str, ...]]:
     if not isinstance(value, Mapping):
         raise ValueError("headers must be a mapping")
-    safe: MutableMapping[str, str] = {}
+    safe: MutableMapping[str, str | tuple[str, ...]] = {}
     seen: set[str] = set()
     for name, header_value in value.items():
         if not isinstance(name, str) or not _HEADER_NAME.fullmatch(name):
@@ -1663,13 +1696,25 @@ def _safe_headers(value: Mapping[str, str]) -> MutableMapping[str, str]:
             or lowered in _SECURITY_HEADER_NAMES
         ):
             raise ValueError("unsafe response header")
-        if not isinstance(header_value, str):
+        # Set-Cookie is not a comma-joinable header. Only this canonical name
+        # may carry a bounded tuple, emitted as separate HTTP header fields.
+        if isinstance(header_value, tuple):
+            if name != "Set-Cookie" or not 1 <= len(header_value) <= 8:
+                raise ValueError("invalid response header value")
+            values = header_value
+        elif isinstance(header_value, str):
+            values = (header_value,)
+        else:
             raise ValueError("invalid response header value")
-        if (
-            "\r" in header_value
-            or "\n" in header_value
-            or len(header_value.encode("utf-8")) > _MAX_HEADER_VALUE_BYTES
-        ):
+        total = 0
+        for item in values:
+            if not isinstance(item, str) or "\r" in item or "\n" in item:
+                raise ValueError("invalid response header value")
+            size = len(item.encode("utf-8"))
+            if size > _MAX_HEADER_VALUE_BYTES:
+                raise ValueError("invalid response header value")
+            total += size
+        if total > _MAX_HEADER_VALUE_BYTES:
             raise ValueError("invalid response header value")
         seen.add(lowered)
         canonical_name = "Content-Type" if lowered == "content-type" else name

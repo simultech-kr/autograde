@@ -32,7 +32,7 @@ _REQUIRED_KEYS = frozenset(
 _OPTIONAL_KEYS = frozenset(
     {"grading_runtime", "bundle_worker_count", "external_access_mode", "web_public_base_url", "web_port",
      "instructor_assignment_web_enabled", "instructor_rubric_web_enabled", "instructor_auth_mode", "roster_bootstrap_mode",
-     "instructor_next_results_enabled", "instructor_next_course_keys"}
+     "instructor_next_results_enabled", "instructor_next_course_keys", "learning_runtime_socket"}
 )
 _ALLOWED_KEYS = _REQUIRED_KEYS | _OPTIONAL_KEYS
 _SECRET_KEY_PARTS = frozenset(
@@ -114,6 +114,12 @@ def load_pilot_config(path: str | Path) -> PilotConfig:
     if enabled not in {"true", "false"}:
         raise PilotConfigError("instructor_assignment_web_enabled must be true or false")
     values["instructor_assignment_web_enabled"] = enabled == "true"
+    if "learning_runtime_socket" in raw_values:
+        runtime_socket = raw_values["learning_runtime_socket"]
+        if (not runtime_socket or not Path(runtime_socket).is_absolute() or len(os.fsencode(runtime_socket)) > 100
+                or any(ord(c) < 32 for c in runtime_socket) or ".." in Path(runtime_socket).parts):
+            raise PilotConfigError("learning_runtime_socket must be an absolute private Unix socket path under 101 bytes")
+        values["learning_runtime_socket"] = runtime_socket
     next_enabled = raw_values.get("instructor_next_results_enabled", "false")
     if next_enabled not in {"true", "false"}:
         raise PilotConfigError("instructor_next_results_enabled must be true or false")

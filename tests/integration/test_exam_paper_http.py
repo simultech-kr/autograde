@@ -87,7 +87,7 @@ def exam_http(tmp_path):
                           courses=courses, instructor=instructor, exam_papers=papers)
     with serving(portal, WEB) as server:
         admin = HTTPBrowser(server, instructor=True)
-        assert admin.get("/instructor")[0] == 200
+        assert admin.get(BASE)[0] == 200  # CSRF belongs to the paper registration form.
         yield SimpleNamespace(server=server, admin=admin, papers=papers, students=students,
                               courses=courses, services=services, portal=portal, state=state,
                               clock=clock)

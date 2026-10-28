@@ -152,7 +152,8 @@ test("claim code approves a pending device then bootstraps the existing in-memor
   assert.equal(inputCalls[0]?.ignoreFocusOut, true);
   assert.equal("value" in (inputCalls[0] ?? {}), false);
   assert.match(String(inputCalls[0]?.prompt ?? ""), /과제 수령 코드/);
-  assert.match(String(inputCalls[0]?.prompt ?? ""), /20010/);
+  assert.match(String(inputCalls[0]?.prompt ?? ""), /학생 포털/);
+  assert.doesNotMatch(String(inputCalls[0]?.prompt ?? ""), /20010|20000/);
   assert.match(String(inputCalls[0]?.prompt ?? ""), /접속할 서버: https:\/\/grade\.example\.edu/);
   assert.equal(createCalls.length, 1);
   assert.equal(createCalls[0]?.extensionVersion, "0.2.0");
@@ -222,6 +223,113 @@ test("claim flow cannot install returned tokens if the origin flips at the store
   assert.equal(stores, 1);
   assert.equal(await tokens.hasSession(), false);
   assert.equal(callbacks, 0);
+});
+
+test("a code entered in the learning home connects without opening an input prompt", async () => {
+  resetUi();
+  const calls: Array<{ stage: string; code: string; origin?: string }> = [];
+  const accepted: Array<string | undefined> = [];
+  const controller = new AssignmentClaimController(baseClient({
+    createDeviceAuthorization: async (_device, _version, _signal, origin, code) => {
+      calls.push({ stage: "device", code: code ?? "", origin });
+      return DEVICE;
+    },
+    redeemAssignmentClaim: async (code, _device, _signal, origin) => {
+      calls.push({ stage: "redeem", code, origin });
+      return CLAIM;
+    },
+  }), "0.5.19", async id => { accepted.push(id); }, async () => TOKENS);
+
+  assert.equal(await controller.redeem("  ak1 2345-6789-abcd  "), true);
+
+  assert.equal(inputCalls.length, 0);
+  assert.deepEqual(calls, [
+    { stage: "device", code: "AK1-2345-6789-ABCD", origin: "https://grade.example.edu" },
+    { stage: "redeem", code: "AK1-2345-6789-ABCD", origin: "https://grade.example.edu" },
+  ]);
+  assert.deepEqual(accepted, [CLAIM.assignmentId]);
+  assert.equal(progressCalls.length, 2);
+  assert.doesNotMatch(JSON.stringify({ progressCalls, informationCalls }), /AK1-2345-6789-ABCD|ak1 2345/);
+});
+
+test("invalid direct claim input never falls back to a prompt or sends a request", async () => {
+  for (const code of ["", " \t\n ", "short", "AK1-2345-6789-ABCI", `${" ".repeat(257)}AK1-2345-6789-ABCD`]) {
+    resetUi();
+    const controller = new AssignmentClaimController(baseClient({
+      createDeviceAuthorization: async () => { assert.fail("invalid direct code must not be sent"); },
+    }), "0.5.19", async () => { assert.fail("invalid code cannot open an assignment"); });
+
+    await assert.rejects(controller.redeem(code), /수령 코드/);
+    assert.equal(inputCalls.length, 0);
+    assert.equal(progressCalls.length, 0);
+  }
+});
+
+test("direct claim input cannot bypass the HTTPS requirement", async () => {
+  resetUi();
+  const controller = new AssignmentClaimController(baseClient({
+    baseUrl: "http://192.168.50.34:20000",
+    createDeviceAuthorization: async () => { assert.fail("claim code must not reach a LAN HTTP server"); },
+  }), "0.5.19", async () => undefined);
+
+  await assert.rejects(controller.redeem("AK1-2345-6789-ABCD"), /HTTPS 서버 주소/);
+  assert.equal(inputCalls.length, 0);
+  assert.equal(progressCalls.length, 0);
+});
+
+test("direct claim submission shares the duplicate guard with command-based submission", async () => {
+  resetUi();
+  const response = deferred<AssignmentClaim>();
+  const started = deferred<void>();
+  const receivedCodes: string[] = [];
+  let callbacks = 0;
+  const controller = new AssignmentClaimController(baseClient({
+    redeemAssignmentClaim: async code => {
+      receivedCodes.push(code);
+      started.resolve();
+      return response.promise;
+    },
+  }), "0.5.19", async () => { callbacks += 1; }, async () => TOKENS);
+
+  const first = controller.redeem("AK1-2345-6789-ABCD");
+  await started.promise;
+  assert.equal(await controller.redeem("AK1-ZZZZ-XXXX-WWWW"), false);
+  assert.equal(await controller.redeem(), false);
+  assert.equal(inputCalls.length, 0);
+  assert.deepEqual(receivedCodes, ["AK1-2345-6789-ABCD"]);
+  response.resolve(CLAIM);
+  assert.equal(await first, true);
+  assert.equal(callbacks, 1);
+});
+
+test("direct claim submission stops if its server or student session changes during preparation", async () => {
+  for (const change of ["origin", "logout", "replace"] as const) {
+    resetUi();
+    let origin = "https://grade.example.edu";
+    const transport = { getBaseUrl: () => origin } as ApiTransport;
+    const tokens = new TokenManager(transport);
+    await tokens.storeSession(TOKENS, origin);
+    const client = {
+      transport,
+      tokens,
+      createDeviceAuthorization: async () => {
+        if (change === "origin") origin = "https://other-grade.example.edu";
+        if (change === "logout") await tokens.clear();
+        if (change === "replace") await tokens.storeSession({ ...TOKENS, access_token: "new-student-access" }, origin);
+        return DEVICE;
+      },
+      redeemAssignmentClaim: async () => { assert.fail("changed authentication context must stop redemption"); },
+    } as unknown as AutogradeClient;
+    const controller = new AssignmentClaimController(client, "0.5.19",
+      async () => { assert.fail("stale claim must not open an assignment"); },
+      async () => { assert.fail("stale claim must not poll for tokens"); });
+
+    await assert.rejects(controller.redeem("AK1-2345-6789-ABCD"),
+      (error: unknown) => error instanceof ApiError && error.code === "login_required");
+    assert.equal(inputCalls.length, 0);
+    if (change === "logout") assert.equal(await tokens.hasSession(), false);
+    if (change === "replace") assert.equal(await tokens.getAccessToken(), "new-student-access");
+  }
 });
 
 test("closing or invalidating the prompt performs no device or redemption request", async () => {

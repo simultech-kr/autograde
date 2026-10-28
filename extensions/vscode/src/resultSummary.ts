@@ -1,12 +1,7 @@
 import { positiveResultPosition, safeResultPath } from "./helpers";
+import { receiptProgress, submissionLabel, submissionTime } from "./learningJourney";
 import type { Assignment, GradeResult, ResultDiagnostic, RubricItem } from "./types";
 
-const labels: Record<string, string> = {
-  received: "접수됨 · 서버 검증 대기", accepted: "채점 대기", queued: "채점 대기", running: "채점 중",
-  graded: "채점 완료 · 결과 공개 대기", published: "결과 공개됨", rejected: "제출 검증 거절",
-  result_pending: "채점 완료 · 결과 준비 중",
-  infra_failed: "채점 환경 오류", assessment_failed: "채점 작업 실패", failed: "채점 작업 실패",
-};
 const valid = (score?: number, max?: number): boolean => Number.isFinite(score) && Number.isFinite(max)
   && max! > 0 && score! >= 0 && score! <= max!;
 const escape = (text: unknown): string => String(text ?? "").replace(/[&<>"']/g, char =>
@@ -71,7 +66,7 @@ export function summarizeResult(result: GradeResult) {
   const full = valid(result.score, result.maxScore) && result.score === result.maxScore;
   const inconsistent = items.some(item => item.scoreStatusMismatch) || (full && (needsWork > 0 || blocked > 0));
   const known = published && valid(result.score, result.maxScore) && !inconsistent;
-  const headline = !published ? labels[result.state] ?? "상태 확인 필요" : !known ? "결과 확인이 필요합니다" :
+  const headline = !published ? submissionLabel(result.state) : !known ? "결과 확인이 필요합니다" :
     full ? "자동채점 총점 기준 충족" : "수정이 필요합니다";
   const next = !published ? (result.state === "graded" ? "교수자가 결과를 공개한 뒤 다시 확인하세요. 다시 제출할 필요는 없습니다." :
     ["rejected", "infra_failed", "assessment_failed", "failed"].includes(result.state) ? "제출 안내를 확인하고 접수번호와 함께 교수자에게 문의하세요." :
@@ -97,15 +92,17 @@ export function resultHtml(assignment: Assignment, result: GradeResult, receipt:
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
 <title>Autograde 채점 결과</title><style>
 body{box-sizing:border-box;width:100%;font:var(--vscode-font-size)/1.6 var(--vscode-font-family);color:var(--vscode-editor-foreground);background:var(--vscode-editor-background);padding:24px;max-width:850px;margin:auto}
-h1{font-size:26px;margin:8px 0}.score{font-size:36px;font-weight:700;margin:8px 0}.card{border:1px solid var(--vscode-panel-border,var(--vscode-editor-foreground));padding:18px;margin:16px 0;border-radius:8px}
+h1{font-size:26px;margin:8px 0}.score{font-size:36px;font-weight:700;margin:8px 0}.card{border:1px solid var(--vscode-panel-border,var(--vscode-editor-foreground));padding:18px;margin:16px 0;border-radius:0}
 .hint{color:var(--vscode-descriptionForeground)}h2{font-size:18px}h3{font-size:16px}p,pre{overflow-wrap:anywhere}pre{white-space:pre-wrap}.feedback{white-space:pre-wrap}progress{width:100%;height:12px;accent-color:var(--vscode-progressBar-background)}
 summary{cursor:pointer;padding:10px 0;overflow-wrap:anywhere}:focus-visible{outline:2px solid var(--vscode-focusBorder)}.needs-work{border-left:4px solid var(--vscode-editorWarning-foreground)}.blocked{border-left:4px solid var(--vscode-descriptionForeground)}.criterion-score{display:block;margin-left:18px;font-weight:normal}.criterion.card,.previous-best.card{padding:8px 18px}.criterion h3{margin-bottom:4px}.criterion p{margin-top:4px}
-.actions{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0}.action{display:inline-block;padding:8px 12px;background:var(--vscode-button-background);color:var(--vscode-button-foreground);border-radius:4px;text-decoration:none}.action.secondary{background:var(--vscode-button-secondaryBackground);color:var(--vscode-button-secondaryForeground)}
+.steps{display:flex;flex-wrap:wrap;gap:16px;list-style:none;padding:0}.steps li{color:var(--vscode-descriptionForeground);padding:6px 0;border-bottom:2px solid var(--vscode-panel-border)}.steps [aria-current=step]{color:var(--vscode-foreground);font-weight:600;border-color:var(--vscode-focusBorder)}.actions{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0}.action{display:inline-block;padding:8px 12px;background:var(--vscode-button-background);color:var(--vscode-button-foreground);border-radius:0;text-decoration:none}.action.secondary{background:var(--vscode-button-secondaryBackground);color:var(--vscode-button-secondaryForeground)}
 @media(max-width:600px){body{padding:16px}}
 </style></head><body><p>${escape(assignment.courseLabel)} · ${escape(assignment.title)}</p><p class="hint">${escape(context)} · 접수번호 ${escape(receipt)}</p>
+<p class="hint">접수 시각 ${escape(submissionTime(result.receivedAt))} · 상태 ${escape(submissionLabel(result.state))}</p>
+<ol class="steps" aria-label="채점 진행 단계">${receiptProgress(result.state).map(step => `<li${step.current ? ' aria-current="step"' : ''}>${step.complete ? "✓ " : ""}${step.label}</li>`).join("")}</ol>
 ${controls.notice ? `<p role="status" aria-live="polite">${escape(controls.notice)}</p>` : ""}
 ${controls.canRefresh || controls.canPause ? `<div class="actions">${controls.canRefresh ? '<a class="action" href="command:autograde.refreshDisplayedResult">결과 다시 확인</a>' : ""}${controls.canPause ? '<a class="action secondary" href="command:autograde.pauseDisplayedResult">자동 확인 중지</a>' : ""}</div>` : ""}
-<section class="card" aria-label="채점 결과 요약"><h1>${escape(view.headline)}</h1><p class="score">${escape(view.score)}</p>
+<section class="card" aria-label="채점 결과 요약"><h1>${escape(view.headline)}</h1><p class="hint">이번 제출 점수</p><p class="score">${escape(view.score)}</p>
 ${view.percent === undefined ? "" : `<progress max="100" value="${view.percent}" aria-label="자동채점 총점 달성률"></progress>`}
 <p>${escape(view.summary)}</p><h2>다음 할 일</h2><p>${escape(view.next)}</p></section>
 ${view.items.length ? '<h2>항목별 결과와 수정 가이드</h2>' : ""}
