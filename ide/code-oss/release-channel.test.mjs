@@ -107,6 +107,10 @@ test('profile injection changes packaged defaults without secrets and inventory 
   const result = prepareDistribution(f.payload, runtime, {ideVersion: '1.143.0', extensionVersion: '0.5.20', nodeVersion: '24.18.0', upstreamCommit: 'a'.repeat(40)}, profileFile);
   assert.equal(result.institutionProfileSha256, digest(canonical(profile)));
   assert.equal(JSON.parse(fs.readFileSync(path.join(runtime, 'runtime-settings.json')))['autograde.serviceBaseUrl'], profile.apiUrl);
+  const runtimeSettings = JSON.parse(fs.readFileSync(path.join(runtime, 'runtime-settings.json')));
+  assert.equal(runtimeSettings['autograde.discovery.enabled'], true);
+  assert.deepEqual(runtimeSettings['autograde.discovery.trustedServers'], [{institutionId: profile.institutionId,
+    displayName: profile.institutionId, apiUrl: profile.apiUrl, portalUrl: profile.portalUrl}]);
   const sbom = JSON.parse(fs.readFileSync(path.join(runtime, 'sbom.cdx.json')));
   assert.equal(sbom.bomFormat, 'CycloneDX'); assert.ok(sbom.components.some(item => item.name === 'fixture-editor' && item.licenses[0].license.name === 'MIT'));
   assert.ok(sbom.properties.some(item => item.name === 'autograde:notice:LICENSE'));

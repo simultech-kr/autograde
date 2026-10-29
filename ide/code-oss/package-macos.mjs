@@ -137,9 +137,24 @@ export function assertArchitecture(architectures, arch) {
 }
 
 const xml = value => String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
+export const LOCAL_NETWORK_PURPOSE = '같은 실습실의 Autograde 서버를 검색하여 과제와 강의자료에 연결합니다.';
+export const BONJOUR_SERVICE_TYPE = '_autograde._tcp';
 export function infoPlist(version, arch) {
   if (!['arm64', 'x64'].includes(arch) || !/^\d+\.\d+\.\d+(?:[.-][A-Za-z0-9.-]+)?$/.test(version)) throw new Error('Invalid package version or architecture');
-  return `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict>\n<key>CFBundleName</key><string>Autograde IDE</string>\n<key>CFBundleDisplayName</key><string>Autograde IDE</string>\n<key>CFBundleIdentifier</key><string>info.cbchoi.autograde.launcher</string>\n<key>CFBundleExecutable</key><string>AutogradeLauncher</string>\n<key>CFBundlePackageType</key><string>APPL</string>\n<key>CFBundleShortVersionString</key><string>${xml(version)}</string>\n<key>CFBundleVersion</key><string>${xml(version.split('-')[0])}</string>\n<key>CFBundleIconFile</key><string>Autograde.icns</string>\n<key>LSMinimumSystemVersion</key><string>13.5</string>\n<key>LSArchitecturePriority</key><array><string>${arch === 'x64' ? 'x86_64' : arch}</string></array>\n<key>LSUIElement</key><true/>\n<key>NSHighResolutionCapable</key><true/>\n</dict></plist>\n`;
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict>\n<key>CFBundleName</key><string>Autograde IDE</string>\n<key>CFBundleDisplayName</key><string>Autograde IDE</string>\n<key>CFBundleIdentifier</key><string>info.cbchoi.autograde.launcher</string>\n<key>CFBundleExecutable</key><string>AutogradeLauncher</string>\n<key>CFBundlePackageType</key><string>APPL</string>\n<key>CFBundleShortVersionString</key><string>${xml(version)}</string>\n<key>CFBundleVersion</key><string>${xml(version.split('-')[0])}</string>\n<key>CFBundleIconFile</key><string>Autograde.icns</string>\n<key>LSMinimumSystemVersion</key><string>13.5</string>\n<key>LSArchitecturePriority</key><array><string>${arch === 'x64' ? 'x86_64' : arch}</string></array>\n<key>LSUIElement</key><true/>\n<key>NSHighResolutionCapable</key><true/>\n<key>NSLocalNetworkUsageDescription</key><string>${xml(LOCAL_NETWORK_PURPOSE)}</string>\n<key>NSBonjourServices</key><array><string>${BONJOUR_SERVICE_TYPE}</string></array>\n</dict></plist>\n`;
+}
+
+/** Only call on the staged copy, before signing; the upstream app is immutable. */
+export function configureLocalNetworkPrivacy(plist) {
+  regular(plist);
+  const existing = JSON.parse(execFileSync('/usr/bin/plutil', ['-convert', 'json', '-o', '-', plist], {encoding: 'utf8'}));
+  if (!existing || typeof existing !== 'object' || Array.isArray(existing)
+    || existing.NSBonjourServices !== undefined && (!Array.isArray(existing.NSBonjourServices)
+      || existing.NSBonjourServices.some(service => typeof service !== 'string'))) throw new Error('Invalid copied Electron Info.plist');
+  const services = [...new Set([...(existing.NSBonjourServices ?? []), BONJOUR_SERVICE_TYPE])];
+  execFileSync('/usr/bin/plutil', ['-replace', 'NSLocalNetworkUsageDescription', '-string', LOCAL_NETWORK_PURPOSE, plist]);
+  execFileSync('/usr/bin/plutil', ['-replace', 'NSBonjourServices', '-json', JSON.stringify(services), plist]);
+  execFileSync('/usr/bin/plutil', ['-lint', plist]);
 }
 
 function copyRegular(source, destination, linkRoot) {
@@ -198,9 +213,11 @@ export function packageMacos({ source, node, output, institutionProfile, zip = t
     // Framework symlinks are part of the upstream Electron application; ditto
     // preserves that known bundle, rather than dereferencing its Frameworks tree.
     execFileSync('/usr/bin/ditto', [electronApp, path.join(resources, 'editor/Autograde IDE.app')]);
+    const copiedElectronApp = path.join(resources, 'editor/Autograde IDE.app');
+    configureLocalNetworkPrivacy(path.join(copiedElectronApp, 'Contents/Info.plist'));
     copyRegular(node, path.join(resources, 'runtime/bin/node'));
     copyRegular(nodeLicense, path.join(resources, 'runtime/LICENSE'));
-    for (const name of ['mac-launcher.mjs', 'shared-session.mjs', 'learning-profile.mjs', 'seat-reporter.mjs', 'runtime-settings.json']) copyRegular(path.join(here, name), path.join(resources, 'autograde', name));
+    for (const name of ['mac-launcher.mjs', 'machine-discovery-settings.mjs', 'shared-session.mjs', 'learning-profile.mjs', 'seat-reporter.mjs', 'runtime-settings.json']) copyRegular(path.join(here, name), path.join(resources, 'autograde', name));
     for (const name of ['LICENSE', 'version']) {
       const file = path.join(source, '.build/electron', name);
       if (fs.existsSync(file)) copyRegular(file, path.join(resources, 'licenses', `Electron-${name}`));
@@ -214,6 +231,9 @@ export function packageMacos({ source, node, output, institutionProfile, zip = t
     fs.writeFileSync(path.join(contents, 'Info.plist'), infoPlist(version, process.arch));
     execFileSync('/usr/bin/xcrun', ['clang', '-arch', process.arch === 'x64' ? 'x86_64' : 'arm64', '-fobjc-arc', '-framework', 'Cocoa', '-mmacosx-version-min=13.5', nativeSource, '-o', path.join(contents, 'MacOS/AutogradeLauncher')], { stdio: 'inherit' });
     execFileSync('/usr/bin/plutil', ['-lint', path.join(contents, 'Info.plist')], { stdio: 'inherit' });
+    // Updating the copied Info.plist invalidates its previous resource seal.
+    // Preserve Electron's identity and execution policy, then seal the outer app.
+    execFileSync('/usr/bin/codesign', ['--force', '--sign', '-', '--preserve-metadata=identifier,entitlements,flags,runtime', copiedElectronApp], {stdio: 'inherit'});
     prepareDistribution(app, path.join(resources, 'autograde'), {ideVersion: version, extensionVersion: checked.extensionVersion, nodeVersion: nodeInfo.version, upstreamCommit: upstream.commit}, institutionProfile);
     // Local pilot signing makes the generated native executable runnable. This
     // is not Developer ID signing/notarization and does not bypass Gatekeeper.

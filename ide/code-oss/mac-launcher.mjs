@@ -4,6 +4,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
+import { loadMachineDiscoveryProfile, machineDiscoveryPath } from './machine-discovery-settings.mjs';
 import { learnerEnvironment, verifyRestrictedLaunch } from './learning-profile.mjs';
 import { sharedSessionLayout, prepareSharedSession, markSessionLaunching, recordSessionProcess,
   cleanupSharedSession, superviseSharedChild } from './shared-session.mjs';
@@ -78,10 +79,14 @@ export function macLaunchSpec(bundle, layout, inherited = process.env) {
 }
 
 export async function runMacSession(bundle, { runtimeBase = macRuntimeBase(), inherited = process.env,
-  start = spawn, report = () => {} } = {}) {
+  start = spawn, report = () => {}, discoveryProfilePath = machineDiscoveryPath() } = {}) {
+  // Public machine choices live outside the disposable student seat and the
+  // signed bundle. Never accept a profile path from inherited environment.
+  const discovery = loadMachineDiscoveryProfile(discoveryProfilePath);
   let layout = sharedSessionLayout(runtimeBase, 'shared-mac-seat', bundle.manifest.policy);
   const spec = macLaunchSpec(bundle, layout, inherited);
-  layout = prepareSharedSession(layout, bundle.defaults);
+  if (discovery) spec.options.env.AUTOGRADE_DISCOVERY_PROFILE_PATH = discovery.path;
+  layout = prepareSharedSession(layout, {...bundle.defaults, 'autograde.discovery.enabled': true, ...discovery?.settings});
   try {
     // Do not silently start a student next to retained data from an older mode.
     if (layout.preservedLegacyProfiles) throw new Error('이전 개인 실습 폴더가 남아 있습니다. 담당자가 보관 위치를 정리한 뒤 다시 시작해 주세요.');

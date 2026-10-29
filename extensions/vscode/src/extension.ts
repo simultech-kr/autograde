@@ -62,6 +62,8 @@ import {
   rememberSubmission,
 } from "./studentSessionState";
 import { ServiceAddressController } from "./serviceAddress";
+import { DISCOVER_SERVERS_COMMAND, ServerDiscoveryController, trustedDiscoveryServers } from "./serverDiscovery";
+import { readDiscoveryProfile, selectDiscoveryInstitution } from "./discoveryProfile";
 import { STUDENT_PORTAL_COMMAND, studentPortalUrl, configuredStudentPortalBase } from "./studentPortalLink";
 import { AssignmentTreeItem, AssignmentsTreeProvider } from "./tree";
 import type { Assignment, GradeResult, SubmissionSummary } from "./types";
@@ -245,6 +247,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const selectedId = assignmentWorkspaces.selected?.assignment.id;
     return accepted.find(item => item.id === selectedId) ?? (accepted.length === 1 ? accepted[0] : undefined);
   };
+  let serverDiscovery: ServerDiscoveryController | undefined;
   const learningHome = new LearningHomeView(() => ({
     authenticated: authenticationUiState,
     trusted: vscode.workspace.isTrusted,
@@ -259,10 +262,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     sessionGeneration: tokens.getSessionGeneration(),
     serviceBaseUrl: (() => { try { return transport.getBaseUrl(); } catch { return ""; } })(),
     studentPortalBaseUrl: configuredStudentPortalBase(vscode.workspace.getConfiguration("autograde").inspect<string>("studentPortalBaseUrl")),
+    discovery: serverDiscovery?.state,
     assignment: homeAssignment(),
     hasAssignmentFolder: Boolean(authenticationUiState && assignmentWorkspaces.selected
       && homeAssignment()?.id === assignmentWorkspaces.selected.assignment.id),
   }), {
+    discoverServers: () => runInlineLearningAction(async () => { await serverDiscovery?.search(); }),
+    selectDiscoveredServer: id => runInlineLearningAction(async () => { await serverDiscovery?.select(id); }),
     claim: async (code, expectedServer) => {
       // Invoke the controller directly: secrets never enter command arguments or persistence.
       const operation = runInlineLearningAction(() => {
@@ -475,6 +481,41 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // Unlike runCommand, preserve errors so the form cannot show a false success.
     await assignmentOperations.tryRun(action);
   };
+  const discoveryMachineSetting = <T>(key: string): T | undefined => {
+    const setting = vscode.workspace.getConfiguration("autograde").inspect<T>(key);
+    // Downloaded workspaces cannot nominate a trusted institution or enable discovery.
+    return setting?.globalValue ?? setting?.defaultValue;
+  };
+  const discoveryProfilePath = sharedSession && process.platform === "darwin" ? process.env.AUTOGRADE_DISCOVERY_PROFILE_PATH : undefined;
+  const assertDiscoveryAvailable = (): void => {
+    if (!discoveryMachineSetting<boolean>("discovery.enabled")) throw new Error("관리자가 자동 검색을 비활성화했습니다. 서버 주소를 직접 입력하세요.");
+    if (process.env.WSL_DISTRO_NAME || vscode.env.remoteName) throw new Error("원격 개발환경에서는 서버 주소를 직접 입력하세요. 자동 검색은 로컬 IDE에서 지원합니다.");
+    sharedSession?.assertCanAuthenticate();
+    if (authenticationUiState) throw new Error("현재 실습을 종료하거나 로그아웃한 뒤 서버를 변경하세요.");
+  };
+  serverDiscovery = new ServerDiscoveryController({
+    profiles: async () => {
+      if (discoveryProfilePath) {
+        const profile = await readDiscoveryProfile(discoveryProfilePath);
+        if (!profile) throw new Error("기관 설정 파일이 없습니다.");
+        return trustedDiscoveryServers(profile.trustedServers);
+      }
+      return trustedDiscoveryServers(discoveryMachineSetting<unknown>("discovery.trustedServers") ?? []);
+    },
+    assertAvailable: assertDiscoveryAvailable,
+    changed: () => learningHome.refresh(),
+    apply: async server => {
+      assertDiscoveryAvailable();
+      if (!await serviceAddresses.configure(server.apiUrl)) throw new OperationCancelledError();
+      assertDiscoveryAvailable();
+      await vscode.workspace.getConfiguration("autograde").update("studentPortalBaseUrl", server.portalUrl, vscode.ConfigurationTarget.Global);
+      if (discoveryProfilePath) {
+        try { await selectDiscoveryInstitution(discoveryProfilePath, server.institutionId); }
+        catch { void vscode.window.showWarningMessage("현재 서버는 적용했지만 다음 실행을 위한 기관 선택 저장에 실패했습니다. 담당자에게 기관 설정 파일 확인을 요청하세요."); }
+      }
+      await connectionMonitor.checkNow();
+    },
+  });
   const runAssignmentCommand = (action: () => Promise<unknown>): Promise<void> => runCommand(() =>
     assignmentOperations.run(action, () => {
       void vscode.window.showInformationMessage("수령 코드 입력 또는 과제 작업이 진행 중입니다. 열린 입력창이나 진행 알림에서 완료·취소한 뒤 다시 선택하세요.");
@@ -682,6 +723,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   };
 
   context.subscriptions.push(
+    serverDiscovery,
+    vscode.commands.registerCommand(DISCOVER_SERVERS_COMMAND, () => runAssignmentCommand(async () => { learningHome.show(); await serverDiscovery?.search(); })),
     classroom,
     learningCheckpoints,
     remoteLearning,
@@ -862,6 +905,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       classroom.reconcile(); learningCheckpoints?.reconcile(); remoteLearning?.reconcile();
     }),
     vscode.workspace.onDidChangeConfiguration((event) => {
+      if (event.affectsConfiguration("autograde.discovery")) serverDiscovery?.invalidate();
       if (event.affectsConfiguration("autograde.studentPortalBaseUrl")) learningHome.refresh();
       if (event.affectsConfiguration("autograde.examControlBaseUrl")) examMode.clear();
       if (
@@ -913,6 +957,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   });
   // Restore navigation only after a requested folder transition, never stored authentication.
   void runCommand(() => resumeClaimWorkspace(context.globalState, () => learningHome.show()));
+  if (vscode.env.appName.startsWith("Autograde IDE") && !sharedSession?.authenticationUsed
+    && discoveryMachineSetting<boolean>("discovery.enabled") && !vscode.env.remoteName && !process.env.WSL_DISTRO_NAME) {
+    const autoSearch = setTimeout(() => { void runCommand(async () => { await serverDiscovery?.search(); }); }, 500);
+    context.subscriptions.push({dispose: () => clearTimeout(autoSearch)});
+  }
 }
 
 export function deactivate(): void {}

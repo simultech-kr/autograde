@@ -118,6 +118,46 @@ test('icon runtime removes code, materials, profiles and temp files after real c
   assert.deepEqual(sessionRoots(f.base), []);
 });
 
+test('discovered institution survives two fresh seats while student code and credentials are removed', async t => {
+  const f = fixture(t), bundle = f.load();
+  const operatorDir = path.join(f.root, 'operator'); fs.mkdirSync(operatorDir, {mode: 0o700});
+  const discoveryProfilePath = path.join(operatorDir, 'institution-discovery.json');
+  const publicProfile = {schema: 'autograde.ide-discovery.v1', trustedServers: [{institutionId: 'school', displayName: '학교 실습실',
+    apiUrl: 'https://api.school.example:20000', portalUrl: 'https://school.example:20010'}], selectedInstitutionId: 'school'};
+  write(discoveryProfilePath, publicProfile);
+  const originalBundleSettings = fs.readFileSync(path.join(f.resources, 'autograde/runtime-settings.json'), 'utf8');
+  for (let pass = 0; pass < 2; pass++) {
+    await runMacSession(bundle, {runtimeBase: f.base, discoveryProfilePath,
+      inherited: {...process.env, AUTOGRADE_DISCOVERY_PROFILE_PATH: '/untrusted/ignored.json'},
+      start: (executable, args, options) => {
+        assert.equal(options.env.AUTOGRADE_DISCOVERY_PROFILE_PATH, discoveryProfilePath);
+        return fixtureStart(executable, args, options);
+      }, report: event => {
+        if (event.event !== 'ide-started') return;
+        const [root] = sessionRoots(f.base);
+        assert.deepEqual(fs.readdirSync(path.join(root, 'workspace')), []);
+        const settings = JSON.parse(fs.readFileSync(path.join(root, 'r/user-data/User/settings.json'), 'utf8'));
+        assert.equal(settings['autograde.serviceBaseUrl'], publicProfile.trustedServers[0].apiUrl);
+        assert.equal(settings['autograde.studentPortalBaseUrl'], publicProfile.trustedServers[0].portalUrl);
+        assert.deepEqual(settings['autograde.discovery.trustedServers'], publicProfile.trustedServers);
+        for (const file of ['workspace/main.cpp', 'materials/notes.txt', 'r/user-data/User/synthetic-credentials.json']) {
+          write(path.join(root, file), 'synthetic student secret');
+        }
+      }});
+    assert.deepEqual(sessionRoots(f.base), []);
+    assert.deepEqual(JSON.parse(fs.readFileSync(discoveryProfilePath, 'utf8')), publicProfile);
+  }
+  assert.equal(fs.readFileSync(path.join(f.resources, 'autograde/runtime-settings.json'), 'utf8'), originalBundleSettings);
+});
+
+test('invalid machine discovery profile blocks a new seat without writing signed app defaults', async t => {
+  const f = fixture(t), bundle = f.load();
+  const discoveryProfilePath = path.join(f.base, 'institution-discovery.json');
+  write(discoveryProfilePath, {schema: 'autograde.ide-discovery.v1', trustedServers: [], token: 'do not retain'});
+  await assert.rejects(runMacSession(bundle, {runtimeBase: f.base, discoveryProfilePath, start: fixtureStart}), /기관 자동 검색/);
+  assert.deepEqual(sessionRoots(f.base), []);
+});
+
 test('two launches cannot create simultaneous students or bypass the active session', async t => {
   const f = fixture(t), bundle = f.load();
   let resolveStarted;

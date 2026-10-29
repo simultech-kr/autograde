@@ -200,3 +200,93 @@ test("inline failures survive periodic refresh, reveal no raw secrets and distin
   assert.match(panel.webview.html, /취소했습니다. 다시 입력해 주세요/); assert.doesNotMatch(panel.webview.html, /secret/);
   assert.equal(errors.length, errorCount); view.dispose();
 });
+
+const discovered = {id: "school-1", displayName: "학교 · 실습실", apiUrl: "https://other.example.test", portalUrl: "https://portal.example.test"};
+const discoverySelection = (id = discovered.id) => ({type: "learningDiscoverySelect", nonce: nonce(), id});
+
+test("discovery search and selection invoke inline callbacks without forwarding endpoints or commands", async () => {
+  let state: LearningHomeState = {...ready, authenticated: false, discovery: {status: "idle", servers: []}};
+  let searches = 0;
+  const selections: string[] = [];
+  const view = new LearningHomeView(() => state, {...noCallbacks,
+    discoverServers: async () => { searches++; state = {...state, discovery: {status: "complete", servers: [discovered]}}; },
+    selectDiscoveredServer: async id => {selections.push(id);},
+  });
+  view.show();
+  const count = calls.length;
+  await handler(action("discoverServer"));
+  assert.equal(searches, 1);
+  assert.match(panel.webview.html, /학교 · 실습실/);
+  await handler(discoverySelection());
+  assert.deepEqual(selections, ["school-1"]);
+  assert.equal(calls.length, count);
+  assert.match(panel.webview.html, /수령 코드 연결 필요/);
+  view.dispose();
+});
+
+test("discovery rejects unknown IDs, stale documents, endpoint injection and busy duplicates", async () => {
+  let state: LearningHomeState = {...ready, authenticated: false, discovery: {status: "complete", servers: [discovered]}};
+  let selections = 0;
+  let finish!: () => void;
+  const view = new LearningHomeView(() => state, {...noCallbacks, selectDiscoveredServer: async () => {
+    selections++; await new Promise<void>(resolve => {finish = resolve;});
+  }});
+  view.show();
+  await handler({...discoverySelection(), apiUrl: "https://evil.example"});
+  await handler({...discoverySelection(), nonce: "old"});
+  await handler(discoverySelection("missing"));
+  assert.equal(selections, 0);
+  assert.match(String(posted.at(-1)?.text), /현재 검색 결과에 없습니다/);
+  const pending = handler(discoverySelection());
+  await handler(discoverySelection());
+  assert.equal(selections, 1);
+  finish(); await pending;
+  state = {...state, discovery: {status: "searching", servers: [discovered]}}; view.refresh();
+  await handler(discoverySelection());
+  assert.equal(selections, 1);
+  state = {...state, discovery: {status: "complete", servers: [discovered, discovered]}}; view.refresh();
+  await handler(discoverySelection()); assert.equal(selections, 1);
+  view.dispose();
+});
+
+test("discovery respects shared session identity and never discards an edited claim or address", async () => {
+  let state: LearningHomeState = {...ready, authenticated: false, discovery: {status: "complete", servers: [discovered]}};
+  let invoked = 0;
+  const view = new LearningHomeView(() => state, {...noCallbacks,
+    discoverServers: async () => {invoked++;}, selectDiscoveredServer: async () => {invoked++;}});
+  view.show();
+  await handler({type: "learningEdit", nonce: nonce(), dirty: true});
+  const html = panel.webview.html;
+  await handler(action("discoverServer")); await handler(discoverySelection());
+  assert.equal(invoked, 0); assert.equal(panel.webview.html, html);
+  assert.match(String(posted.at(-1)?.text), /입력 중인 수령 코드나 주소/);
+  await handler({type: "learningEdit", nonce: nonce(), dirty: false});
+  for (const patch of [{authenticated: true}, {sessionNeedsRestart: true}]) {
+    state = {...state, ...patch, sharedSession: true}; view.refresh();
+    await handler(action("discoverServer")); await handler(discoverySelection());
+    assert.equal(invoked, 0);
+  }
+  view.dispose();
+});
+
+test("discovery failures are readable without exposing low-level response contents", async () => {
+  let state: LearningHomeState = {...ready, authenticated: false, discovery: {status: "complete", servers: [discovered]}};
+  const view = new LearningHomeView(() => state, {...noCallbacks,
+    discoverServers: async () => {throw new Error("private-token-in-response");},
+    selectDiscoveredServer: async () => {throw new Error("private-token-in-response");},
+  });
+  view.show(); await handler(action("discoverServer"));
+  assert.match(panel.webview.html, /주변 서버를 검색하지 못했습니다/);
+  assert.doesNotMatch(panel.webview.html, /private-token-in-response/);
+  await handler(discoverySelection());
+  assert.match(panel.webview.html, /서버를 선택하지 못했습니다/);
+  assert.doesNotMatch(panel.webview.html, /private-token-in-response/);
+  // Background results do not replace an actively edited document; the pending refresh applies after clearing.
+  await handler({type: "learningEdit", nonce: nonce(), dirty: true});
+  const before = panel.webview.html;
+  state = {...state, discovery: {status: "complete", servers: [], message: "새 검색 완료"}}; view.refresh();
+  assert.equal(panel.webview.html, before);
+  await handler({type: "learningEdit", nonce: nonce(), dirty: false});
+  assert.match(panel.webview.html, /새 검색 완료/);
+  view.dispose();
+});

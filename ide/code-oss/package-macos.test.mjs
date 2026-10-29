@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
-import { runtimePlan, collectProductionDependencies, infoPlist, parseOptions, isInside, assertArchitecture } from './package-macos.mjs';
+import {execFileSync} from 'node:child_process';
+import { runtimePlan, collectProductionDependencies, infoPlist, parseOptions, isInside, assertArchitecture,
+  configureLocalNetworkPrivacy, LOCAL_NETWORK_PURPOSE, BONJOUR_SERVICE_TYPE } from './package-macos.mjs';
 
 function fixture(t) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'autograde-mac-package-')));
@@ -127,9 +129,32 @@ test('app plist selects native launcher and distinct bundle identity', () => {
   assert.match(xml, /<key>LSMinimumSystemVersion<\/key><string>13\.5<\/string>/);
   assert.match(xml, /info\.cbchoi\.autograde\.launcher/);
   assert.match(xml, /<key>LSUIElement<\/key><true\/>/);
+  assert.match(xml, /<key>NSLocalNetworkUsageDescription<\/key><string>같은 실습실/);
+  assert.match(xml, /<key>NSBonjourServices<\/key><array><string>_autograde\._tcp<\/string><\/array>/);
   assert.match(infoPlist('1.143.0', 'x64'), /x86_64/);
   assert.throws(() => infoPlist('1.2.3<script>', 'arm64'), /Invalid/);
   assert.throws(() => infoPlist('1.2.3', 'win32'), /Invalid/);
+});
+
+test('copied Electron privacy metadata preserves identity, unrelated values and existing services', {skip: process.platform !== 'darwin'}, t => {
+  const {root, write} = fixture(t);
+  const original = {CFBundleIdentifier: 'info.cbchoi.autograde.electron', CFBundleExecutable: 'Autograde IDE',
+    CFBundleVersion: '1.143.0', NSBonjourServices: ['_existing._tcp'], unrelated: {enabled: true, count: 3}};
+  const source = write('source.plist', original), copied = path.join(root, 'copied.plist');
+  execFileSync('/usr/bin/plutil', ['-convert', 'xml1', source]);
+  const originalBytes = fs.readFileSync(source);
+  fs.copyFileSync(source, copied);
+  configureLocalNetworkPrivacy(copied);
+  configureLocalNetworkPrivacy(copied); // Repeating during a staged build does not duplicate entries.
+  const result = JSON.parse(execFileSync('/usr/bin/plutil', ['-convert', 'json', '-o', '-', copied], {encoding: 'utf8'}));
+  assert.deepEqual(result, {...original, NSLocalNetworkUsageDescription: LOCAL_NETWORK_PURPOSE,
+    NSBonjourServices: ['_existing._tcp', BONJOUR_SERVICE_TYPE]});
+  assert.deepEqual(fs.readFileSync(source), originalBytes);
+  const absent = write('missing-keys.plist', {CFBundleIdentifier: 'unchanged'});
+  execFileSync('/usr/bin/plutil', ['-convert', 'binary1', absent]);
+  configureLocalNetworkPrivacy(absent);
+  assert.deepEqual(JSON.parse(execFileSync('/usr/bin/plutil', ['-convert', 'json', '-o', '-', absent], {encoding: 'utf8'})),
+    {CFBundleIdentifier: 'unchanged', NSLocalNetworkUsageDescription: LOCAL_NETWORK_PURPOSE, NSBonjourServices: [BONJOUR_SERVICE_TYPE]});
 });
 
 test('CLI accepts explicit runtime paths and refuses unknown switches', () => {

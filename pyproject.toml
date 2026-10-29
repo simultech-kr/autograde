@@ -15,6 +15,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+discovery = [
+  "zeroconf==0.151.5",
+]
 dev = [
   "pytest>=8,<9",
 ]
@@ -26,6 +29,7 @@ autograde-pilot = "autograde.pilot_portal_cli:main"
 autograde-rubric = "autograde.rubric_cli:main"
 autograde-instructor = "autograde.instructor_identity_cli:main"
 autograde-ops = "autograde.operations_cli:main"
+autograde-discovery = "autograde.server_discovery:main"
 autograde-git-askpass = "autograde.platform_github_app:askpass_main"
 
 [tool.setuptools]

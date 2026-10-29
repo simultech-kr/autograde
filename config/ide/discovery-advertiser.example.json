@@ -1,0 +1,7 @@
+{
+  "schema": "autograde.discovery-advertiser.v1",
+  "institutionId": "autograde",
+  "displayName": "Autograde 수업 서버",
+  "apiUrl": "https://ai.cbchoi.info:20000",
+  "portalUrl": "https://ai.cbchoi.info:20010"
+}

@@ -6,6 +6,7 @@ import * as path from "node:path";
 import test from "node:test";
 import type { ExtensionContext } from "vscode";
 import * as actualApi from "../api";
+import * as actualDiscovery from "../serverDiscovery";
 import { SHARED_AUTH_USED, SHARED_SESSION_MARKER } from "../sharedLearningSession";
 import type { Assignment } from "../types";
 
@@ -16,7 +17,9 @@ const commands = new Map<string, (...args: unknown[]) => unknown>();
 const ui = {choice: undefined as string | undefined, quits: 0, exports: 0, signins: 0, claims: 0,
   choices: [] as (string | undefined)[],
   revoked: 0, warnings: [] as string[], errors: [] as string[], workspace: "", exportRoot: "",
-  failRevoke: false, assignments: [] as Assignment[], inspected: "", serverOrigin: "https://test.invalid", homeForms: [] as unknown[]};
+  failRevoke: false, assignments: [] as Assignment[], inspected: "", serverOrigin: "https://test.invalid", homeForms: [] as unknown[],
+  configuration: {} as Record<string, {defaultValue?: unknown; globalValue?: unknown; workspaceValue?: unknown}>,
+  configurationReads: [] as string[], scannedProfiles: [] as actualDiscovery.TrustedDiscoveryServer[][]};
 let homeInputs: {claim(code: string, expectedServer: string): Promise<void>; configureServer(address: string): Promise<void>};
 class Tokens {
   public loggedIn = false; public generation = 0;
@@ -49,7 +52,13 @@ const vscode = {
     executeCommand: async (id: string, ...args: unknown[]) => {if (id === "workbench.action.quit") {ui.quits++; return;} return commands.get(id)?.(...args);}},
   workspace: {isTrusted: true, workspaceFile: undefined,
     get workspaceFolders() {return [{uri: uri(ui.workspace), name: "공용 실습", index: 0}];},
-    getConfiguration: () => ({get: (_name: string, fallback: unknown) => typeof fallback === "string" ? "https://test.invalid" : fallback}),
+    getConfiguration: () => ({
+      get: (name: string, fallback: unknown) => {
+        const value = ui.configuration[name];
+        return value ? value.workspaceValue ?? value.globalValue ?? value.defaultValue ?? fallback : typeof fallback === "string" ? "https://test.invalid" : fallback;
+      },
+      inspect: (name: string) => {ui.configurationReads.push(name); return {key: `autograde.${name}`, ...ui.configuration[name]};},
+    }),
     onDidChangeTextDocument: disposable, onDidSaveTextDocument: disposable, onDidChangeWorkspaceFolders: disposable, onDidGrantWorkspaceTrust: disposable,
     onDidChangeConfiguration: disposable, registerTextDocumentContentProvider: disposable},
   languages: {createDiagnosticCollection: () => ({dispose: noOp, clear: noOp})},
@@ -69,6 +78,12 @@ const api = {...actualApi,
 };
 const replacements: Record<string, unknown> = {
   "./api": api,
+  "./serverDiscovery": {...actualDiscovery, ServerDiscoveryController: class extends actualDiscovery.ServerDiscoveryController {
+    constructor(options: ConstructorParameters<typeof actualDiscovery.ServerDiscoveryController>[0]) {
+      // Activation exercises real trust/configuration logic without sending multicast from the test runner.
+      super({...options, scan: async profiles => {ui.scannedProfiles.push([...profiles]); return [];}});
+    }
+  }},
   "./auth": {AuthenticationController: class {
     constructor(private client: Client, _version: string, private changed: (value: boolean) => void) {}
     async signIn() {ui.signins++; this.client.tokens.loggedIn = true; this.client.tokens.generation++; this.changed(true);}
@@ -105,7 +120,8 @@ const extension = require("../extension") as typeof import("../extension");
 loader._load = originalLoad;
 
 async function fixture(used = false) {
-  commands.clear(); Object.assign(ui, {choice: undefined, choices: [], quits: 0, exports: 0, signins: 0, claims: 0, revoked: 0, warnings: [], errors: [], failRevoke: false, assignments: [], inspected: "", serverOrigin: "https://test.invalid", homeForms: []});
+  commands.clear(); Object.assign(ui, {choice: undefined, choices: [], quits: 0, exports: 0, signins: 0, claims: 0, revoked: 0, warnings: [], errors: [], failRevoke: false, assignments: [], inspected: "", serverOrigin: "https://test.invalid", homeForms: [],
+    configuration: {"discovery.enabled": {defaultValue: false}}, configurationReads: [], scannedProfiles: []});
   const parent = await mkdtemp(path.join(await realpath(os.tmpdir()), "ag-lifecycle-test-"));
   const id = randomBytes(12).toString("hex"), root = path.join(parent, `e-${id}`), workspace = path.join(root, "workspace");
   await mkdir(root, {mode: 0o700}); await mkdir(workspace, {mode: 0o700}); await mkdir(path.join(root, "materials"), {mode: 0o700});
@@ -114,7 +130,7 @@ async function fixture(used = false) {
     rootIno: stat.ino, launcherPid: process.pid, phase: "running"}), {mode: 0o600});
   if (used) await writeFile(path.join(root, SHARED_AUTH_USED), JSON.stringify({schema: 1, sessionId: id, authenticated: true}), {mode: 0o600});
   const settings = {AUTOGRADE_LEARNING_LIFETIME: "shared", AUTOGRADE_SESSION_ROOT: root, AUTOGRADE_SESSION_ID: id,
-    AUTOGRADE_LEARNER_WORKSPACE: workspace, AUTOGRADE_LEARNER_MATERIALS: path.join(root, "materials")};
+    AUTOGRADE_LEARNER_WORKSPACE: workspace, AUTOGRADE_LEARNER_MATERIALS: path.join(root, "materials"), AUTOGRADE_DISCOVERY_PROFILE_PATH: ""};
   const old = Object.fromEntries(Object.keys(settings).map(key => [key, process.env[key]])); Object.assign(process.env, settings); ui.workspace = workspace;
   const context = {subscriptions: [] as {dispose(): void}[], secrets: {delete: async () => {}},
     globalState: {get: () => undefined, update: async () => {}}, extension: {packageJSON: {version: "test"}}, globalStorageUri: uri(path.join(root, "storage"))} as unknown as ExtensionContext;
@@ -197,4 +213,29 @@ test("inline claim rechecks origin and identity after asynchronous workspace pre
       assert.equal(ui.claims, 0); assert.equal(tokens.loggedIn, false);
     } finally {await f.dispose();}
   }
+});
+
+test("a downloaded workspace cannot enable automatic discovery over a disabled machine setting", async () => {
+  const f = await fixture();
+  try {
+    ui.configuration["discovery.enabled"] = {defaultValue: false, workspaceValue: true};
+    assert.equal(vscode.workspace.getConfiguration().get("discovery.enabled", false), true);
+    await f.command("autograde.discoverServers");
+    assert.deepEqual(ui.scannedProfiles, []);
+    assert.match(ui.errors.join(" "), /자동 검색을 비활성화/);
+    assert.ok(ui.configurationReads.includes("discovery.enabled"));
+  } finally {await f.dispose();}
+});
+
+test("discovery consumes installed/global institution trust and ignores a workspace's endpoint override", async () => {
+  const f = await fixture();
+  try {
+    const trusted = {institutionId: "school", displayName: "학교", apiUrl: "https://api.example.test", portalUrl: "https://portal.example.test"};
+    const untrusted = {...trusted, apiUrl: "https://evil.example.test", portalUrl: "https://evil-portal.example.test"};
+    ui.configuration["discovery.enabled"] = {defaultValue: false, globalValue: true};
+    ui.configuration["discovery.trustedServers"] = {defaultValue: [], globalValue: [trusted], workspaceValue: [untrusted]};
+    await f.command("autograde.discoverServers");
+    assert.deepEqual(ui.scannedProfiles, [[trusted]]);
+    assert.ok(ui.configurationReads.includes("discovery.trustedServers"));
+  } finally {await f.dispose();}
 });

@@ -7,6 +7,12 @@ import { STUDENT_PORTAL_COMMAND } from "./studentPortalLink";
 export const LEARNING_HOME_COMMAND = "autograde.openLearningHome";
 export const AUTOGRADE_IDE_APP_NAME = "Autograde IDE";
 
+export interface LearningHomeDiscovery {
+  readonly status: "idle" | "searching" | "complete" | "unavailable";
+  readonly message?: string;
+  readonly servers: readonly { readonly id: string; readonly displayName: string; readonly apiUrl: string; readonly portalUrl: string }[];
+}
+
 export interface LearningHomeState {
   readonly authenticated: boolean;
   readonly trusted: boolean;
@@ -24,6 +30,7 @@ export interface LearningHomeState {
   readonly serviceBaseUrl?: string;
   readonly studentPortalBaseUrl?: string;
   readonly sessionGeneration?: number;
+  readonly discovery?: LearningHomeDiscovery;
 }
 
 export type LearningHomeForm = "claim" | "server" | "portal";
@@ -49,10 +56,20 @@ export function learningHomeEditMessage(message: unknown, nonce: string): boolea
   return Object.keys(value).length === 3 && value.type === "learningEdit" && value.nonce === nonce && typeof value.dirty === "boolean" ? value.dirty : undefined;
 }
 
+/** Discovery selection carries an opaque ID only; endpoints stay in the host's verified registry. */
+export function learningHomeDiscoverySelection(message: unknown, nonce: string): string | undefined {
+  if (!message || typeof message !== "object" || Array.isArray(message) || !nonce) return undefined;
+  const value = message as Record<string, unknown>;
+  if (Object.keys(value).length !== 3 || value.type !== "learningDiscoverySelect" || value.nonce !== nonce
+    || typeof value.id !== "string" || !/^[a-z0-9][a-z0-9-]{0,127}$/.test(value.id)) return undefined;
+  return value.id;
+}
+
 const actions = {
   portal: { command: STUDENT_PORTAL_COMMAND, label: "학생 포털 · 내 수업", session: false, trust: false, workspace: false },
   downloads: { command: "autograde.openServerDownloads", label: "서버 과제·자료 다운로드", session: false, trust: false, workspace: false },
   configure: { command: "autograde.configureServiceAddress", label: "서버 주소 설정", session: false, trust: false, workspace: false },
+  discoverServer: { command: "autograde.discoverServers", label: "주변 서버 검색", session: false, trust: false, workspace: false },
   connection: { command: "autograde.checkServerConnection", label: "서버 연결 확인", session: false, trust: false, workspace: false },
   claim: { command: "autograde.redeemAssignmentClaim", label: "수령 코드로 연결 · 과제 받기", session: false, trust: true, workspace: false },
   open: { command: "autograde.openAssignment", label: "기존 과제 이어서 열기", session: true, trust: true, workspace: false },
@@ -86,10 +103,11 @@ export function learningHomeBlockedReason(action: LearningHomeAction, state: Lea
   if (action === "endSession") return state.sharedSession ? undefined : "공용 실습 실행기로 시작한 세션에서 사용할 수 있습니다.";
   if (state.busy) return "이전 작업을 완료하거나 취소한 뒤 다시 선택하세요.";
   const item = actions[action];
-  if (state.sharedSession && ((state.authenticated || state.sessionNeedsRestart) && ["claim", "configure"].includes(action)
+  if (state.sharedSession && ((state.authenticated || state.sessionNeedsRestart) && ["claim", "configure", "discoverServer"].includes(action)
     || state.sessionNeedsRestart && item.session)) {
     return "필요한 코드를 내보낸 뒤 공용 실습을 종료하고, 새 세션에서 수령 코드로 연결하세요.";
   }
+  if (action === "discoverServer" && state.discovery?.status === "searching") return "주변 서버를 검색하고 있습니다. 잠시 기다려 주세요.";
   if (item.trust && !state.trusted) return "파일을 열거나 제출하려면 신뢰할 수 있는 과제 폴더를 열고 작업 영역을 신뢰하세요.";
   if (item.session && !state.authenticated) return "학생 웹에서 새 수령 코드를 받아 먼저 연결하세요. 로그인 정보는 저장되지 않습니다.";
   if (item.workspace && !state.hasWorkspace) return "기존 과제 이어서 열기 또는 과제 다운로드로 제출할 작업 영역을 먼저 여세요.";
@@ -133,6 +151,15 @@ export function renderLearningHome(state: LearningHomeState, nonce: string, pres
   const claimReason = learningHomeBlockedReason("claim", state) ?? (!state.serviceBaseUrl ? "채점 서버 주소를 먼저 설정하세요." : undefined);
   const configureReason = learningHomeBlockedReason("configure", state);
   const disabled = (reason?: string): string => reason ? ` disabled title="${escapeHtml(reason)}"` : "";
+  const discovery = state.discovery;
+  const discoveryMessage = discovery?.message ?? ({
+    idle: "같은 실습실에서 교수자가 안내 중인 서버를 찾습니다.",
+    searching: "주변 서버를 검색하고 있습니다. 잠시 기다려 주세요.",
+    complete: discovery?.servers.length ? "접속할 기관을 선택하세요. 서버를 선택한 뒤 수령 코드를 입력합니다." : "등록된 서버를 찾지 못했습니다. 같은 실습실 네트워크인지 확인하거나 교수자가 안내한 주소를 직접 입력하세요.",
+    unavailable: "자동 검색을 사용할 수 없습니다. 다시 검색하거나 교수자가 안내한 주소를 직접 입력하세요.",
+  }[discovery?.status ?? "idle"]);
+  const selectionReason = configureReason ?? (discovery?.status === "searching" ? "검색이 끝난 뒤 서버를 선택하세요." : undefined);
+  const discoveredServers = (discovery?.servers ?? []).filter(server => /^[a-z0-9][a-z0-9-]{0,127}$/.test(server.id)).slice(0, 32);
   return `<!DOCTYPE html>
 <html lang="ko"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'nonce-${safeNonce}'; script-src 'nonce-${safeNonce}'; base-uri 'none'; form-action 'none';">
@@ -166,8 +193,11 @@ input:focus-visible { outline: 2px solid var(--vscode-focusBorder); outline-offs
 .input-row { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 8px; align-items: start; }
 .inline-connect { padding: 16px 0; } .feedback { color: var(--vscode-foreground); border-left: 3px solid var(--vscode-focusBorder); padding-left: 10px; } .feedback:empty { display: none; }
 .settings { margin: 16px 0; } .settings>summary { cursor: pointer; padding: 8px 0; }
+.discovery { margin: 20px 0; padding: 16px; border: 1px solid var(--vscode-widget-border,var(--vscode-contrastBorder,#888)); }
+.discovery-heading { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px; margin-bottom:12px; }.discovery-heading h2 { margin:0; }
+.server-list { list-style:none; margin:12px 0 0; padding:0; display:grid; gap:12px; }.server-card { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:12px; padding-top:12px; border-top:1px solid var(--vscode-widget-border,#888); }.server-card p { margin:0; }.server-card strong { overflow-wrap:anywhere; }.server-endpoints { font-size:12px; }
 aside { margin-top: 28px; padding-top: 16px; border-top: 1px solid var(--vscode-widget-border, var(--vscode-contrastBorder, #888)); }
-@media (max-width: 420px) { body { padding: 16px; } h1 { font-size: 22px; } .input-row { grid-template-columns: minmax(0,1fr); } }
+@media (max-width: 420px) { body { padding: 16px; } h1 { font-size: 22px; } .input-row,.server-card { grid-template-columns: minmax(0,1fr); } }
 </style></head><body><main data-nonce="${safeNonce}" data-initial-form="${presentation.initialForm ?? ""}" data-expected-server="${escapeHtml(state.serviceBaseUrl ?? "")}">
 <header><h1>Autograde 학습 홈</h1><p class="lead">과제를 받고, 기존 코드를 이어서 작성하고, 제출 결과를 확인하세요.</p></header>
 <p class="status" role="status" aria-live="polite">${status} · ${state.hasWorkspace ? "작업 영역 열림" : "작업 영역 없음"}${state.trusted ? "" : " · 제한 모드"}${state.busy ? " · 작업 진행 중" : ""}</p>
@@ -176,6 +206,11 @@ ${submission ? `<section class="result" aria-label="이번 공식 제출"><h2>�
 <section class="next" aria-labelledby="next-action"><p class="eyebrow">다음 할 일</p><h2 id="next-action">${escapeHtml(next.title)}</h2><p>${escapeHtml(next.detail)}</p>${button(next.action, true)}${!state.trusted ? '<p role="status">제한 모드에서는 과제 파일 작업이 비활성화됩니다. 신뢰할 수 있는 과제 폴더인지 확인하세요.</p>' : ""}</section>
 <div class="toolbar">${button("portal")}${button("downloads")}${button("exportLearning")}</div>
 <p class="detail">학생 포털의 웹 로그인과 IDE 수령 코드 연결은 별개입니다. 공용 PC를 떠날 때는 웹에서도 로그아웃하세요.</p>
+<section class="discovery" aria-labelledby="discovery-heading" aria-busy="${discovery?.status === "searching"}"><div class="discovery-heading"><h2 id="discovery-heading">수업 서버 찾기</h2>${button("discoverServer")}</div><p role="status" aria-live="polite">${escapeHtml(discoveryMessage)}</p><p class="detail">등록된 기관과 접속 주소가 일치하는 서버만 표시합니다. 검색 결과만으로 로그인하거나 학교 네트워크 설정을 바꾸지 않습니다.</p>
+${discoveredServers.length ? `<ul class="server-list">${discoveredServers.map(server => {
+    const current = state.serviceBaseUrl === server.apiUrl && state.studentPortalBaseUrl === server.portalUrl;
+    return `<li class="server-card"><div><strong>${escapeHtml(server.displayName)}</strong>${current ? '<p class="detail">현재 주소 · 연결 확인 후 사용하세요.</p>' : ''}<p class="detail server-endpoints">채점 서버 <code>${escapeHtml(server.apiUrl)}</code><br>학생 포털 <code>${escapeHtml(server.portalUrl)}</code></p></div><button type="button" data-discovery-id="${escapeHtml(server.id)}"${disabled(selectionReason)}>${current ? "연결 확인" : "이 서버 선택"}</button></li>`;
+  }).join("")}</ul>` : ""}<p class="detail">검색되지 않으면 아래 서버 주소 설정에서 직접 연결할 수 있습니다.</p>${configureReason ? `<p class="detail">${escapeHtml(configureReason)}</p>` : ""}</section>
 <section class="inline-connect" aria-labelledby="claim-heading"><h2 id="claim-heading">수령 코드로 연결</h2><p class="detail">학생 포털에서 받은 코드를 아래에 입력하세요. 비밀번호를 입력하지 마세요. 코드는 전송 즉시 지우며 저장하지 않습니다.</p><p class="detail">채점 서버 <code>${escapeHtml(state.serviceBaseUrl ?? "주소 설정 필요")}</code></p>
 <form data-form="claim" autocomplete="off" novalidate><label for="claim-code">과제 수령 코드</label><div class="input-row"><input id="claim-code" type="password" maxlength="128" autocomplete="off" autocapitalize="none" spellcheck="false" aria-describedby="claim-help"${disabled(claimReason)}><button type="submit" class="primary"${disabled(claimReason)}>코드로 연결</button></div><p id="claim-help" class="detail">${escapeHtml(claimReason ?? "이 입력란에서 Enter를 누르거나 코드로 연결을 선택하세요.")}</p></form></section>
 <p id="learning-feedback" class="feedback" role="status" aria-live="polite">${escapeHtml(presentation.feedback ?? "")}</p>
@@ -223,6 +258,12 @@ document.querySelectorAll('button[data-action]').forEach(button => {
   button.addEventListener('click', () => {
     if (button.disabled) return;
     vscode.postMessage({ type: 'learningAction', action: button.dataset.action, nonce });
+  });
+});
+document.querySelectorAll('button[data-discovery-id]').forEach(button => {
+  button.addEventListener('click', () => {
+    if (button.disabled) return;
+    vscode.postMessage({type:'learningDiscoverySelect', nonce, id:button.dataset.discoveryId});
   });
 });
 window.addEventListener('message', event => {

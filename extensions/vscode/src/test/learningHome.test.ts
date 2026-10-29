@@ -9,6 +9,7 @@ const expected = {
   portal: "autograde.openStudentPortal",
   downloads: "autograde.openServerDownloads",
   configure: "autograde.configureServiceAddress", connection: "autograde.checkServerConnection",
+  discoverServer: "autograde.discoverServers",
   claim: "autograde.redeemAssignmentClaim", open: "autograde.openAssignment",
   accepted: "autograde.acceptedAssignmentHistory", submit: "autograde.submitCurrentCommit",
   result: "autograde.viewLatestResult", history: "autograde.submissionHistory",
@@ -61,7 +62,7 @@ test("session, trust, workspace and busy restrictions are rechecked independentl
   }
   assert.match(learningHomeBlockedReason("submit", {...ready, hasWorkspace: false})!, /작업 영역/);
   assert.equal(learningHomeBlockedReason("materials", {...ready, trusted: false, hasWorkspace: false}), undefined);
-  for (const action of ["configure", "connection", "downloads"] as const) {
+  for (const action of ["configure", "connection", "downloads", "discoverServer"] as const) {
     assert.equal(learningHomeBlockedReason(action, {authenticated: false, trusted: false, hasWorkspace: false}), undefined);
   }
 });
@@ -109,7 +110,7 @@ test("shared-session notice distinguishes temporary work from retained exports a
 test("shared home blocks identity replacement and keeps local export and exit available after expiry", () => {
   const fresh = {...ready, authenticated: false, sharedSession: true};
   assert.equal(learningHomeBlockedReason("claim", fresh), undefined);
-  for (const action of ["claim", "configure"] as const) {
+  for (const action of ["claim", "configure", "discoverServer"] as const) {
     assert.match(learningHomeBlockedReason(action, {...fresh, authenticated: true})!, /공용 실습을 종료/);
     assert.match(learningHomeBlockedReason(action, {...fresh, sessionNeedsRestart: true})!, /새 세션/);
   }
@@ -117,6 +118,36 @@ test("shared home blocks identity replacement and keeps local export and exit av
   assert.equal(learningHomeBlockedReason("exportLearning", {...fresh, sessionNeedsRestart: true}), undefined);
   assert.equal(learningHomeBlockedReason("endSession", {...fresh, busy: true}), undefined);
   assert.match(learningHomeBlockedReason("endSession", ready)!, /공용 실습 실행기/);
+});
+
+test("server discovery lists only bounded IDs, escapes metadata, and provides progress and manual fallback", () => {
+  const initial = renderLearningHome({...ready, authenticated: false}, "safe");
+  assert.match(initial, /수업 서버 찾기/);
+  assert.match(initial, /data-action="discoverServer"/);
+  assert.match(initial, /서버 주소 설정에서 직접 연결/);
+  const entry = {id: "school-1", displayName: '<img src=x onerror="evil">', apiUrl: 'https://api.example.test/"', portalUrl: "https://portal.example.test"};
+  const found = renderLearningHome({...ready, discovery: {status: "complete", servers: [entry, {...entry, id: 'bad" onclick="evil'}]}}, "safe");
+  assert.match(found, /data-discovery-id="school-1"/);
+  assert.match(found, /&lt;img/);
+  assert.doesNotMatch(found, /<img|data-discovery-id="bad|onclick="evil/);
+  assert.match(found, /type:'learningDiscoverySelect', nonce, id:button.dataset.discoveryId/);
+  assert.doesNotMatch(found, /postMessage\([^\n]*apiUrl/);
+  const searching = renderLearningHome({...ready, discovery: {status: "searching", servers: [entry]}}, "safe");
+  assert.match(searching, /aria-busy="true"/);
+  assert.match(searching, /data-action="discoverServer" disabled/);
+  assert.match(searching, /data-discovery-id="school-1" disabled/);
+  const empty = renderLearningHome({...ready, discovery: {status: "complete", servers: []}}, "safe");
+  assert.match(empty, /등록된 서버를 찾지 못했습니다/);
+  const unavailable = renderLearningHome({...ready, discovery: {status: "unavailable", servers: []}}, "safe");
+  assert.match(unavailable, /자동 검색을 사용할 수 없습니다/);
+  const current = renderLearningHome({...ready, serviceBaseUrl: entry.apiUrl, studentPortalBaseUrl: entry.portalUrl,
+    discovery: {status: "complete", servers: [entry]}}, "safe");
+  assert.match(current, /현재 주소 · 연결 확인 후 사용하세요/);
+  assert.match(current, /data-discovery-id="school-1">연결 확인/);
+  assert.doesNotMatch(current, /data-discovery-id="school-1" disabled/);
+  const busyCurrent = renderLearningHome({...ready, busy: true, serviceBaseUrl: entry.apiUrl, studentPortalBaseUrl: entry.portalUrl,
+    discovery: {status: "complete", servers: [entry]}}, "safe");
+  assert.match(busyCurrent, /data-discovery-id="school-1" disabled[^>]*>연결 확인/);
 });
 
 test("managed learning policy is a launch hint, not a verified sandbox", () => {

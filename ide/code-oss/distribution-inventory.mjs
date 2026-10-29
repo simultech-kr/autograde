@@ -24,6 +24,9 @@ export function applyInstitutionProfile(runtimeDirectory, profileFile) {
   const settingsFile = path.join(runtimeDirectory, 'runtime-settings.json'), settings = JSON.parse(readRegular(settingsFile).toString('utf8'));
   settings['autograde.serviceBaseUrl'] = profile.apiUrl;
   settings['autograde.studentPortalBaseUrl'] = profile.portalUrl;
+  settings['autograde.discovery.enabled'] = true;
+  settings['autograde.discovery.trustedServers'] = [{institutionId: profile.institutionId, displayName: profile.institutionId,
+    apiUrl: profile.apiUrl, portalUrl: profile.portalUrl}];
   const profilePath = path.join(runtimeDirectory, 'institution-profile.json');
   fs.writeFileSync(profilePath, `${JSON.stringify(profile, null, 2)}\n`, {flag: 'wx', mode: 0o644});
   fs.writeFileSync(settingsFile, `${JSON.stringify(settings, null, 2)}\n`);

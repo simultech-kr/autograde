@@ -1,0 +1,11 @@
+{
+  "schema": "autograde.ide-discovery.v1",
+  "trustedServers": [
+    {
+      "institutionId": "autograde",
+      "displayName": "Autograde 수업 서버",
+      "apiUrl": "https://ai.cbchoi.info:20000",
+      "portalUrl": "https://ai.cbchoi.info:20010"
+    }
+  ]
+}

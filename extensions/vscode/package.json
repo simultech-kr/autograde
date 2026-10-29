@@ -2,7 +2,7 @@
   "name": "autograde-vscode",
   "displayName": "Autograde",
   "description": "C/C++ 실습 과제 수령·다운로드·제출·채점 피드백을 VS Code에서. Linux, macOS, Windows WSL2 수업용 Autograde 확장.",
-  "version": "0.5.21",
+  "version": "0.5.22",
   "private": true,
   "publisher": "autograde",
   "repository": {
@@ -60,7 +60,8 @@
     "onCommand:autograde.restoreLearningCheckpoint",
     "onCommand:autograde.openServerDownloads",
     "onCommand:autograde.remoteLearning",
-    "onCommand:autograde.openStudentPortal"
+    "onCommand:autograde.openStudentPortal",
+    "onCommand:autograde.discoverServers"
   ],
   "contributes": {
     "commands": [
@@ -244,6 +245,12 @@
         "title": "Autograde: Open Student Portal",
         "shortTitle": "학생 포털 · 내 수업",
         "icon": "$(globe)"
+      },
+      {
+        "command": "autograde.discoverServers",
+        "title": "Autograde: Discover Classroom Servers",
+        "shortTitle": "수업 서버 자동 검색",
+        "icon": "$(radio-tower)"
       }
     ],
     "configuration": {
@@ -272,6 +279,52 @@
           "default": "",
           "scope": "machine",
           "markdownDescription": "교수자가 안내한 학생 웹의 HTTPS 주소와 포트입니다. 채점 API 주소에서 포트를 추정하지 않습니다. 사용자 설정만 읽고 작업 영역 설정은 무시합니다. 브라우저 로그인은 IDE와 별개이며 토큰·학번은 URL로 보내지 않습니다."
+        },
+        "autograde.discovery.enabled": {
+          "type": "boolean",
+          "default": true,
+          "scope": "application",
+          "description": "수업 서버 자동 검색을 사용합니다. Autograde IDE 시작 시 검색하며, 기존 네트워크 설정은 변경하지 않습니다."
+        },
+        "autograde.discovery.trustedServers": {
+          "type": "array",
+          "scope": "application",
+          "maxItems": 32,
+          "default": [
+            {
+              "institutionId": "autograde",
+              "displayName": "Autograde 수업 서버",
+              "apiUrl": "https://ai.cbchoi.info:20000",
+              "portalUrl": "https://ai.cbchoi.info:20010"
+            }
+          ],
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "institutionId",
+              "displayName",
+              "apiUrl",
+              "portalUrl"
+            ],
+            "properties": {
+              "institutionId": {
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
+              },
+              "displayName": {
+                "type": "string",
+                "maxLength": 100
+              },
+              "apiUrl": {
+                "type": "string"
+              },
+              "portalUrl": {
+                "type": "string"
+              }
+            }
+          },
+          "description": "관리자가 등록한 기관 주소만 자동 검색에서 선택할 수 있습니다. 프로젝트 설정은 사용하지 않습니다."
         }
       }
     },
@@ -429,10 +482,12 @@
     "vscode:prepublish": "npm run clean && npm run compile"
   },
   "dependencies": {
+    "multicast-dns": "7.2.5",
     "semver": "7.8.5",
     "tar-stream": "3.1.7"
   },
   "devDependencies": {
+    "@types/multicast-dns": "7.2.4",
     "@types/node": "^22.10.0",
     "@types/tar-stream": "3.1.4",
     "@types/vscode": "^1.92.0",

@@ -1,12 +1,14 @@
 import { randomUUID } from "node:crypto";
 import * as vscode from "vscode";
-import { learningHomeAction, learningHomeBlockedReason, learningHomeCommand, learningHomeEditMessage, learningHomeFormMessage,
+import { learningHomeAction, learningHomeBlockedReason, learningHomeCommand, learningHomeDiscoverySelection, learningHomeEditMessage, learningHomeFormMessage,
   renderLearningHome, type LearningHomeForm, type LearningHomeState } from "./learningHome";
 
 export interface LearningHomeCallbacks {
   claim(code: string, expectedServer: string): Promise<void>;
   configureServer(address: string): Promise<void>;
   configurePortal(address: string): Promise<void>;
+  discoverServers?(): Promise<void>;
+  selectDiscoveredServer?(id: string): Promise<void>;
 }
 
 /** Input stays in the visible document until sent directly to a controller, never in commands or storage. */
@@ -95,6 +97,21 @@ export class LearningHomeView implements vscode.Disposable {
       if (!editing && this.deferredRefresh) this.refresh();
       return;
     }
+    const selectedServer = learningHomeDiscoverySelection(message, this.nonce);
+    if (selectedServer) {
+      const state = this.currentState();
+      const reason = learningHomeBlockedReason("configure", {...state, busy: this.busy})
+        ?? (state.discovery?.status === "searching" ? "검색이 끝난 뒤 서버를 선택하세요." : undefined);
+      if (reason) { this.showFeedback(reason); return; }
+      if (this.dirty) { this.showFeedback("입력 중인 수령 코드나 주소를 먼저 적용하거나 지운 뒤 서버를 선택하세요."); return; }
+      // Re-check the current registry, even if an older rendered list contained the ID.
+      if (state.discovery?.servers.slice(0, 32).filter(server => server.id === selectedServer).length !== 1) {
+        this.showFeedback("이 서버는 현재 검색 결과에 없습니다. 주변 서버를 다시 검색하세요."); return;
+      }
+      if (!this.callbacks?.selectDiscoveredServer) { this.showFeedback("서버 자동 검색을 사용하려면 Autograde 확장을 업데이트하세요."); return; }
+      await this.runDiscoveryOperation(() => this.callbacks!.selectDiscoveredServer!(selectedServer), false);
+      return;
+    }
     const form = learningHomeFormMessage(message, this.nonce);
     if (form) {
       const reason = learningHomeBlockedReason(form.form === "claim" ? "claim" : "configure", {...this.currentState(), busy: this.busy});
@@ -134,6 +151,12 @@ export class LearningHomeView implements vscode.Disposable {
     if (!action) return;
     const reason = learningHomeBlockedReason(action, { ...this.currentState(), busy: this.busy });
     if (reason) { void vscode.window.showInformationMessage(reason); return; }
+    if (action === "discoverServer") {
+      if (this.dirty) { this.showFeedback("입력 중인 수령 코드나 주소를 먼저 적용하거나 지운 뒤 주변 서버를 검색하세요."); return; }
+      if (!this.callbacks?.discoverServers) { this.showFeedback("서버 자동 검색을 사용하려면 Autograde 확장을 업데이트하세요."); return; }
+      await this.runDiscoveryOperation(() => this.callbacks!.discoverServers!(), true);
+      return;
+    }
     if (action === "claim" || action === "configure" || action === "portal" && !this.currentState().studentPortalBaseUrl) {
       this.focusForm(action === "claim" ? "claim" : action === "configure" ? "server" : "portal");
       return;
@@ -144,6 +167,23 @@ export class LearningHomeView implements vscode.Disposable {
       await vscode.commands.executeCommand(learningHomeCommand(action));
     } catch {
       void vscode.window.showErrorMessage("작업을 완료하지 못했습니다. Autograde 연결 상태를 확인하고 다시 시도하세요.");
+    } finally {
+      this.busy = false;
+      this.refresh();
+    }
+  }
+
+  private async runDiscoveryOperation(operation: () => Promise<void>, search: boolean): Promise<void> {
+    this.feedback = undefined;
+    this.busy = true;
+    this.refresh();
+    const generation = this.inputGeneration;
+    try { await operation(); }
+    catch (error) {
+      if (this.inputGeneration === generation) this.feedback = error instanceof Error && error.name === "OperationCancelledError"
+        ? "취소했습니다. 현재 서버 설정을 확인하세요."
+        : search ? "주변 서버를 검색하지 못했습니다. 다시 검색하거나 교수자가 안내한 주소를 직접 입력하세요."
+          : "서버를 선택하지 못했습니다. 주변 서버를 다시 검색하고 접속 주소를 확인하세요.";
     } finally {
       this.busy = false;
       this.refresh();

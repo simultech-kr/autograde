@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { learningHomeAction, learningHomeEditMessage, learningHomeFormMessage, renderLearningHome } from "../learningHome";
+import { learningHomeAction, learningHomeDiscoverySelection, learningHomeEditMessage, learningHomeFormMessage, renderLearningHome } from "../learningHome";
 
 test("inline form channel accepts only exact bounded fields for the current document", () => {
   const code = {type: "learningForm", form: "claim", nonce: "current", value: "123456", expectedServer: "https://grade.example.test"};
@@ -18,6 +18,17 @@ test("inline form channel accepts only exact bounded fields for the current docu
     assert.equal(learningHomeFormMessage(message, "current"), undefined);
   }
   assert.equal(learningHomeFormMessage(code, ""), undefined);
+});
+
+test("discovery selection accepts only a bounded ID in the current document, never an endpoint", () => {
+  const valid = {type: "learningDiscoverySelect", nonce: "current", id: "school-1"};
+  assert.equal(learningHomeDiscoverySelection(valid, "current"), "school-1");
+  for (const message of [null, [], "school-1", {...valid, nonce: "old"}, {...valid, id: ""}, {...valid, id: "a".repeat(129)},
+    {...valid, id: "school\n"}, {...valid, id: "https://evil.example"}, {...valid, id: "constructor()"}, {...valid, id: 1},
+    {...valid, apiUrl: "https://evil.example"}, {...valid, command: "vscode.openFolder"}]) {
+    assert.equal(learningHomeDiscoverySelection(message, "current"), undefined);
+  }
+  assert.equal(learningHomeDiscoverySelection(valid, ""), undefined);
 });
 
 test("editing and command channels require their own exact schema and nonce", () => {
