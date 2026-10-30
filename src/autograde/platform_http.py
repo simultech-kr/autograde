@@ -818,6 +818,8 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
                             participation_fields if participation_page else
                             {'course_key'} if path == '/instructor/switch' else
                             {'q', 'status'} if path == '/instructor' else
+                            {'q', 'status', 'page'} if re.fullmatch(r'/courses/[a-z0-9_-]{1,96}/instructor/students', path) else
+                            {'student_key'} if re.fullmatch(r'/courses/[a-z0-9_-]{1,96}/instructor/registrations', path) else
                             {'assignment_id'} if re.fullmatch(r'/courses/[a-z0-9_-]{1,96}/instructor/classroom', path) else
                             {'q', 'visibility', 'page'} if re.fullmatch(r'/courses/[a-z0-9_-]{1,96}/instructor/assignments', path) else set())
             if query and (self.command != 'GET' or

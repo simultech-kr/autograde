@@ -147,3 +147,23 @@ def test_session_csrf_is_required_for_course_mutation_and_scope(browser_http):
     assert request(server, BASE+'/students', method='POST', cookie=session, origin=WEB, data={'csrf':'wrong'})[0] == 403
     identities.set_grant('teacher', 'come2201', allowed=False)
     assert request(server, '/instructor/api/v1/bootstrap', cookie=session)[0] == 401
+
+
+def test_read_only_assignment_table_is_not_hidden_in_a_mutation_form(browser_http):
+    from test_instructor_ux import release
+    from test_instructor_web import Forms
+
+    server, web, _ = browser_http
+    item = release(web.assignments.state, assignment_id='readonly_visible_release')
+    status, headers, _ = login(server, 'reader')
+    assert status == 303
+    status, _, body = request(server, BASE + '/assignments', cookie=cookie(headers))
+    page = body.decode()
+    assert status == 200 and 'readonly-view' in page
+    assert 'role="table"' in page and f'href="{BASE}/assignments/{item.assignment_id}"' in page
+    # POST forms are deliberately hidden for read-only accounts. The table must
+    # remain outside the bulk-mutation form so the allowed data is still visible.
+    assert not any(form['action'].endswith('/assignments/bulk/preview') for form in Forms(page).forms)
+    assert f'name="selected_{item.assignment_id}"' not in page
+    assert f'href="{BASE}/assignments/new"' not in page
+    assert f'href="{BASE}/assignments/{item.assignment_id}/downloads"' in page

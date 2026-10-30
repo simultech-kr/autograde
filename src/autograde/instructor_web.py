@@ -24,6 +24,8 @@ from .instructor_assignment_catalog import InstructorAssignmentCatalog
 from .instructor_form_recovery import FormRecovery
 from .instructor_browser import SCRIPT_TAG
 from .instructor_portal import STYLE as PORTAL_STYLE, navigation, portal_home, course_workflows, course_summary, environment_page
+from .instructor_design import STYLE as DESIGN_STYLE
+from .instructor_students_style import STYLE as STUDENTS_STYLE
 
 
 _COOKIE = "autograde_instructor_web"
@@ -297,6 +299,10 @@ class InstructorWeb:
             return self._page("접근할 수 없습니다", '<p>현재 수업에서 이 작업을 수행할 수 없습니다.</p>', course=course, status=403, cookie=cookie)
         except (ValueError, PlatformConflict) as exc:
             # Domain errors are intended to be operator-facing. Values are HTML escaped.
+            if method == 'POST' and self._inline_draft_save(path, form):
+                return PlatformResponse(409 if isinstance(exc, PlatformConflict) else 400,
+                    {'ok': False, 'error': {'code': 'draft_conflict' if isinstance(exc, PlatformConflict) else 'draft_input',
+                                          'message': str(exc)}})
             if method == 'POST':
                 recovered = self._recover_form(path, course, form, session, authorization)
                 if recovered:
@@ -312,12 +318,8 @@ class InstructorWeb:
                               course=course, status=409 if isinstance(exc, PlatformConflict) else 400, cookie=cookie)
 
     def _page(self, title, body, *, course=None, cookie=None, status=200, current_path=''):
-        context = "교수자 관리 · 공유 운영자 계정"
-        if course:
-            context = f'{course["code"]} · {course.get("name") or "정보 확인 필요"} · {course.get("year") or "학년도 미설정"} / {course.get("semester") or "학기 미설정"} · {course.get("section") or "분반 미설정"}'
         if self.principal:
             identity = f'{self.principal.display_name} ({self.principal.username}) · ' + {'admin': '관리자', 'instructor': '담당 교수자', 'assistant': '조교 · 조회 전용', 'evaluator': '평가자 · 조회 전용'}[self.principal.role]
-            context = context + ' · ' + identity if course else identity
         nav = navigation(self, course, current_path)
         options = '<option value="">수업 선택</option>' + ''.join(
             f'<option value="{_e(c["course_key"])}" {"selected" if course and c["course_key"] == course["course_key"] else ""}>'
@@ -334,15 +336,21 @@ class InstructorWeb:
                         if self.principal else '공유 교수자 계정은 개인별 권한을 제공하지 않습니다. 공용 학생 PC에서 사용하지 마세요. ')
         from .instructor_account_web import enabled
         if enabled(self):
-            nav += '<a href="/instructor/account">내 계정·로그아웃</a>'
+            nav += '<div class="portal-account"><a href="/instructor/account">내 계정·로그아웃</a>'
             if self.principal and self.principal.role == 'admin':
                 nav += '<a href="/instructor/accounts">교수자 계정 관리</a>'
+            nav += '</div>'
         read_only = bool(self.principal and self.principal.read_only)
         if read_only:
             body = '<p class="notice">조회 전용 계정입니다. 변경·평가 저장·학생 IDE 요청은 담당 교수자에게 요청하세요.</p>' + body
+        identity_caption = identity if self.principal else '공유 운영자 계정'
+        breadcrumb = '<a href="/instructor">교수자 포털</a>'
+        if course:
+            breadcrumb += f'<span aria-hidden="true">/</span><a href="{self._base(course)}">{_e(course.get("name") or course["code"])}</a>'
+        breadcrumb += '<span aria-hidden="true">/</span><span>' + _e(title) + '</span>'
         document = ('<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
-                    f'<title>{_e(title)} · Autograde</title><style>{_STYLE}{THEME_CSS}{RESPONSIVE_CSS}{PORTAL_STYLE}</style></head><body class="responsive-instructor{" readonly-view" if read_only else ""}"><a class="skip-link" href="#main-content">본문으로 건너뛰기</a><header class="instructor-header"><div><h1>Autograde 교수자 포털</h1><div class="instructor-context">{_e(context)}</div></div>{switch}</header>'
-                    f'<div class="shell"><nav class="portal-navigation" aria-label="교수자 메뉴">{nav}</nav><main id="main-content" tabindex="-1" data-audience="instructor"><h2>{_e(title)}</h2>{body}'
+                    f'<title>{_e(title)} · Autograde</title><style>{_STYLE}{THEME_CSS}{RESPONSIVE_CSS}{PORTAL_STYLE}{DESIGN_STYLE}{STUDENTS_STYLE}</style></head><body class="responsive-instructor{" readonly-view" if read_only else ""}"><a class="skip-link" href="#main-content">본문으로 건너뛰기</a><header class="instructor-header"><a class="instructor-brand" href="/instructor"><span class="instructor-brand-mark" aria-hidden="true">A</span><div><h1>Autograde 교수자 포털</h1><small>{_e(identity_caption)}</small></div></a>{switch}</header>'
+                    f'<div class="shell"><details class="portal-menu" open><summary>교수자 메뉴 · {_e(title)}</summary><nav class="portal-navigation" aria-label="교수자 메뉴">{nav}</nav></details><main id="main-content" tabindex="-1" data-audience="instructor"><div class="page-heading"><nav class="page-breadcrumb" aria-label="현재 위치">{breadcrumb}</nav><h2>{_e(title)}</h2></div>{body}'
                     '<p class="hint account-notice">' + account_hint +
                     'pilot-local 실행은 보안 격리가 아닙니다.</p></main></div>' + SCRIPT_TAG + '</body></html>')
         return PlatformResponse(status, document, headers)
@@ -350,6 +358,11 @@ class InstructorWeb:
     @staticmethod
     def _base(course):
         return '/courses/' + quote(course["course_key"], safe="") + '/instructor'
+
+    @staticmethod
+    def _inline_draft_save(path, form):
+        return form.get('inline_save') == 'yes' and bool(re.fullmatch(
+            r'/courses/[a-z0-9_-]+/instructor/drafts/[a-zA-Z0-9_-]+(?:/(?:uploads/(?:starter|solution|negative)|starter-template|grading-template))?', path))
 
     @staticmethod
     def _form(action, session, content, *, multipart=False, form_kind=None):
@@ -362,7 +375,8 @@ class InstructorWeb:
         guard = 'data-dirty-guard' if guarded else ''
         notice = '<p data-save-status role="status" aria-live="polite">각 영역의 저장 버튼을 눌러야 보존됩니다.</p>' if guarded else ''
         identity = f'data-form-kind="{_e(form_kind)}"' if form_kind else ''
-        return (f'<form method="post" action="{_e(action)}" {enctype} {guard} {identity}>' + notice +
+        inline = 'data-inline-draft-save' if InstructorWeb._inline_draft_save(action, {'inline_save': 'yes'}) else ''
+        return (f'<form method="post" action="{_e(action)}" {enctype} {guard} {identity} {inline}>' + notice +
                 f'<input type="hidden" name="csrf" value="{_e(session["csrf"])}">{content}</form>')
 
     @staticmethod
@@ -505,7 +519,7 @@ class InstructorWeb:
                          str(course['active_assignments']),
                          f'기준 충족 <strong>{course["completed"]}</strong> · 수정 필요 <strong>{course["needs_work"]}</strong><br>'
                          f'미제출 {course["not_submitted"]} · 채점·공개 대기 {course["waiting"]}<br>처리 오류 {course["errors"]} · 확인 필요 {course["unknown"]}',
-                         f'<a href="{base}/students">학생 관리</a><br><a href="{base}/assignments">과제 등록·관리</a><br>'
+                         f'<a href="{base}/students">수강생 관리</a><br><a href="{base}/assignments">과제 등록·관리</a><br>'
                          f'<a href="{base}/submissions">학생별 결과·코드 확인</a><br><a href="{base}/settings">분반 설정</a>'))
             body += result_table(('분반 / 수업명', '운영 상태', '수강 중 / 등록', '활성 과제', '제출 현황 (학생 × 과제)', '관리'),
                                  offering_rows, code + ' 분반별 최신 현황') + '</section>'
@@ -624,7 +638,9 @@ class InstructorWeb:
         if route == 'submissions/live' and method == 'GET' and self.submission_updates:
             return self.submission_updates(key, authorization)
         if route.startswith('students'):
-            return self._student_request(method, course, route, form, session)
+            response = self._student_request(method, course, route, form, session)
+            self._scoped(authorization).courses.get_course(key)
+            return response
         if route.startswith(('assignments', 'assignment-templates', 'grading-templates', 'drafts', 'checks')):
             if self.assignments is None:
                 raise PlatformNotFound()
@@ -685,7 +701,7 @@ class InstructorWeb:
         body = '<p>요청한 학생 정보가 저장되었습니다.</p>'
         if password:
             body += f'<div class="notice"><p>학생에게 개별 전달할 비밀번호: <strong><code>{_e(password)}</code></strong></p><p>이 응답에서만 표시됩니다. 목록에서 조회할 수 없으며 응답 유실 시 다시 초기화하세요.</p></div>'
-        return title, body + f'<a class="button" href="{base}/students">학생 목록으로</a>'
+        return title, body + f'<a class="button" href="{base}/students">수강생 관리로</a>'
 
     def _student_request(self, method, course, route, form, session):
         base = self._base(course)
@@ -699,7 +715,7 @@ class InstructorWeb:
                 '<li>학생을 다시 등록하고 학생 로그인·수령을 시험합니다.</li></ol>'
                 '<p>과제 정의는 보존하지만 선택 수업의 학생 수강·인증·제출·점수는 초기화 대상입니다. '
                 '세부 명령은 저장소의 docs/operations/course-student-reset.md 운영 안내를 따르세요.</p>'
-                f'<a href="{base}/students">학생 관리로 돌아가기</a>')
+                f'<a href="{base}/students">수강생 관리로 돌아가기</a>')
         if method == 'POST' and route == 'students':
             result = self.students.add_student(key, student_key=_value(form, 'student_key'), name=_value(form, 'name'),
                                                active=_active_value(form), password=_value(form, 'password') or None)
@@ -722,7 +738,7 @@ class InstructorWeb:
                                    _checkbox('confirm', '신규 등록 및 수강 상태 변경 내용을 확인했습니다.') + _button('미리보기 내용 적용'))
             else:
                 body += '<div class="notice error">오류가 있어 전체 미적용 상태입니다. CSV를 수정하여 다시 올려 주세요.</div>'
-            return '학생 CSV 미리보기', body + f'<p><a href="{base}/students">학생 목록으로</a></p>'
+            return '학생 CSV 미리보기', body + f'<p><a href="{base}/students">수강생 관리로</a></p>'
         if method == 'POST' and route == 'students/import/apply':
             if _value(form, 'confirm') != 'yes':
                 raise ValueError('미리보기의 변경 내용을 확인해 주세요.')
@@ -733,7 +749,7 @@ class InstructorWeb:
             if result.get('passwords'):
                 body += '<div class="notice"><p>일회 발급 비밀번호입니다. 학생에게 개별 전달하세요.</p><table><tr><th>학번</th><th>비밀번호</th></tr>' + ''.join(
                     f'<tr><td>{_e(p["student_key"])}</td><td><code>{_e(p["password"])}</code></td></tr>' for p in result['passwords']) + '</table></div>'
-            return '학생 일괄 등록 완료', body + f'<a href="{base}/students">학생 목록으로</a>'
+            return '학생 일괄 등록 완료', body + f'<a href="{base}/students">수강생 관리로</a>'
         entry_detail = re.fullmatch(r'students/entry/([0-9]+)(?:/(reset|status|name))?', route)
         if entry_detail:
             # Enrollment IDs are safe URL segments even when a legacy student key
@@ -768,7 +784,16 @@ class InstructorWeb:
             if method != 'GET' or action:
                 raise PlatformNotFound()
             link = base + '/students/entry/' + str(student['enrollment_id'])
-            body = f'<p>학번: {_e(student_key)} · 이름: {_e(student.get("name"))} · {"수강 중" if student["active"] else "비활성"}</p>'
+            from .instructor_students import access_status
+            from .student_registration import StudentRegistration
+            snapshot = next((row for row in StudentRegistration(self.students.state).roster_overview(key)
+                             if row['enrollment_id'] == student['enrollment_id']), None)
+            if snapshot is None:
+                raise PlatformNotFound()
+            status = access_status(snapshot, course['status'])
+            body = f'<p><a href="{base}/students">수강생 관리로 돌아가기</a></p>'
+            body += f'<p>학번: {_e(student_key)} · 이름: {_e(student.get("name"))} · {"수강 중" if student["active"] else "비활성"}</p>'
+            body += f'<p role="status"><strong>{_e(status["label"])}</strong> · {_e(status["reason"])}</p>'
             if course['status'] == 'archived':
                 return '학생 상세', body + '<p>보관된 수업에서는 학생 정보를 변경할 수 없습니다.</p>'
             if self.principal and self.principal.role != 'admin':
@@ -788,21 +813,18 @@ class InstructorWeb:
             return '학생 상세', body
         if method != 'GET' or route != 'students':
             raise PlatformNotFound()
-        students = self.students.list_students(key)
-        body = '<div class="table-scroll"><table><thead><tr><th>학번</th><th>이름</th><th>수강 상태</th><th>비밀번호</th></tr></thead><tbody>' + ''.join(
-            f'<tr><td><a href="{base}/students/entry/{s["enrollment_id"]}">{_e(s["student_key"])}</a></td><td>{_e(s.get("name"))}</td><td>{"수강 중" if s["active"] else "비활성"}</td><td>{"설정됨" if s["has_password"] else "미설정"}</td></tr>' for s in students) + '</tbody></table></div>'
-        if not students:
-            body += '<p>학생이 없습니다. 개별 추가 또는 CSV 등록으로 시작하세요.</p>'
+        from .instructor_students import overview
+        body = overview(self, course, form)
         if course['status'] == 'archived':
-            return '학생 관리', body + '<p>보관된 수업입니다. 학생 기록은 보존되며 등록·수정은 차단됩니다.</p>'
-        body += '<section><h3>학생 추가</h3>' + self._form(base + '/students', session, _field('student_key', '학번 (앞자리 0 포함)', required=True) +
+            return '수강생 관리', body + '<p>보관된 수업입니다. 학생 기록은 보존되며 등록·수정은 차단됩니다.</p>'
+        body += '<details id="legacy-registration" class="roster-legacy roster-write-only"><summary>전용 비밀번호로 학생 등록 <small>회원 가입 없이 사용하는 기존 방식</small></summary><div class="roster-legacy-content"><p>회원 가입 없이 수업 전용 비밀번호를 발급합니다. 회원 가입 방식으로 운영하려면 상단의 수강 명단 등록을 사용하세요.</p>' + self._form(base + '/students', session, _field('student_key', '학번 (앞자리 0 포함)', required=True) +
                 _field('name', '이름 (선택)') + _select('active', '수강 상태', [('true', '수강 중'), ('false', '비활성')], 'true') +
-                _field('password', '숫자 6자리 비밀번호 (비우면 자동 발급)', kind='password', extra='pattern="[0-9]{6}" maxlength="6" autocomplete="new-password"') + _button('학생 등록')) + '</section>'
-        body += f'<section><h3>CSV 일괄 등록</h3><p>UTF-8 CSV, 1 MiB·1000행 이하. 기존 학생 비밀번호 변경은 상세 화면에서 별도로 진행합니다.</p><a href="{base}/students/import/template">빈 CSV 템플릿 다운로드</a>'
+                _field('password', '숫자 6자리 비밀번호 (비우면 자동 발급)', kind='password', extra='pattern="[0-9]{6}" maxlength="6" autocomplete="new-password"') + _button('학생 등록')) + '</div></details>'
+        body += f'<details id="legacy-import" class="roster-legacy roster-write-only"><summary>전용 비밀번호 명단 가져오기 <small>기존 방식의 CSV 일괄 등록</small></summary><div class="roster-legacy-content"><p>UTF-8 CSV, 1 MiB·1000행 이하. 기존 학생 비밀번호 변경은 상세 화면에서 별도로 진행합니다. 회원 가입용 수강 명단 CSV와 형식이 다릅니다.</p><a class="ui-action secondary" href="{base}/students/import/template">CSV 양식 다운로드</a>'
         body += self._form(base + '/students/import/preview', session, _field('file', '학생 CSV 파일', kind='file', required=True, extra='accept=".csv,text/csv"') +
-                           '<label><input type="checkbox" name="auto_generate" value="yes"> 신규 학생의 빈 비밀번호를 자동 발급</label>' + _button('CSV 검증·미리보기'), multipart=True) + '</section>'
-        body += f'<p><a href="{base}/students/reset-guide">학생 전체 초기화: 운영자 오프라인 절차 안내</a></p>'
-        return '학생 관리', body
+                           '<label><input type="checkbox" name="auto_generate" value="yes"> 신규 학생의 빈 비밀번호를 자동 발급</label>' + _button('CSV 검증·미리보기'), multipart=True) + '</div></details>'
+        body += f'<p class="roster-reset"><a href="{base}/students/reset-guide">학생 전체 초기화 절차 안내</a></p>'
+        return '수강생 관리', body
 
     @staticmethod
     def _draft_fields(form):
@@ -956,16 +978,16 @@ class InstructorWeb:
         if action == 'starter-template':
             if _value(form, 'template_confirm') != 'yes':
                 raise ValueError('기존 학생용 파일을 기본 템플릿으로 교체하는 데 동의해 주세요.')
-            self.assignments.save_starter_template(key, draft_id, revision)
-            return self._redirect(base + '/drafts/' + draft_id)
+            saved = self.assignments.save_starter_template(key, draft_id, revision)
+            return self._draft_save_response(base, saved, revision, form, action)
         if action == 'grading-template':
             content = form.get('file')
             if not isinstance(content, bytes):
                 raise ValueError('채점 템플릿 ZIP 파일을 선택해 주세요.')
             if _value(form, 'grading_confirm') != 'yes':
                 raise ValueError('채점 템플릿의 정답·오답·테스트 내용을 검토했는지 확인해 주세요.')
-            self.assignments.import_grading_template(key, draft_id, revision, content)
-            return self._redirect(base + '/drafts/' + draft_id)
+            saved = self.assignments.import_grading_template(key, draft_id, revision, content)
+            return self._draft_save_response(base, saved, revision, form, action)
         if action and action.startswith('uploads/'):
             content = form.get('file')
             if not isinstance(content, bytes):
@@ -973,8 +995,8 @@ class InstructorWeb:
             role = action.split('/')[1]
             if role == 'starter' and _value(form, 'starter_confirm') != 'yes':
                 raise ValueError('학생용 자료에 정답과 비공개 입력이 없는지 확인해 주세요.')
-            self.assignments.upload_zip(key, draft_id, revision, role, content)
-            return self._redirect(base + '/drafts/' + draft_id)
+            saved = self.assignments.upload_zip(key, draft_id, revision, role, content)
+            return self._draft_save_response(base, saved, revision, form, action)
         if action == 'checks':
             if _value(form, 'trusted_code') != 'yes':
                 raise ValueError('서버에서 실행할 정답·오답 코드를 검토했는지 확인해 주세요.')
@@ -987,9 +1009,44 @@ class InstructorWeb:
             return self._redirect(base + '/drafts/' + draft_id)
         if action is None:
             fields = self._draft_fields(form)
-            self.assignments.update_draft(key, draft_id, revision, **fields)
-            return self._redirect(base + '/drafts/' + draft_id)
+            saved = self.assignments.update_draft(key, draft_id, revision, **fields)
+            return self._draft_save_response(base, saved, revision, form, action)
         raise PlatformNotFound()
+
+    def _draft_save_response(self, base, draft, previous_revision, form, action):
+        path = base + '/drafts/' + draft['draft_id']
+        if not self._inline_draft_save(path, form):
+            return self._redirect(path)
+        # Service reads follow the write transaction. Never advance the browser
+        # past another writer that committed between this save and that read.
+        if draft['revision'] != previous_revision + 1:
+            raise PlatformConflict('저장 직후 다른 창에서 변경되었습니다. 입력은 유지됩니다. 최신 초안을 새 탭에서 확인하세요.')
+        uploads = {item['role']: item for item in draft.get('uploads', [])}
+        missing = self.assignments.missing_materials(draft, uploads)
+        template = draft['mode'] == 'template'
+        material = lambda roles: ('예제 템플릿 준비됨' if template else '서버 등록 완료' if all(role in uploads for role in roles)
+            else '미등록: ' + ', '.join({'starter': '학생 코드', 'solution': '정답', 'negative': '오답'}[role] for role in roles if role not in uploads))
+        values = {}
+        if action is None and 'tests_present' not in form:
+            values = {name: draft.get(name, '') for name in ('title', 'description', 'language', 'platform', 'result_policy')}
+            values.update({name: _timestamp(draft.get(name)) for name in ('opens_at', 'due_at')})
+            values['no_deadline'] = not bool(draft.get('due_at'))
+        if action == 'grading-template' or (action is None and 'tests_present' in form):
+            values['negative_score'] = draft.get('negative_score', 0)
+            for index in range(50):
+                test = draft['tests'][index] if index < len(draft['tests']) else {}
+                for name in ('title', 'input', 'output', 'weight', 'evaluation', 'hint', 'public'):
+                    values[f'test_{index}_{name}'] = test.get(name, False if name == 'public' else '')
+        return PlatformResponse(200, {'ok': True, 'path': path, 'previous_revision': previous_revision,
+            'revision': draft['revision'], 'title': draft['title'], 'language': draft['language'], 'updated_at': _timestamp(draft.get('updated_at')),
+            'values': values, 'tests_replaced': action == 'grading-template', 'can_check': not missing,
+            'summary': [(_timestamp(draft.get('due_at')).replace('T', ' ') + ' KST') if draft.get('due_at') else '마감 없음',
+                material(('starter',)), material(('solution', 'negative')) + f' · {draft.get("max_score", 0):g}점 만점',
+                '예제 테스트 준비됨' if template else f'{len(draft.get("tests") or [])}개 서버 등록됨', '자료 변경 · 재검증 필요'],
+            'uploads': {role: {'files': item.get('files', []), 'size_bytes': item.get('size_bytes', 0)} for role, item in uploads.items()},
+            'grading_status': ('정답 코드 등록됨 · 오답 코드 등록됨 · 테스트 ' + str(len(draft.get('tests') or [])) +
+                f'개 · {draft.get("max_score", 0):g}점 만점 · 자료 저장 확인이며 검증 통과나 학생 공개를 뜻하지 않습니다.')
+                if not missing else '검증 전에 등록할 자료: ' + ', '.join(missing)})
 
     @staticmethod
     def _template_download(template, filename):
@@ -1067,6 +1124,7 @@ class InstructorWeb:
 
     def _assignment_list(self, course, form, session):
         base = self._base(course)
+        read_only = bool(self.principal and self.principal.read_only)
         search, visibility = _value(form, 'q'), _value(form, 'visibility', 'all')
         trash = visibility == 'deleted'
         catalog = self.catalog.list(course['course_key'], search=search, visibility=visibility,
@@ -1076,28 +1134,28 @@ class InstructorWeb:
             body += '<p>과제를 열면 보존된 자료를 조회하거나 보관 상태로 복원할 수 있습니다. 복원해도 학생에게 자동 공개되지 않습니다.</p>'
             body += '<p>제출 코드·점수·이력은 보존하며 파일을 영구 삭제하거나 압축한 상태는 아닙니다.</p></div>'
         else:
-            body = '<p>웹·CLI 등록 과제를 한곳에서 확인합니다. 검증과 학생 공개는 별개이며 초안은 학생에게 보이지 않습니다.</p>'
-            body += '<p class="hint">삭제한 과제는 이 관리 목록에 표시하지 않습니다. 제출·점수·코드 이력은 보존되며, 휴지통에서 조회하거나 보관 상태로 복원할 수 있습니다.</p>'
-        body += '<div class="actions">'
+            body = '<p class="portal-intro">과제를 준비하고 공개 상태와 학생 제출 현황을 확인합니다. 초안은 학생에게 보이지 않습니다.</p>'
+        body += f'<div class="ui-toolbar catalog-heading"><p class="ui-muted">검색 결과 <strong>{catalog["count"]}개</strong></p>'
+        if course['status'] != 'archived' and not trash and not read_only:
+            body += f'<a class="ui-action primary" href="{base}/assignments/new">새 과제 등록</a>'
+        body += '</div><nav class="ui-tabs" aria-label="과제 목록 구분">'
         for target, label, current in (
                 ('', '관리 목록', visibility not in {'inactive', 'deleted'}),
                 ('?visibility=inactive', '보관 과제', visibility == 'inactive'),
                 ('?visibility=deleted', '휴지통', trash)):
             selected = ' aria-current="page"' if current else ''
-            body += f'<a class="button {"" if current else "secondary"}" href="{base}/assignments{target}"{selected}>{label}</a>'
-        body += '</div>'
+            body += f'<a href="{base}/assignments{target}"{selected}>{label}</a>'
+        body += '</nav>'
         if course['status'] != 'active':
             body += '<div class="notice warning">수업이 운영 상태가 아니므로 학생 접근은 차단됩니다. 아래 공개 상태는 과제 자체의 일정·상태입니다.</div>'
-        if course['status'] != 'archived' and not trash:
-            body += f'<a class="button" href="{base}/assignments/new">새 과제 등록</a>'
-        body += f'<form method="get" action="{base}/assignments" class="catalog-tools"><div>'
+        body += f'<form method="get" action="{base}/assignments" class="catalog-tools ui-toolbar" role="search" aria-label="과제 검색"><div>'
         body += _field('q', '휴지통에서 검색' if trash else '과제 검색', search, extra='maxlength="200"') + '</div>'
         if trash:
             body += '<input type="hidden" name="visibility" value="deleted">'
         else:
             states = [('all', '전체 (삭제 제외)'), *((key, text) for key, text in _VISIBILITY.items() if key != 'deleted')]
             body += '<div>' + _select('visibility', '공개 상태', states, visibility) + '</div>'
-        body += '<button>조회</button></form>'
+        body += '<button class="secondary">조회</button></form>'
         rows = []
         selectable = 0
         for item in catalog['items']:
@@ -1110,17 +1168,19 @@ class InstructorWeb:
                       if item['assignment_id'] else '아직 비공개')
             if item['assignment_id'] and item['active'] and (item['ready'] or item['submission_count']):
                 query = urlencode({'assignment_id': item['assignment_id']})
-                counts += f'<br><a href="{base}/submissions?{_e(query)}">제출·미제출 명단</a>'
+                counts += f'<br><a class="ui-action quiet" href="{base}/submissions?{_e(query)}" aria-label="{_e(item["title"])} · 제출·미제출 명단">제출 현황 보기</a>'
             selection = ''
-            if course['status'] != 'archived' and item['assignment_id'] and item['visibility'] != 'deleted':
+            if not read_only and course['status'] != 'archived' and item['assignment_id'] and item['visibility'] != 'deleted':
                 selectable += 1
                 archived = 'true' if not item['active'] and not item['ready'] else 'false'
                 selection = (f'<label class="assignment-selection"><input type="checkbox" name="selected_{_e(item["assignment_id"])}" '
                              f'value="yes" data-assignment-select data-archived="{archived}" '
                              f'aria-label="{_e(item["title"])} 선택"> 선택</label>')
-            rows.append((selection + f'<a href="{_e(target)}">{_e(item["title"])}</a><div class="meta">{_e(origin)}</div>'
-                         + f'<a href="{_e(target)}/downloads">등록 파일·제출물 다운로드</a>',
-                         f'<span class="status-badge">{_e(_VISIBILITY[item["visibility"]])}</span><div class="meta">{_e(check)}</div>',
+            tone = {'open': 'success', 'scheduled': 'info', 'closed': 'neutral', 'draft': 'neutral',
+                    'inactive': 'neutral', 'deleted': 'neutral', 'hidden': 'warning'}[item['visibility']]
+            rows.append((selection + f'<a class="catalog-title" href="{_e(target)}">{_e(item["title"])}</a><div class="meta">{_e(origin)}</div>'
+                         + f'<a class="ui-action quiet" href="{_e(target)}/downloads" aria-label="{_e(item["title"])} · 등록 파일·제출물 다운로드">자료 다운로드</a>',
+                         f'<span class="ui-badge" data-tone="{tone}">{_e(_VISIBILITY[item["visibility"]])}</span><div class="meta">{_e(check)}</div>',
                          _e(_timestamp(item['deleted_at']) if trash else _timestamp(item['due_at']) or '마감 없음'), counts))
         headers = ('삭제된 과제', '상태', '삭제 시각 (KST)', '보존된 학생 이력') if trash else ('과제', '공개·검증', '마감 (KST)', '학생 현황')
         caption = f'삭제된 과제 {catalog["count"]}건' if trash else f'과제·초안 {catalog["count"]}건'
@@ -1141,13 +1201,18 @@ class InstructorWeb:
             body += table
         if not rows:
             empty = ('검색 조건에 맞는 삭제된 과제가 없습니다.' if search else '휴지통이 비어 있습니다.') if trash else '등록된 과제가 없거나 검색 조건에 맞는 과제가 없습니다.'
-            body += f'<p>{empty}</p>'
-        body += f'<div class="catalog-actions">{catalog["page"]} / {catalog["pages"]} 페이지'
+            body += f'<div class="ui-empty" role="status"><strong>{empty}</strong>'
+            if not trash and not read_only and course['status'] != 'archived':
+                body += '<p>검색 조건을 변경하거나 새 과제를 등록하세요.</p>'
+            body += '</div>'
+        body += f'<nav class="catalog-actions ui-toolbar" aria-label="과제 목록 페이지"><span>{catalog["page"]} / {catalog["pages"]} 페이지</span>'
         for number, label in ((catalog['page'] - 1, '이전'), (catalog['page'] + 1, '다음')):
             if 1 <= number <= catalog['pages']:
                 query = urlencode(dict(q=search, visibility=visibility, page=number))
-                body += f' <a href="{base}/assignments?{_e(query)}">{label}</a>'
-        body += f'</div><p class="meta">{_e(_timestamp(catalog["generated_at"]))} KST 기준. 학생 수는 해당 공개본 전체 이력 기준이며 현재 수강 중인 인원과 다를 수 있습니다. 초안·공개본 버전을 최종 성적 의무 과제 수로 해석하지 마세요.</p>'
+                body += f' <a class="ui-action secondary" href="{base}/assignments?{_e(query)}" aria-label="과제 목록 {label} 페이지">{label}</a>'
+        body += f'</nav><p class="meta">{_e(_timestamp(catalog["generated_at"]))} KST 기준. 학생 수는 해당 공개본 전체 이력 기준이며 현재 수강 중인 인원과 다를 수 있습니다. 초안·공개본 버전을 최종 성적 의무 과제 수로 해석하지 마세요.</p>'
+        if not trash:
+            body += '<details class="ui-panel"><summary>보관·삭제와 검증 상태 안내</summary><p>검증 통과와 학생 공개는 별개입니다. 삭제한 과제는 기본 관리 목록에서 제외되며 제출·점수·코드 이력은 보존합니다. 휴지통에서 조회하거나 보관 상태로 복원할 수 있습니다.</p></details>'
         return '과제 휴지통' if trash else '과제 관리', body
 
     def _release_lifecycle(self, course, assignment_id, visibility, session, deleted_at=None, *, needs_archive=False):
@@ -1284,11 +1349,14 @@ class InstructorWeb:
         job = job or latest_job
         locked = latest_job.get('status') in {'queued', 'running'} or bool(draft.get('published_assignment_id')) or course['status'] == 'archived'
         current_check = latest_job.get('status') == 'succeeded' and latest_job.get('revision') == draft['revision']
-        body = '<div class="notice"><strong>통합 과제·채점 작성</strong> · 문제부터 검증과 공개까지 이 화면에서 처리합니다. 각 저장 후 화면이 갱신되며 저장 버전이 증가합니다.</div>'
-        body += f'<p><strong>{_e(draft["title"])}</strong> · 저장 버전 {draft["revision"]} · {_e(draft["language"])} · {"예제" if draft["mode"] == "template" else "직접 만들기"}</p>'
-        body += f'<p class="meta">마지막 저장: {_e(_timestamp(draft.get("updated_at")))} KST · 각 영역의 저장 버튼을 누른 내용만 보존됩니다.</p>'
+        body = '<div class="draft-overview">'
+        body += f'<p><strong data-draft-title>{_e(draft["title"])}</strong> · 저장 버전 <span data-draft-revision>{draft["revision"]}</span> · <span data-draft-language>{_e(draft["language"])}</span> · {"예제" if draft["mode"] == "template" else "직접 만들기"}</p>'
+        body += f'<p class="meta">마지막 저장: <span data-draft-updated>{_e(_timestamp(draft.get("updated_at")))}</span> KST · 각 영역의 저장 버튼을 누른 내용만 보존됩니다.</p>'
+        body += '<p data-draft-save-overview role="status" aria-live="polite">서버 저장 상태는 각 영역에서 확인하세요.</p>'
+        body += '<noscript><p>JavaScript가 꺼져 있어 저장 후 화면이 이동합니다. 한 영역씩 작성하고 저장하세요.</p></noscript>'
         download_path = base + ('/assignments/' + draft['published_assignment_id'] if draft.get('published_assignment_id') else '/drafts/' + draft['draft_id'])
-        body += f'<p><a class="button secondary" href="{_e(download_path)}/downloads">등록 파일·제출물 다운로드</a></p>'
+        body += f'<div class="ui-actions"><a class="ui-action secondary" href="{_e(download_path)}/downloads">등록 파일·제출물 다운로드</a><a class="ui-action quiet" href="{path}" target="_blank" rel="noopener">서버에 저장된 초안을 새 탭에서 확인</a></div>'
+        body += '<details><summary>작성·저장 안내</summary><p><strong>통합 과제·채점 작성</strong> · 각 영역의 저장 버튼으로 서버에 저장합니다. 저장 중에도 다른 영역의 입력과 파일 선택을 유지합니다. 저장 완료를 확인한 뒤 검증·공개를 진행하세요.</p></details></div>'
         uploads = {item['role']: item for item in draft.get('uploads', [])}
         template = draft['mode'] == 'template'
         missing_materials = self.assignments.missing_materials(draft, uploads)
@@ -1298,7 +1366,7 @@ class InstructorWeb:
         deadline = draft.get('release_due_at') if draft.get('published_assignment_id') else draft.get('due_at')
         verification = ('현재 버전 검증 통과' if current_check else '자료 변경 · 재검증 필요' if latest_job and latest_job.get('revision') != draft['revision'] else _STATUS.get(latest_job.get('status'), '아직 검증하지 않음'))
         body += '<div class="draft-summary" aria-label="과제 준비 현황">' + ''.join(
-            f'<p><strong>{_e(label)}</strong>{_e(value)}</p>' for label, value in (
+            f'<p><strong>{_e(label)}</strong><span data-draft-summary-value>{_e(value)}</span></p>' for label, value in (
                 ('제출 마감 (한국 시간)', (_timestamp(deadline).replace('T', ' ') + ' KST') if deadline else '마감 없음'),
                 ('학생 배포 자료', material_status(('starter',))),
                 ('교수자 채점 자료', material_status(('solution', 'negative')) + f' · {draft.get("max_score", 0):g}점 만점'),
@@ -1380,7 +1448,7 @@ class InstructorWeb:
             body += f'<p>저장된 테스트 {len(draft.get("tests") or [])}개 · {_e(draft.get("max_score"))}점 만점</p>'
         body += '</section>'
 
-        body += '<section id="draft-validation"><h3>4. 서버 검증</h3>'
+        body += '<section id="draft-validation"><h3>4. 서버 검증</h3><p data-draft-check-status role="status"></p>'
         if missing_materials and not locked:
             body += ('<div class="notice warning" id="missing-validation-materials"><strong>검증 전에 등록할 자료</strong><ul>'
                      + ''.join(f'<li><a href="#draft-{"starter" if label == "학생용 starter ZIP" else "grading"}">{_e(label)}</a></li>'
@@ -1392,10 +1460,12 @@ class InstructorWeb:
             body += self._check_result(job, draft, path)
         else:
             body += '<p>아직 서버 검증을 실행하지 않았습니다.</p>'
-        if not locked and not current_check:
+        if not locked:
             check_button = _button('현재 저장 버전 검증 시작')
             if missing_materials:
                 check_button = check_button.replace('<button ', '<button disabled aria-describedby="missing-validation-materials" ')
+            elif current_check:
+                check_button = check_button.replace('<button ', '<button disabled ')
             body += self._form(path + '/checks', session, revision_field +
                 _checkbox('trusted_code', '정답·오답 코드를 직접 검토했으며 서버 실행을 승인합니다.') +
                 check_button)
@@ -1407,7 +1477,7 @@ class InstructorWeb:
             delete_revision = f'<input type="hidden" name="delete_revision" value="{draft["revision"]}">'
             body += self._form(path + '/delete', session, delete_revision +
                 _checkbox('confirm', '이 미공개 초안을 삭제합니다.') + _button('초안 삭제', danger=True)) + '</details>'
-        body += f'<div class="actions"><a class="button secondary" href="{base}/assignments">과제 목록으로</a></div><p class="hint">입력 중인 내용은 각 저장 버튼을 눌러야 보존됩니다. 파일 선택값은 새로고침하면 다시 선택해야 합니다.</p>'
+        body += f'<div class="actions"><a class="button secondary" href="{base}/assignments">과제 목록으로</a></div><p class="hint">각 영역의 저장 완료를 확인한 뒤 검증을 시작하세요. 브라우저를 닫으면 미저장 입력은 사라집니다. 파일은 선택만으로 저장되지 않습니다.</p>'
         return '과제·채점 통합 작성', body
 
     def _test_case_editor(self, path, draft, session, revision_field):
@@ -1435,11 +1505,13 @@ class InstructorWeb:
         titles = {'starter': '학생용 starter ZIP', 'solution': '정답 ZIP · 만점을 받아야 하는 코드', 'negative': '오답 ZIP · 일부 기준을 만족하지 않는 코드'}
         upload = next((item for item in draft.get('uploads', []) if item['role'] == role), None)
         body = '<section><h3>' + titles[role] + '</h3>'
+        body += f'<div data-upload-state="{role}">'
         if upload:
             status = '템플릿 파일 미리보기' if upload.get('virtual') else '서버 등록됨'
             body += f'<p>{status} · {_e(upload.get("size_bytes"))} bytes</p><ul>' + ''.join('<li>' + _e(file) + '</li>' for file in upload.get('files', [])) + '</ul>'
         else:
             body += '<p>아직 등록된 파일이 없습니다.</p>'
+        body += '</div>'
         if draft['mode'] == 'template':
             body += '<p>예제 자료는 서버 템플릿에서 준비합니다. 위 목록과 같은 생성 규칙으로 검증·공개 자료를 만듭니다. 학생에게는 학생용 starter 파일만 배포합니다.</p>'
         elif not locked:

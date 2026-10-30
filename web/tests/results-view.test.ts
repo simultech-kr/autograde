@@ -35,7 +35,7 @@ function load(file: string): unknown {
       assert.ok(target, `Unexpected local dependency: ${name}`);
       return load(target);
     }
-    assert.equal(name, "react/jsx-runtime");
+    assert.ok(name === "react/jsx-runtime" || name === "react");
     return require(name);
   };
   new Function("require", "module", "exports", compiled)(localRequire, module, module.exports);

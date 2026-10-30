@@ -1,13 +1,21 @@
 """Fixed, hash-authorized progressive enhancement; no browser persistence."""
 import base64
 import hashlib
+from .instructor_draft_browser import SCRIPT as DRAFT_SAVE_SCRIPT
 
 
 SCRIPT = r"""(() => {
   'use strict';
+  const portalMenu = document.querySelector('details.portal-menu');
+  if (portalMenu) {
+    const desktopMenu = window.matchMedia('(min-width: 1101px)');
+    const fitMenu = () => { portalMenu.open = desktopMenu.matches; };
+    fitMenu(); desktopMenu.addEventListener('change', fitMenu);
+  }
   const guarded = [...document.querySelectorAll('form[data-dirty-guard]')];
   const baselines = new Map();
   let leaving = false;
+  let draftSavePending = false;
   const fingerprint = form => JSON.stringify([...form.elements]
     .filter(el => el.name && !el.disabled && !['hidden', 'submit', 'button'].includes(el.type))
     .map(el => [el.name, el.type === 'file' ? [...el.files].map(f => [f.name, f.size, f.lastModified]) :
@@ -121,6 +129,11 @@ SCRIPT = r"""(() => {
       });
     });
     editor.addEventListener('input', refresh);
+    editor.addEventListener('autograde:server-values', () => {
+      rows.forEach(row => { row.hidden = !filled(row); });
+      if (rows.every(row => row.hidden)) rows[0].hidden = false;
+      refresh();
+    });
     refresh();
   });
   guarded.forEach(form => {
@@ -144,9 +157,11 @@ SCRIPT = r"""(() => {
     }, true);
   });
   window.addEventListener('beforeunload', event => {
-    if (!leaving && anyDirty()) { event.preventDefault(); event.returnValue = ''; }
+    if (!leaving && (anyDirty() || draftSavePending)) { event.preventDefault(); event.returnValue = ''; }
   });
+  /* draft-inline-save */
   document.addEventListener('submit', event => {
+    if (event.defaultPrevented) return;
     const otherDirty = guarded.some(form => form !== event.target && dirty(form));
     if (otherDirty && !window.confirm('다른 입력 영역에 저장하지 않은 변경이 있습니다. 계속하면 해당 변경이 사라집니다. 다른 영역의 파일 선택은 다음 화면에서 유지되지 않습니다. 파일은 영역별로 하나씩 저장하세요. 계속할까요?')) {
       event.preventDefault();
@@ -194,7 +209,7 @@ SCRIPT = r"""(() => {
         message.textContent = labels[data.status] + ' · 서버 상태 확인됨';
         if (!['queued', 'running'].includes(data.status)) {
           terminal = true; button.hidden = true;
-          if (!anyDirty()) window.location.reload();
+          if (!anyDirty() && !draftSavePending) window.location.reload();
           else message.textContent += ' · 입력을 저장한 뒤 새로고침하세요.';
           return;
         }
@@ -230,7 +245,7 @@ SCRIPT = r"""(() => {
     window.addEventListener('pagehide', stop); window.addEventListener('pageshow', resume);
     schedule();
   });
-})();"""
+})();""".replace('/* draft-inline-save */', DRAFT_SAVE_SCRIPT)
 
 SCRIPT_HASH = base64.b64encode(hashlib.sha256(SCRIPT.encode('utf-8')).digest()).decode('ascii')
 SCRIPT_CSP = f"; script-src 'sha256-{SCRIPT_HASH}'; connect-src 'self'"

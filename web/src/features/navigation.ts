@@ -22,14 +22,14 @@ export function courseNavigation(
   const base = `/courses/${course.course_key}/instructor`;
   const query = `?${new URLSearchParams({ course_key: course.course_key })}`;
   return [
-    { id: "home", label: "수업 홈", href: base, current: false },
+    { id: "home", label: "수업 개요", href: base, current: false },
     { id: "assignments", label: "과제 관리", href: `${base}/assignments`, current: false },
-    { id: "students", label: "학생 관리", href: `${base}/students`, current: false },
-    { id: "registrations", label: "가입·수강 명단", href: `${base}/registrations`, current: false },
+    { id: "students", label: "수강생 관리", href: `${base}/students`, current: false },
+    { id: "registrations", label: "명단·본인 확인", href: `${base}/registrations`, current: false },
     { id: "environments", label: "실습 환경", href: `${base}/environments`, current: false },
     // Classroom may be enabled while Next results are disabled. The Python
     // results page remains the authorized fallback in that configuration.
-    { id: "results", label: "제출·채점", href: resultsEnabled ? `/app${query}` : `${base}/submissions`, current: section === "results" },
+    { id: "results", label: "제출·채점 현황", href: resultsEnabled ? `/app${query}` : `${base}/submissions`, current: section === "results" },
     { id: "classroom", label: "실습 교실", href: `/app/classroom${query}`, current: section === "classroom" },
     { id: "settings", label: "수업 설정", href: `${base}/settings`, current: false },
   ];

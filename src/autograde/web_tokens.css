@@ -4,7 +4,7 @@
 :root[data-theme="light"],
 :root {
   color-scheme: light;
-  --page: #ffffff;
+  --page: #f4f6fa;
   --surface: #ffffff;
   --surface-raised: #f5f7f9;
   --text: #17233b;
@@ -44,7 +44,7 @@
 @media (prefers-color-scheme: dark) {
   :root {
     color-scheme: dark;
-    --page: #182333;
+    --page: #111a27;
     --surface: #182333;
     --surface-raised: #1b293a;
     --text: #ecf2fa;
@@ -71,7 +71,7 @@
    test_web_design_tokens checks these values against the block above. */
 [data-theme="dark"] {
   color-scheme: dark;
-  --page: #182333;
+  --page: #111a27;
   --surface: #182333;
   --surface-raised: #1b293a;
   --text: #ecf2fa;

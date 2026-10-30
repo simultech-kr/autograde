@@ -15,6 +15,17 @@ ALERTS = {'workers_unavailable': '채점 작업자 확인 필요', 'storage_low'
 STATES = {'unknown': '미확인', 'ok': '정상', 'failed': '실패', 'current': '적용됨',
     'pending': '대기', 'unreported': '보고 없음', 'recent': '최근 보고', 'stale': '보고 지연',
     'verified': '검증됨', 'configured-unverified': '설정됨 · 상태 점검 필요', 'not-configured': '미설정'}
+ALERT_ACTIONS = {
+    'workers_unavailable': ('채점 작업자의 실행 상태와 서버 로그를 확인하세요.', 'operations-health', '작업자 상태 확인'),
+    'storage_low': ('남은 공간과 자료 보존 정책을 확인하고 저장 공간을 확보하세요.', 'operations-health', '저장 공간 확인'),
+    'storage_unknown': ('저장소 연결과 접근 권한을 점검하세요.', 'operations-health', '저장소 상태 확인'),
+    'queue_wait_high': ('대기 건수와 작업자 상태를 함께 확인하세요.', 'operations-grading', '채점 대기 확인'),
+    'grading_failures': ('처리 실패 건수를 확인하고 지원용 진단과 서버 로그를 검토하세요.', 'operations-grading', '처리 현황 확인'),
+    'database_unavailable': ('데이터베이스 연결·접근 권한과 서버 로그를 확인하세요.', 'operations-health', '운영 상태 확인'),
+    'backup_attention': ('최근 시도와 마지막 검증 성공 시각을 확인하고 백업 작업을 점검하세요.', 'operations-health', '백업 상태 확인'),
+    'seat_attention': ('실패한 좌석의 정리·업데이트 상태를 확인하세요.', 'operations-seats', '실습실 기기 확인'),
+    'seat_registry_unavailable': ('기기 등록부 조회 실패는 보고 없음과 다릅니다. 저장소 상태와 복원 절차를 점검하세요.', 'operations-seats', '기기 등록부 확인'),
+}
 
 
 def matches(path):
@@ -42,6 +53,13 @@ def _version(value):
     return '미확인' if value in {None, '', 'unknown'} else _e(value)
 
 
+def _badge(state):
+    tone = {'ok': 'success', 'verified': 'success', 'current': 'success',
+            'failed': 'error', 'pending': 'warning', 'stale': 'warning',
+            'configured-unverified': 'warning', 'recent': 'info'}.get(state, 'neutral')
+    return '<span class="ui-badge" data-tone="' + tone + '">' + _e(STATES[state]) + '</span>'
+
+
 def request(web, method, path, form, session):
     if web.principal and web.principal.role != 'admin':
         raise PlatformAccessDenied('administrator required')
@@ -54,31 +72,37 @@ def request(web, method, path, form, session):
              'Content-Disposition': 'attachment; filename="autograde-diagnostics.json"'})
     report = web.operations.snapshot()
     body = '<p class="portal-intro">채점 지연·저장 공간·백업·실습실 기기를 확인합니다. 접속 보고가 없으면 정상으로 간주하지 않습니다.</p>'
-    body += '<div class="actions"><a class="button" href="/instructor/operations">현황 새로고침</a> <a class="button secondary" href="/instructor/operations/diagnostics.json">지원용 진단 다운로드</a></div>'
+    body += '<div class="ui-toolbar"><a class="ui-action primary" href="/instructor/operations">현황 새로고침</a><a class="ui-action secondary" href="/instructor/operations/diagnostics.json">지원용 진단 다운로드</a></div>'
     body += '<p class="hint">관측 시각: ' + _time(report['observed_at']) + ' KST · 최대 15초 간격으로 집계합니다. 진단에는 학생 정보·코드·계정 비밀이 포함되지 않습니다.</p>'
     if report['alerts']:
-        body += '<section class="notice warning" role="status"><h2>확인할 항목</h2><ul>'
-        body += ''.join('<li>' + _e(ALERTS.get(item, item)) + '</li>' for item in report['alerts']) + '</ul></section>'
+        body += '<section class="ui-panel" aria-labelledby="operations-attention"><h2 id="operations-attention">확인할 항목 <span class="ui-badge" data-tone="warning">' + str(len(report['alerts'])) + '건</span></h2><ul class="operations-alerts">'
+        for item in report['alerts']:
+            label = ALERTS.get(item, item)
+            guidance, target, action = ALERT_ACTIONS.get(item, ('지원용 진단과 서버 로그를 확인하세요.', 'operations-health', '운영 상태 확인'))
+            body += ('<li><div><strong>' + _e(label) + '</strong><p class="ui-muted">' + _e(guidance) + '</p></div>'
+                     '<a class="ui-action quiet" href="#' + target + '" aria-label="' + _e(label + ' · ' + action) + '">' + action + '</a></li>')
+        body += '</ul></section>'
     grading = report['grading'] or {}
     disk = report['storage'] or {}
     cards = [('채점 대기', grading.get('queued')), ('채점 중', grading.get('running')),
              ('최장 대기 (초)', '대기 없음' if grading.get('queued') == 0 else grading.get('oldest_wait_seconds')),
              ('24시간 접수', grading.get('received_24h')), ('24시간 처리 실패', grading.get('failed_24h')),
              ('남은 공간 (GiB)', round(disk['free_bytes'] / 1024 ** 3, 1) if disk else None)]
-    body += '<dl class="portal-metrics">' + ''.join('<div><dt>' + _e(label) + '</dt><dd>' + _e(value) + '</dd></div>' for label, value in cards) + '</dl>'
-    body += '<section><h2>운영 상태</h2><dl><dt>채점 작업자</dt><dd>' + _e(report['workers']['healthy']) + ' / ' + _e(report['workers']['registered']) + '</dd>'
-    body += '<dt>최근 백업 시도</dt><dd>' + _e(STATES[report['backup']['status']]) + '</dd>'
-    body += '<dt>마지막 백업 검증 성공 (KST)</dt><dd>' + _time(report['backup']['last_success_at']) + '</dd>'
-    body += '<dt>학생 원격 실행공간</dt><dd>' + _e(STATES[report['runtime']]) + '</dd>'
-    body += '<dt>접수부터 현재 완료 상태까지 평균 (초)</dt><dd>' + _e(grading.get('mean_receipt_to_current_completed_state_seconds')) + '</dd></dl>'
+    body += '<dl class="portal-metrics" id="operations-grading" aria-label="채점·저장 공간 현황">' + ''.join('<div><dt>' + _e(label) + '</dt><dd>' + _e(value) + '</dd></div>' for label, value in cards) + '</dl>'
+    body += '<section class="ui-panel" id="operations-health"><h2>운영 상태</h2><dl class="operations-health-grid"><div><dt>채점 작업자</dt><dd>' + _e(report['workers']['healthy']) + ' / ' + _e(report['workers']['registered']) + '</dd></div>'
+    body += '<div><dt>최근 백업 시도</dt><dd>' + _badge(report['backup']['status']) + '</dd></div>'
+    body += '<div><dt>마지막 백업 검증 성공 (KST)</dt><dd>' + _time(report['backup']['last_success_at']) + '</dd></div>'
+    body += '<div><dt>학생 원격 실행공간</dt><dd>' + _badge(report['runtime']) + '</dd></div>'
+    body += '<div><dt>남은 저장 공간</dt><dd>' + (f'{disk["free_bytes"] / 1024 ** 3:.1f} GiB' if disk else '미확인') + '</dd></div>'
+    body += '<div><dt>접수부터 현재 완료 상태까지 평균 (초)</dt><dd>' + _e(grading.get('mean_receipt_to_current_completed_state_seconds')) + '</dd></div></dl>'
     body += '<p class="hint">최근 24시간 접수분 기준입니다. 수동 결과 공개의 지연이 포함될 수 있습니다. 백업 복원 시험·OS별 인수 시험 통과를 뜻하지 않습니다.</p></section>'
-    body += '<section><h2>실습실 기기</h2><p class="hint">등록된 모든 좌석을 표시합니다. 최근 보고도 클라이언트의 자기 보고이며 보안 검증 증명은 아닙니다.</p>'
+    body += '<section class="ui-panel" id="operations-seats"><h2>실습실 기기</h2><p class="hint">등록된 모든 좌석을 표시합니다. 최근 보고도 클라이언트의 자기 보고이며 보안 검증 증명은 아닙니다.</p>'
     if report['seats']:
         rows = []
         for seat in report['seats']:
             rows.append((_e(seat['label']) + (' · 사용 중지' if not seat['active'] else ''),
-                _e(STATES[seat['presence']]), _version(seat['ide_version']) + ' / ' + _version(seat['extension_version']),
-                _e(STATES[seat['cleanup']]), _e(STATES[seat['update']]), _time(seat['last_seen_at'])))
+                _badge(seat['presence']), _version(seat['ide_version']) + ' / ' + _version(seat['extension_version']),
+                _badge(seat['cleanup']), _badge(seat['update']), _time(seat['last_seen_at'])))
         body += result_table(('좌석', '연결', 'IDE / 확장', '정리', '업데이트', '마지막 보고'), rows,
                              '등록 좌석의 최신 보고 · 시각 KST · 좁은 화면에서는 좌석별 카드로 표시합니다.')
     else:

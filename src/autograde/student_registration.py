@@ -336,6 +336,43 @@ class StudentRegistration:
             return [dict(row) for row in db.execute('SELECT r.request_id,r.student_key,r.status,r.created_at,r.updated_at,a.verified,a.active AS account_active '
                 'FROM student_course_registrations r JOIN student_accounts a ON a.student_key=r.student_key WHERE r.course_key=? ORDER BY CASE r.status WHEN \'pending\' THEN 0 ELSE 1 END,r.created_at DESC LIMIT 1000', (course,))]
 
+    def roster_overview(self, course):
+        """Read membership and enrollment facts for this course's students only.
+
+        Callers must authorize the course before and after this read. A global
+        account alone does not make a student visible to a course instructor.
+        Passwords, password hashes and other courses' enrollments are excluded.
+        """
+        with self.state._connection() as db:
+            db.execute('BEGIN')
+            if not db.execute('SELECT 1 FROM admin_courses WHERE course_key=?', (course,)).fetchone():
+                raise PlatformNotFound()
+            return [dict(row) for row in db.execute('''
+                WITH scoped(student_key) AS (
+                    SELECT student_key FROM student_course_eligibility WHERE course_key=:course
+                    UNION SELECT student_key FROM student_course_registrations WHERE course_key=:course
+                    UNION SELECT s.student_key FROM platform_enrollments e
+                        JOIN platform_students s ON s.id=e.student_id WHERE e.course_key=:course
+                )
+                SELECT scoped.student_key,COALESCE(p.name,'') AS name,
+                    a.active AS account_active,a.verified,a.student_id AS account_student_id,
+                    s.id AS student_id,s.active AS student_active,
+                    e.id AS enrollment_id,e.active AS enrollment_active,
+                    CASE WHEN pw.enrollment_id IS NULL THEN 0 ELSE 1 END AS has_password,
+                    CASE WHEN pw.password_hash LIKE 'scrypt$v2$%' THEN 1 ELSE 0 END AS has_course_pin,
+                    pw.locked_until,r.status AS request_status,r.created_at AS requested_at,
+                    CASE WHEN allowed.student_key IS NULL THEN 0 ELSE 1 END AS eligible
+                FROM scoped
+                LEFT JOIN student_accounts a ON a.student_key=scoped.student_key
+                LEFT JOIN platform_students s ON s.student_key=scoped.student_key
+                LEFT JOIN admin_student_profiles p ON p.student_id=s.id
+                LEFT JOIN platform_enrollments e ON e.student_id=s.id AND e.course_key=:course
+                LEFT JOIN platform_student_passwords pw ON pw.enrollment_id=e.id
+                LEFT JOIN student_course_registrations r ON r.student_key=scoped.student_key AND r.course_key=:course
+                LEFT JOIN student_course_eligibility allowed ON allowed.student_key=scoped.student_key AND allowed.course_key=:course
+                ORDER BY scoped.student_key
+                ''', {'course': course})]
+
     @staticmethod
     def parse_roster(content):
         if not isinstance(content, bytes) or len(content) > 1024 * 1024:

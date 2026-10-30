@@ -71,7 +71,8 @@ def test_flat_design_has_no_elevation_in_either_theme():
     for palette in palettes:
         tokens = dict(re.findall(r'(--[a-z-]+)\s*:\s*([^;]+);', palette))
         assert tokens['--shadow-sm'].strip() == 'none'
-        assert tokens['--page'].strip() == tokens['--surface'].strip()
+        # Flat surfaces can use a distinct canvas without gradients or shadows.
+        assert tokens['--page'].strip() != tokens['--surface'].strip()
     radii = re.findall(r'--radius-\w+\s*:\s*(\d+)px\s*;', css)
     assert len(radii) == 3
     assert all(0 <= int(radius) <= 4 for radius in radii)
@@ -94,6 +95,7 @@ def _contrast(first, second):
 
 @pytest.mark.parametrize(('foreground', 'background'), [
     ('--text', '--surface'), ('--muted', '--surface'),
+    ('--text', '--page'), ('--muted', '--page'),
     ('--muted', '--surface-raised'), ('--link', '--surface'), ('--link', '--soft'),
     ('--on-accent', '--accent'), ('--success', '--success-bg'),
     ('--warning', '--warning-bg'), ('--error', '--error-bg'),

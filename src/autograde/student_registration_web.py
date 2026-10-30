@@ -301,7 +301,7 @@ def instructor_request(web, method, course, route, form, session, *, reauthorize
         if set(form) not in ({'csrf', 'file'}, {'csrf', 'file', 'mode'}):
             raise ValueError('CSV 파일을 선택하세요.')
         preview = store.preview_eligibility(key, form['file'], form.get('mode', 'add'), actor=actor, reauthorize=reauthorize)
-        body = ('<p>아직 명단을 변경하지 않았습니다. 반영할 내용을 확인하세요.</p><dl>'
+        body = ('<div class="ui-panel registration-review"><p class="ui-muted">아직 명단을 변경하지 않았습니다. 반영할 내용을 확인하세요.</p><dl>'
                 f'<dt>방식</dt><dd>{"명단 추가" if preview["mode"] == "add" else "허용 명단 교체"}</dd>'
                 f'<dt>새 학번</dt><dd>{preview["added"]}명</dd><dt>기존 학번</dt><dd>{preview["existing"]}명</dd>'
                 f'<dt>파일 내 중복</dt><dd>{preview["duplicates"]}건</dd><dt>허용 명단 제외</dt><dd>{preview["removed"]}명</dd>'
@@ -311,14 +311,14 @@ def instructor_request(web, method, course, route, form, session, *, reauthorize
             f'<input type="hidden" name="change_id" value="{preview["change_id"]}">'
             '<label><input type="checkbox" name="confirm" value="yes" required> 변경 인원과 수강 중지의 분리를 확인했습니다.</label>'
             '<button>검토한 명단 반영</button>')
-        return '수강 명단 변경 검토', body + f'<a href="{base}">취소 · 명단으로 돌아가기</a>'
+        return '수강 명단 변경 검토', body + f'<a class="ui-action quiet" href="{base}">취소 · 명단으로 돌아가기</a></div>'
     if method == 'POST' and route == 'registrations/roster/confirm':
         if set(form) != {'csrf', 'change_id', 'confirm'} or form['confirm'] != 'yes':
             raise ValueError('변경 내용을 확인하세요.')
         result = store.apply_eligibility(key, form['change_id'], actor=actor, reauthorize=reauthorize)
-        return '수강 명단 반영 완료', (f'<p role="status">추가 {result["added"]}명 · 허용 명단 제외 {result["removed"]}명 · 수강 연결 {result["matched"]}명</p>'
+        return '수강 명단 반영 완료', (f'<div class="ui-panel registration-complete"><p role="status">추가 {result["added"]}명 · 허용 명단 제외 {result["removed"]}명 · 수강 연결 {result["matched"]}명</p>'
             '<p>기존 수강 학생의 접근 권한은 유지됩니다. 미확인 학생은 본인 확인 코드로 계정을 활성화해야 합니다.</p>'
-            f'<a href="{base}">가입·수강 명단 확인</a>')
+            f'<div class="ui-toolbar"><a class="ui-action primary" href="{web._base(course)}/students">수강생 상태 확인</a><a class="ui-action secondary" href="{base}">명단 관리로 돌아가기</a></div></div>')
     if method == 'POST' and route == 'registrations/code':
         if set(form) != {'csrf', 'student_key', 'purpose', 'reason', 'confirm'} or form['confirm'] != 'yes':
             raise ValueError('본인 확인과 발급 사유를 입력하세요.')
@@ -328,38 +328,62 @@ def instructor_request(web, method, course, route, form, session, *, reauthorize
         issued = store.issue_token(key, form['student_key'], purpose, actor=actor, reason=form['reason'],
                                    reauthorize=reauthorize_reset if purpose == 'reset' else reauthorize)
         label = '본인 확인' if purpose == 'activate' else '회원 비밀번호 재설정'
-        return label + ' 코드 발급', (f'<p>학번 <strong>{escape(issued["student_key"])}</strong> · {label}</p>'
+        return label + ' 코드 발급', (f'<div class="ui-panel registration-complete"><p>학번 <strong>{escape(issued["student_key"])}</strong> · {label}</p>'
             f'<label>한 번만 표시되는 코드<input readonly value="{escape(issued["token"], quote=True)}" autocomplete="off"></label>'
             '<p>15분 이내 한 번만 사용할 수 있습니다. 해당 학생에게 직접 전달하고 이 화면을 닫으세요. 새 코드를 발급하면 이전 미사용 코드는 무효가 됩니다.</p>'
-            f'<p>학생은 {"내 계정의 본인 확인" if purpose == "activate" else "로그인 화면의 비밀번호 찾기"}에서 입력합니다.</p><a href="{base}">코드 닫기 · 명단으로 돌아가기</a>')
+            f'<p>학생은 {"내 계정의 본인 확인" if purpose == "activate" else "로그인 화면의 비밀번호 찾기"}에서 입력합니다.</p><a class="ui-action primary" href="{base}">코드 닫기 · 명단으로 돌아가기</a></div>')
     if method != 'GET' or route != 'registrations':
         raise PlatformNotFound()
+    selected = form.get('student_key', '')
+    if not isinstance(selected, str) or len(selected) > 255:
+        raise ValueError('학생 학번을 확인하세요.')
+    if selected and not any(row['student_key'] == selected for row in store.roster_overview(key)):
+        raise PlatformNotFound('이 수업의 명단·신청·수강 기록에 없는 학생입니다.')
     rows, eligible = store.requests(key), store.eligibility(key)
     reauthorize()
-    body = ('<p>학생은 먼저 가입하고 수업을 선택합니다. 본인 확인을 완료한 계정만 허용 명단과 학번이 일치할 때 수업에 연결됩니다.</p>'
-            '<p class="hint">학생의 본인을 확인한 후 아래에서 활성화 코드를 발급하세요. 이미 전용 비밀번호가 있는 학생은 기존 수업 로그인 후 회원 계정을 연결할 수 있습니다.</p>')
-    body += '<section><h3>수강 허용 명단</h3><p><a href="' + base + '/template.csv">CSV 기본 양식 다운로드</a></p>'
+    body = (f'<div class="registration-top"><p>수강 명단을 등록하고 학생 본인 확인을 진행합니다. 최종 이용 가능 여부는 수강생 관리에서 확인하세요.</p>'
+            f'<div class="ui-toolbar"><a class="ui-action secondary" href="{web._base(course)}/students">수강생 관리로 돌아가기</a>'
+            f'<a class="ui-action quiet" href="{base}#identity-code">본인 확인으로 이동</a></div>'
+            '<ol class="registration-steps" aria-label="수강 연결 절차"><li><strong>01</strong> 명단 준비</li>'
+            '<li><strong>02</strong> 변경 검토·반영</li><li><strong>03</strong> 학생 본인 확인</li></ol></div>')
+    body += '<div class="registration-layout"><section class="ui-panel" id="roster-management">'
+    body += (f'<div class="registration-panel-heading"><h3>수강 명단 등록</h3><span class="ui-badge" data-tone="neutral">등록 {len(eligible)}명</span></div>'
+             '<p class="ui-muted">수강할 학생의 학번을 CSV로 등록합니다. 파일을 올린 뒤 변경 인원을 확인하고 반영합니다.</p>'
+             f'<a class="ui-action secondary" href="{base}/template.csv">CSV 양식 다운로드</a>')
     body += web._form(base + '/roster', session,
-        '<label>학생 명단 CSV<input type="file" name="file" accept=".csv,text/csv" required></label>'
+        '<label class="registration-file-field">학생 명단 CSV<input type="file" name="file" accept=".csv,text/csv" required></label>'
         '<label>반영 방식<select name="mode"><option value="add">기존 허용 명단에 추가</option><option value="replace">파일로 허용 명단 교체</option></select></label>'
-        '<p>UTF-8 CSV, 첫 열 student_key 또는 학번. 이름 열은 선택이며 저장하지 않습니다. '
-        '최대 1 MiB·10,000명. 비밀번호는 포함하지 않습니다. 반영 전 변경 인원을 확인합니다.</p>'
+        '<p>UTF-8 CSV · 최대 1 MiB · 10,000명. 첫 열은 student_key 또는 학번이며 비밀번호는 포함하지 않습니다.</p>'
         '<button>명단 변경 미리보기</button>', multipart=True)
-    body += f'<p>수강 허용 학번 {len(eligible)}명</p><details><summary>등록 학번 보기</summary><p>' + ', '.join(escape(value) for value in eligible) + '</p></details></section>'
+    body += ('<details class="registration-format"><summary>파일 형식과 명단 교체 안내</summary>'
+             '<p>이름 열은 선택이며 저장하지 않습니다. 명단에서 제외해도 기존 수강 권한은 유지됩니다. '
+             '수강 중지는 수강생 관리에서 별도로 진행하세요.</p></details>')
+    body += f'<details><summary>등록 학번 보기 · {len(eligible)}명</summary><p>' + (', '.join(escape(value) for value in eligible) or '등록된 학번이 없습니다.') + '</p></details></section>'
     purposes = '<option value="activate">신규 계정 본인 확인</option>' + ('<option value="reset">회원 비밀번호 복구 · 모든 수업의 공통 계정</option>' if admin else '')
-    body += '<section><h3>본인 확인·계정 복구 코드</h3>'
+    body += '<section class="ui-panel" id="identity-code"><div class="registration-panel-heading"><h3>학생 본인 확인</h3><span class="ui-badge" data-tone="info">일회용 코드</span></div>'
+    body += '<p class="ui-muted">학생의 신원을 확인한 뒤 활성화 코드를 발급하세요. 학생이 웹에서 입력하면 본인 확인이 완료됩니다.</p>'
     body += web._form(base + '/code', session,
-        '<label>학번<input name="student_key" pattern="[0-9]{4,20}" maxlength="20" inputmode="numeric" required></label>'
+        f'<label>학번<input name="student_key" value="{escape(selected, quote=True)}" pattern="[0-9]{{4,20}}" maxlength="20" inputmode="numeric" required></label>'
         f'<label>발급 목적<select name="purpose">{purposes}</select></label>'
-        '<label>본인 확인·발급 사유<input name="reason" minlength="3" maxlength="500" required></label>'
+        '<label>본인 확인·발급 사유<input name="reason" minlength="3" maxlength="500" required placeholder="예: 학생증의 이름과 학번 확인"></label>'
         '<label><input type="checkbox" name="confirm" value="yes" required> 학번의 실제 소유자를 별도로 확인했습니다.</label>'
-        '<p>학번은 이 수업의 허용 명단 또는 현재 수강 명단에 있어야 합니다. 복구 코드는 관리자만 발급하며 공통 회원 비밀번호에 적용됩니다. 기존 수업 비밀번호 초기화와 다릅니다.</p>'
-        '<button>일회용 코드 발급</button>') + '</section>'
-    body += '<section><h3>가입 학생 연결 상태</h3>'
+        '<p>허용 명단 또는 현재 수강 명단의 학번만 사용할 수 있습니다. 복구 코드는 관리자만 발급하며 모든 수업의 공통 회원 비밀번호에 적용됩니다.</p>'
+        '<button>일회용 코드 발급</button>')
+    body += ('<details class="registration-format"><summary>기존 수업 비밀번호를 사용하는 학생</summary>'
+             '<p>기존 전용 비밀번호로 수업에 로그인한 뒤 회원 계정을 연결할 수 있습니다. 회원 비밀번호 복구와 수업 전용 비밀번호 초기화는 별개입니다.</p></details></section></div>')
+    body += '<section class="ui-panel registration-request-list"><div class="registration-panel-heading"><h3>수강 신청 이력</h3>'
+    body += f'<span class="ui-badge" data-tone="neutral">{len(rows)}명</span></div>'
+    body += '<p class="ui-muted">신청 당시의 연결 기록입니다. 현재 수강·계정 상태는 수강생 관리에서 확인하세요.</p>'
     if not rows:
-        body += '<p role="status">이 수업을 선택한 가입 학생이 없습니다.</p>'
-    for row in rows:
-        label = {'pending': '명단 확인 대기', 'matched': '명단 일치 · 연결 완료', 'rejected': '수강 상태 확인 필요'}[row['status']]
-        verification = '계정 이용 중지' if not row['account_active'] else '본인 확인 완료' if row['verified'] else '본인 확인 코드 입력 필요'
-        body += f'<article><h4>{escape(row["student_key"])}</h4><p>{label} · {escape(deadline(row["created_at"]))}</p><p>{verification}</p></article>'
-    return '가입·수강 명단', body + '</section>'
+        body += '<div class="ui-empty"><p role="status">이 수업을 선택한 가입 학생이 없습니다.</p><p>학생에게 회원 가입 후 이 수업을 선택하도록 안내하세요.</p></div>'
+    else:
+        from .instructor_responsive import result_table
+        display = []
+        for row in rows:
+            label = {'pending': '명단 확인 대기', 'matched': '명단 일치로 연결 처리됨', 'rejected': '수강 상태 확인 필요'}[row['status']]
+            verification = '계정 이용 중지' if not row['account_active'] else '본인 확인 완료' if row['verified'] else '본인 확인 코드 입력 필요'
+            tone = 'neutral' if row['status'] == 'matched' else 'warning'
+            display.append(['<strong>' + escape(row['student_key']) + '</strong>', escape(deadline(row['created_at'])),
+                '<span class="ui-badge" data-tone="' + tone + '">' + label + '</span>', verification])
+        body += result_table(['학번', '신청 시각', '명단 연결', '회원 확인'], display, '가입 학생 연결 상태')
+    return '명단 등록·본인 확인', body + '</section>'

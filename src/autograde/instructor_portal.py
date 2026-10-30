@@ -9,6 +9,7 @@ from __future__ import annotations
 from html import escape
 
 from .portal_runtime_view import STATES as RUNTIME_STATES, overview as runtime_overview, time_label
+from .instructor_design import navigation_icon
 
 
 STATUS = {'active': '운영', 'preparation': '준비', 'archived': '보관'}
@@ -86,8 +87,8 @@ def navigation_groups(web, course):
         base = web._base(course)
         groups.append(('수업 운영', [(base, '수업 개요'), (base + '/classroom', '실습 교실'),
                                    (base + '/environments', '실습 환경'),
-                                   (base + '/students', '학생 관리'),
-                                   (base + '/registrations', '가입·수강 명단')]))
+                                   (base + '/students', '수강생 관리'),
+                                   (base + '/registrations', '명단·본인 확인')]))
         assessment = ([(base + '/assignments', '과제 관리')] if web.assignments is not None else [])
         assessment.append((base + '/submissions', '제출·채점 현황'))
         if web.rubrics:
@@ -122,7 +123,7 @@ def navigation(web, course, current_path):
                 active = url
     output = []
     for index, (label, links) in enumerate(groups):
-        entries = ''.join(f'<a href="{_e(url)}" {"aria-current=page" if url == active else ""}>{_e(title)}</a>'
+        entries = ''.join(f'<a href="{_e(url)}" {"aria-current=page" if url == active else ""}>{navigation_icon(url)}<span>{_e(title)}</span></a>'
                           for url, title in links)
         output.append(f'<div class="portal-nav-group" role="group" aria-labelledby="portal-nav-{index}">'
                       f'<h2 id="portal-nav-{index}" class="portal-nav-label">{_e(label)}</h2>'
@@ -183,7 +184,7 @@ def portal_home(web, query):
                      f'<span>활성 공개 과제 <strong>{course["active_assignments"]}</strong>개</span></p>'
                      f'<p class="portal-attention">최신 접수 <strong>{course["submitted"]}</strong>건 · '
                      f'채점·공개 대기 {course["waiting"]} · 처리 오류 {course["errors"]}</p>'
-                     f'<div class="actions"><a href="{_e(base)}">수업 열기</a>')
+                     f'<div class="actions"><a class="primary" href="{_e(base)}">수업 열기</a>')
             if web.assignments is not None:
                 body += f'<a href="{_e(base)}/assignments">과제 관리</a>'
             body += (f'<a href="{_e(base)}/submissions">제출·채점 현황</a>'
@@ -200,7 +201,7 @@ def course_workflows(web, course):
     cards = [(base + '/classroom', '실습 교실', '학생 IDE 연결·최근 활동·공식 제출을 확인하고 수업 요청을 전달합니다.'),
              (base + '/environments', '실습 환경', '원격 Linux 연결과 학생별 실행공간·서버 저장·종료 상태를 확인합니다.'),
              (base + '/submissions', '제출·채점 현황', '최신 제출과 이전 최고점, 미제출 학생, 코드와 제출 이력을 확인합니다.'),
-             (base + '/students', '학생 관리', '학생 등록·CSV 가져오기, 수강 상태와 전용 비밀번호를 관리합니다.')]
+             (base + '/students', '수강생 관리', '가입·본인 확인·수강 상태를 함께 확인하고 필요한 조치를 진행합니다.')]
     if web.assignments is not None:
         cards.insert(1, (base + '/assignments', '과제 관리', '문제와 채점 자료 등록, 검증·공개, 마감 관리와 파일 다운로드를 진행합니다.'))
     if web.rubrics:

@@ -183,12 +183,12 @@ def test_unified_template_validation_publish_real_grader(setup):
     hidden = browser.post(BASE + '/assignments/' + draft['published_assignment_id'] + '/hide', confirm='yes')
     assert hidden.status == 303
     assert '현재 숨김 상태입니다' in browser.get(published.headers['Location']).body
-    assert '<span class="status-badge">숨김</span>' in browser.get(BASE + '/assignments').body
+    assert re.search(r'<span class="[^"]*ui-badge[^"]*"[^>]*>숨김</span>', browser.get(BASE + '/assignments').body)
     archived = browser.post(BASE + '/assignments/' + draft['published_assignment_id'] + '/archive', confirm='yes')
     assert archived.status == 303
     release = state.get_bundle_assignment(draft['published_assignment_id'])
     assert not release.active and not release.ready
-    assert '<span class="status-badge">보관됨</span>' in browser.get(BASE + '/assignments').body
+    assert re.search(r'<span class="[^"]*ui-badge[^"]*"[^>]*>보관됨</span>', browser.get(BASE + '/assignments').body)
 
 
 def test_direct_upload_roles_and_case_form_then_stale_revision(setup):

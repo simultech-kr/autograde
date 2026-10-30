@@ -63,7 +63,7 @@ def parse_instructor_upload(content_type: str, body: bytes, *, file_limit: int, 
     def headers_finished():
         disposition, attrs = parse_options_header(headers.get(b"content-disposition", b""))
         name = attrs.get(b"name", b"").decode("ascii", "strict")
-        allowed = {"csrf", "revision", "file", "auto_generate", "starter_confirm", "grading_confirm"}
+        allowed = {"csrf", "revision", "file", "auto_generate", "starter_confirm", "grading_confirm", "inline_save"}
         if allow_content_path:
             allowed.add("logical_path")
         if allow_roster_mode:
