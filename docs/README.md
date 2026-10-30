@@ -2,6 +2,8 @@
 
 - [IDE 수업 서버 자동 검색](operations/ide-server-discovery.md): 학교 네트워크 설정을 변경하지 않는 mDNS 안내 프로그램, Mac IDE 검색·선택, 기관 설정 보관과 학생 자료 종료 정리.
 
+- [Mac IDE 자동 업데이트](operations/ide-auto-updates.md), [기관용 서명·승인 절차](operations/ide-signed-releases.md): 교수자 승인 버전의 자동 다운로드·다음 실행 적용, 실패 시 이전 버전 복귀, 공용 세션 정리와 최초 채널 아이콘 설치.
+
 - [Autograde 전용 IDE 설계](architecture/autograde-ide.md), [개념연구 준비·실행](operations/autograde-ide-poc.md): SQLite 유지, Code-OSS에 기존 확장 내장, 학습 홈과 AI 통제 경계. 서명된 학생 배포판·Windows/WSL 호환성 검증은 별도 단계.
 
 - [Next.js 단계별 전환 계획](architecture/nextjs-migration-plan.md): Python 인증·채점·SQLite와 IDE API 유지, 교수자 결과 화면 우선, JSON 계약·SES UI 모듈·시험·롤백 기준.

@@ -35,7 +35,9 @@ function realDirectory(root) {
   let current = path.resolve(root);
   for (;;) { const item = fs.lstatSync(current); if (!item.isDirectory() || item.isSymbolicLink()) fail('Linked release ancestor refused'); const parent = path.dirname(current); if (parent === current) break; current = parent; }
 }
-function regular(file, limit = 16 * 1024 * 1024) {
+// A packaged Mac app has >70k inventory entries. Its signed compact feed is
+// bounded separately at 32 MiB; the operator/staged pretty JSON can be larger.
+function regular(file, limit = 64 * 1024 * 1024) {
   const info = fs.lstatSync(file);
   if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1 || info.size > limit) fail('Expected a bounded regular file');
   return fs.readFileSync(file);
@@ -44,8 +46,12 @@ function json(file) { return JSON.parse(regular(file).toString('utf8')); }
 function exclusiveJson(file, value) { fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`, {flag: 'wx', mode: 0o600}); }
 function atomicJson(file, value) {
   const temporary = `${file}.${randomUUID()}.tmp`;
-  try { const fd = fs.openSync(temporary, 'wx', 0o600); try { fs.writeFileSync(fd, `${JSON.stringify(value)}\n`); fs.fsyncSync(fd); } finally { fs.closeSync(fd); } fs.renameSync(temporary, file); }
+  try { const fd = fs.openSync(temporary, 'wx', 0o600); try { fs.writeFileSync(fd, `${JSON.stringify(value)}\n`); fs.fsyncSync(fd); } finally { fs.closeSync(fd); } fs.renameSync(temporary, file); syncDirectory(path.dirname(file)); }
   finally { fs.rmSync(temporary, {force: true}); }
+}
+export function syncDirectory(directory) {
+  if (process.platform === 'win32') return;
+  const fd = fs.openSync(directory, 'r'); try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
 }
 
 /** Includes executable bits and internal symlink targets (Electron frameworks need them). */
@@ -115,9 +121,15 @@ export function authorize(releaseEnvelope, approvalEnvelope, context, now = Date
     || approval.channel !== context.channel || !Number.isFinite(Date.parse(approval.expiresAt)) || Date.parse(approval.expiresAt) <= now
     || !Number.isFinite(Date.parse(approval.notBefore)) || Date.parse(approval.notBefore) > now) fail('Institution approval missing, expired or mismatched');
   if (release.platform !== context.platform || release.architecture !== context.architecture
-    || !release.serverReleases.includes(context.serverRelease) || release.extensionVersion !== context.extensionVersion
+    || !release.serverReleases.includes(context.serverRelease) || !extensionCompatible(release, context)
     || release.institutionProfileSha256 !== context.institutionProfileSha256) fail('Release is incompatible with institution, OS, server or extension');
   return release;
+}
+function extensionCompatible(release, context) {
+  // A version upgrade still requires both signatures, the exact approved profile,
+  // platform and server compatibility. Legacy contexts retain their exact pin.
+  return context.extensionVersionPolicy === 'institution-approved'
+    || context.extensionVersionPolicy === undefined && release.extensionVersion === context.extensionVersion;
 }
 export function verifyPayload(payload, release) {
   if (canonical(inventory(payload)) !== canonical(release.files)) fail('Release file digest, mode or inventory mismatch');
@@ -164,6 +176,17 @@ function locked(store, operation) {
   exclusiveJson(lock, {pid: process.pid, createdAt: new Date().toISOString()});
   try { return operation(store); } finally { fs.unlinkSync(lock); }
 }
+export function recoverDeadLock(file) {
+  if (!fs.existsSync(file)) return;
+  const stat = fs.lstatSync(file);
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1
+    || process.platform !== 'win32' && (stat.uid !== process.getuid() || stat.mode & 0o077)) fail('Unsafe interrupted launcher lock');
+  const lease = json(file);
+  if (!Number.isSafeInteger(lease.pid) || lease.pid <= 0) fail('Unverifiable interrupted launcher lock');
+  try { process.kill(lease.pid, 0); }
+  catch (error) { if (error.code === 'ESRCH') { fs.unlinkSync(file); return; } }
+  // A live or inaccessible process still owns this lease. Never terminate it.
+}
 function sessionGate(context) {
   if (!Array.isArray(context.sessionRoots) || !context.sessionRoots.length || context.sessionRoots.some(root => !path.isAbsolute(root))) fail('Explicit shared-session roots are required');
   for (const root of context.sessionRoots) {
@@ -193,7 +216,7 @@ export function stageRelease({store, payload, releaseEnvelope, approvalEnvelope,
     return {releaseId: release.releaseId, status: 'staged', restartRequired: true, deploymentReady: false};
   });
 }
-export function activateRelease({store, releaseId, context, rollback = false, now, nativeGate = nativeSignatureGate, afterSwitch}) {
+export function activateRelease({store, releaseId, context, rollback = false, now, nativeGate = nativeSignatureGate, beforeSwitch, afterSwitch}) {
   return locked(store, root => {
     sessionGate(context); const stateFile = path.join(root, 'active.json');
     if (fs.existsSync(path.join(root, '.launch-lock.json'))) fail('Update deferred: managed IDE process is active');
@@ -204,6 +227,7 @@ export function activateRelease({store, releaseId, context, rollback = false, no
     nativeGate(staged.payload, staged.release, context);
     const active = {schema: 1, releaseId, sequence: staged.release.sequence, previousReleaseId: previous?.releaseId ?? null, activatedAt: new Date().toISOString()};
     try {
+      beforeSwitch?.(staged);
       atomicJson(stateFile, active);
       verifyPayload(staged.payload, staged.release); afterSwitch?.(staged);
     } catch (error) {
@@ -214,7 +238,7 @@ export function activateRelease({store, releaseId, context, rollback = false, no
   });
 }
 /** Actual supervised launch of the approved executable; never runs manifest shell commands. */
-export async function launchActive({store, context, nativeGate = nativeSignatureGate, requiredScript}) {
+export async function launchActive({store, context, nativeGate = nativeSignatureGate, requiredScript, onEvent}) {
   if (process.env.AUTOGRADE_RELEASE_CHANNEL_ACTIVE === '1') fail('Recursive release channel launch refused');
   const launch = locked(store, root => {
     const active = json(path.join(root, 'active.json')); const staged = loadStaged(root, active.releaseId, context);
@@ -228,16 +252,34 @@ export async function launchActive({store, context, nativeGate = nativeSignature
       const args = launch.release.entrypointScript ? [path.join(launch.payload, launch.release.entrypointScript)] : [];
       const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(?:NODE_|ELECTRON_|VSCODE_|AUTOGRADE_|DYLD_|LD_)/.test(key)));
       env.AUTOGRADE_RELEASE_CHANNEL_ACTIVE = '1';
-      const child = spawn(path.join(launch.payload, launch.release.entrypoint), args, {cwd: launch.payload, stdio: 'inherit', env});
+      const child = spawn(path.join(launch.payload, launch.release.entrypoint), args, {cwd: launch.payload, stdio: onEvent ? ['ignore', 'pipe', 'ignore'] : 'inherit', env});
+      let pending = '';
+      if (onEvent) child.stdout.on('data', chunk => {
+        pending += chunk.toString('utf8');
+        if (pending.length > 16384) { pending = ''; return; }
+        let end;
+        while ((end = pending.indexOf('\n')) !== -1) {
+          const line = pending.slice(0, end); pending = pending.slice(end + 1);
+          try {
+            const value = JSON.parse(line);
+            if (value.event === 'ide-started' && Number.isSafeInteger(value.pid) && value.pid > 0) onEvent({event: value.event, pid: value.pid});
+            else if (value.event === 'session-cleaned') onEvent({event: value.event});
+            else if (value.event === 'error') onEvent({event: 'error', message: 'IDE 실행 또는 실습 파일 정리를 완료하지 못했습니다. 담당자에게 확인을 요청하세요.'});
+          } catch { /* Arbitrary child logs must never become persistent student data. */ }
+        }
+      });
       const signals = ['SIGINT', 'SIGTERM', 'SIGHUP'];
       const stop = () => { if (child.pid && child.exitCode === null) child.kill('SIGTERM'); };
       const unregister = () => { for (const signal of signals) process.removeListener(signal, stop); };
       for (const signal of signals) process.on(signal, stop);
       child.once('error', error => { unregister(); reject(error); });
-      child.once('exit', (code, signal) => { unregister(); resolve({code: code ?? 1, signal}); });
+      child.once('close', (code, signal) => { unregister(); resolve({code: code ?? 1, signal}); });
     });
   } finally { fs.unlinkSync(launch.lock); }
 }
+// Shared by the automatic updater; all mutations keep the same store lock and
+// activation/cleanup gates as manual operator commands.
+export { locked as withReleaseStore, sessionGate as assertSessionIdle, loadStaged as inspectStagedRelease };
 async function main(argv) {
   const [command, ...pairs] = argv, args = {};
   if (pairs.length % 2) fail('Arguments must be --name value pairs');
@@ -253,7 +295,7 @@ async function main(argv) {
     // Validate dates and all compatibility constraints before handing the document to the institution signer.
     if (!Number.isFinite(Date.parse(result.notBefore)) || !Number.isFinite(Date.parse(result.expiresAt)) || Date.parse(result.notBefore) >= Date.parse(result.expiresAt)) fail('Approval validity dates are required');
     if (release.platform !== context.platform || release.architecture !== context.architecture || !release.serverReleases.includes(context.serverRelease)
-      || release.extensionVersion !== context.extensionVersion || release.institutionProfileSha256 !== context.institutionProfileSha256) fail('Cannot approve an incompatible release');
+      || !extensionCompatible(release, context) || release.institutionProfileSha256 !== context.institutionProfileSha256) fail('Cannot approve an incompatible release');
   }
   else if (command === 'sign') {
     const info = fs.lstatSync(args.key);

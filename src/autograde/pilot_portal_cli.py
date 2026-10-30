@@ -179,8 +179,10 @@ def run(config, *, isolated=False):
                 submissions=lambda key, auth: services[key].instructor_dashboard_page(auth, portal=True),
                 submission_updates=lambda key, auth: services[key].instructor_dashboard_updates(auth, portal=True),
                 submission_review=lambda key, auth, sid, index, **options: services[key].instructor_submission_page(auth, sid, index, **options))
+        from .ide_update_distribution import IDEUpdateDistribution
         api = CourseAPI(services, secret, courses=courses, student_materials=student_materials, content_service=content_service,
-                        extension_distribution=extension_distribution, operations=operations)
+                        extension_distribution=extension_distribution, operations=operations,
+                        ide_updates=IDEUpdateDistribution(paths.root / 'ide-updates'))
         web = CoursePortal(services, secret, values["web_public_base_url"], values["public_base_url"],
                            courses=courses, instructor=controller, exam_papers=exam_papers, student_materials=student_materials)
         servers = []

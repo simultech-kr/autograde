@@ -87,6 +87,16 @@ test('missing real OS signing identity blocks production activation without chan
   if (!['darwin', 'win32'].includes(platform)) { t.skip('Apple/Windows signing gate is exercised on the matching OS'); return; }
   assert.throws(() => nativeSignatureGate(f.payload, {...f.envelope('r1', 1).document, platform}, {...f.context, channel: 'production'}), /requires/);
 });
+test('production-sized signed metadata can be read back after stage and activated', t => {
+  const f = fixture(t);
+  // The actual 71k-entry Mac inventory exceeds the old 16 MiB JSON limit.
+  // Padding signed metadata exercises that read boundary without 71k test files.
+  const document = {...f.envelope('large-mac-manifest', 1).document, releaseNotes: 'x'.repeat(17 * 1024 * 1024)};
+  const release = signDocument(document, f.publisher.private, 'publisher'), approval = f.approve(release);
+  stageRelease({store: f.store, payload: f.payload, releaseEnvelope: release, approvalEnvelope: approval, context: f.context});
+  assert.ok(fs.statSync(path.join(f.store, 'releases/large-mac-manifest/release.json')).size > 16 * 1024 * 1024);
+  assert.equal(activateRelease({store: f.store, releaseId: 'large-mac-manifest', context: f.context}).status, 'ready-for-next-launch');
+});
 test('stale update and launch locks fail closed; managed launch runs the actual signed entrypoint', async t => {
   const f = fixture(t); f.stage('r1', 1);
   fs.writeFileSync(path.join(f.store, '.launch-lock.json'), '{}');
@@ -96,7 +106,7 @@ test('stale update and launch locks fail closed; managed launch runs the actual 
   if (process.platform !== 'win32') assert.equal((await launchActive({store: f.store, context: f.context})).code, 0);
   assert.equal(fs.existsSync(path.join(f.store, '.launch-lock.json')), false);
   fs.writeFileSync(path.join(f.store, '.update-lock.json'), '{}');
-  assert.throws(() => activateRelease({store: f.store, releaseId: 'r1', context: f.context}), /EEXIST/);
+  assert.throws(() => activateRelease({store: f.store, releaseId: 'r1', context: f.context}), /EEXIST|Unsafe interrupted launcher lock/);
 });
 test('profile injection changes packaged defaults without secrets and inventory records license evidence', t => {
   const f = fixture(t), runtime = path.join(f.payload, 'autograde'); fs.mkdirSync(runtime);

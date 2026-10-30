@@ -62,6 +62,12 @@ test('Mac icon builds with native Cocoa entry and its own pinned Node, without a
   execFileSync('/usr/bin/codesign',['--verify','--strict',output],{stdio:'pipe'});
   assert.equal(loadChannelConfiguration(path.join(resources,'autograde/channel.json')).store,f.store);
   const plist=fs.readFileSync(path.join(output,'Contents/Info.plist'),'utf8');assert.match(plist,/info.cbchoi.autograde.channel/);
+  for(const name of ['auto-update.mjs','update-transport.mjs']) assert.ok(fs.existsSync(path.join(resources,'autograde',name)));
+  fs.copyFileSync(process.execPath,path.join(f.payload,'node'));
+  f.stage('native-icon',1,"process.stdout.write(JSON.stringify({event:'ide-started',pid:process.pid})+'\\n');setTimeout(()=>process.stdout.write(JSON.stringify({event:'session-cleaned'})+'\\n'),100);\n");
+  // Exercise the actual native icon executable with system Node absent from PATH.
+  execFileSync(path.join(output,'Contents/MacOS/AutogradeLauncher'),[],{env:{...process.env,PATH:'/usr/bin:/bin'},stdio:'pipe',timeout:15000});
+  assert.equal(fs.existsSync(path.join(f.store,'.channel-lock.json')),false);
   assert.throws(()=>installMacChannel({store:f.store,context:f.contextFile,output,node:process.execPath}),/new .app/);
 });
 test('closing the channel forwards shutdown to the original supervisor and waits for its cleanup receipt', async t => {

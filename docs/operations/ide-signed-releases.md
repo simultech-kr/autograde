@@ -2,7 +2,9 @@
 
 이 문서는 담당자가 **서명된 완성 패키지를 준비하고, 수업 종료 뒤 새 설치본으로 실행을 전환**하는 절차다.
 Mac은 아래 절차로 만든 고정 채널 아이콘을 사용하면 다음 실행부터 승인된 버전을 선택한다.
-기존 설치 파일을 실행 중 덮어쓰거나 업데이트 서버를 주기적으로 조회하지 않는다.
+기관 설정에 업데이트 피드를 지정하면 승인 버전을 자동으로 확인·다운로드하고 다음 실행에
+적용한다. 설정하지 않은 채널은 아래의 수동 stage/activate 절차를 유지한다. 실행 중인 앱은
+덮어쓰지 않는다. 자동 배포 설정은 [Mac IDE 자동 업데이트](ide-auto-updates.md)를 따른다.
 Windows·Linux는 아이콘 생성 템플릿까지 제공하며 실제 대상 장비 인수는 별도로 필요하다.
 
 `ide/code-oss/release-channel.mjs`는 파일 이동·해시 검증·Ed25519 서명 검증·실행까지 수행하는
@@ -102,6 +104,9 @@ node ide/code-oss/release-channel.mjs sign \
 
 `pilot`은 OS 서명 검증을 완료했다는 뜻이 아니다. `production`으로 바꾸면 실제 대상 OS에서
 네이티브 서명 검증이 필수가 된다. 기관 승인은 릴리스 전체 해시·기관·채널·유효기간에 결속된다.
+기본값은 `extensionVersion`과 정확히 같은 확장만 허용한다. 자동 업데이트로 내장 확장도
+갱신하려면 기관 설정에 `"extensionVersionPolicy": "institution-approved"`를 명시한다.
+이 경우에도 새 앱 전체의 배포자 서명과 해당 릴리스에 대한 기관 승인은 반드시 필요하다.
 
 ```sh
 node ide/code-oss/release-channel.mjs approval --release release.json \
@@ -139,7 +144,8 @@ staging은 실행 파일·파일 내용·목록·내부 심볼릭 링크를 다�
 Mac에서는 아래의 고정 채널 아이콘이 이 경로를 사용한다. 기존 설치 아이콘은 자동으로 삭제하거나
 바꾸지 않으므로 담당자가 새 아이콘을 배포하고 학생에게 사용하도록 안내한다.
 
-후속 검증에서 실패하면 직전 선택 파일을 되돌린다. 실제 앱 실행 오류 후 이전 설치본으로 돌아가려면:
+후속 검증에서 실패하면 직전 선택 파일을 되돌린다. 자동 업데이트 채널은 새 버전 실행 실패 시
+공용 세션 정리와 이전 버전의 서명·승인을 확인한 뒤 복귀한다. 수동으로 이전 설치본을 선택하려면:
 
 ```sh
 node ide/code-oss/release-channel.mjs rollback --store /operator/releases \
@@ -147,9 +153,11 @@ node ide/code-oss/release-channel.mjs rollback --store /operator/releases \
 ```
 
 rollback도 이전 릴리스 파일·승인·호환성·서명을 다시 검증하며 직전 활성 릴리스만 허용한다.
-현재 서버와 호환되지 않거나 승인이 만료된 이전 버전은 되돌릴 수 없다. 강제 종료 후 도구 잠금이
-남으면 자동으로 무시하지 않는다. 운영자가 해당 프로세스와 공용 세션 정리가 끝났는지 확인한 뒤
-잠금만 해제한다. 실제 Mac/Windows/Linux 데스크톱 전체 흐름·정전·파일 시스템 복구·기관 설치기
+현재 서버와 호환되지 않거나 승인이 만료된 이전 버전은 되돌릴 수 없다. Mac 자동 채널은 강제 종료
+후 실행 잠금의 소유권·권한과 기록된 프로세스의 종료를 확인한 경우에만 해당 실행 잠금을 복구한다.
+파일 배치·활성화용 `.update-lock.json`이나 확인되지 않은 잠금은 자동으로 해제하지 않는다.
+운영자가 해당 프로세스와 공용 세션 정리가 끝났는지 확인해야 한다. 실제 Mac/Windows/Linux
+데스크톱 전체 흐름·정전·파일 시스템 복구·기관 설치기
 시험과 Code-OSS 보안 패치 지원 정책은 출시 전 인수 항목이다.
 
 ## 검증 범위
@@ -172,13 +180,14 @@ node ide/code-oss/install-channel-launcher.mjs \
   --output 'dist/Autograde Channel.app'
 ```
 
-생성한 앱에는 Cocoa 아이콘 실행기, 고정 Node 버전, 서명 검증 코드와 외부 기관 설정 경로가
+생성한 앱에는 Cocoa 아이콘 실행기, 고정 Node 버전, 서명 검증·자동 업데이트 코드와 외부 기관 설정 경로가
 포함된다. 개인키·학생 토큰·학습 파일은 넣지 않는다. 아이콘은 릴리스 저장소나 학생 작업 폴더
 안에 설치할 수 없다. 담당자가 해당 장비 경로를 설정하고 앱을 배포하면, 학생의 다음 클릭은
 `active.json`의 승인된 번들 Node와 원래 `mac-launcher.mjs`를 실행한다. 원래 실행기가 공용 세션
 생성·종료·강제 종료 정리를 계속 담당한다. 재귀 채널 실행은 거절한다.
 
-새 릴리스를 stage/activate한 뒤 아이콘을 다시 만들 필요는 없다. 아이콘 자체의 Node·검증 코드
+자동 업데이트 설정 또는 새 릴리스의 수동 stage/activate 이후 아이콘을 다시 만들 필요는 없다.
+이전 자동 업데이트 미지원 아이콘은 최초 한 번 새 채널 아이콘으로 교체해야 한다. 아이콘 자체의 Node·검증 코드
 보안 업데이트는 별도 서명된 새 채널 앱 배포가 필요하다. 생성물은 **ad-hoc 후보**이며 실제
 배포 전 채널 앱 자체도 Developer ID 서명·공증과 기관 검수를 거쳐야 한다. 서명 키 없이
 Gatekeeper 검사를 끄는 방법은 제공하지 않는다.
@@ -190,7 +199,10 @@ GUI 인수 시험 또는 production 공증이 완료된 것은 아니다.
 Windows/Linux 배포 작업자는 `channelDesktopTemplates(platform, root)`
 (`ide/code-oss/channel-desktop-templates.mjs`)에서 바로가기/desktop 파일과 시작 스크립트를
 얻을 수 있다. 플랫폼에 맞는 Node·LICENSE, `channel-launcher.mjs`, `release-channel.mjs`,
-고정 `channel.json`을 함께 배치해야 한다. Linux는 `linux-launcher.mjs`, Windows는 기존
+`auto-update.mjs`, `update-transport.mjs`, 고정 `channel.json`을 함께 배치해야 한다.
+이 문서의 Windows/Linux 템플릿은 수동 승인 버전 실행용이며, `updates` 설정을 넣어 운영하기
+전에는 해당 OS에서 자동 업데이트·실패 복귀·공용 세션 정리를 별도로 인수해야 한다.
+Linux는 `linux-launcher.mjs`, Windows는 기존
 `Autograde IDE.exe`를 승인 릴리스 진입점으로 사용한다. Windows 스크립트 실행 정책·코드서명,
 Linux desktop 실행 권한과 해당 장비의 GUI·정리 동작은 추가 인수 항목이다. 템플릿 시험만으로
 이 두 OS의 아이콘 설치가 완료되었다고 표시하지 않는다.

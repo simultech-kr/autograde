@@ -34,7 +34,7 @@ export function installMacChannel({store, context, output, node = process.execPa
   const contents = path.join(app, 'Contents'), resources = path.join(contents, 'Resources'), runtime = path.join(resources, 'autograde');
   fs.mkdirSync(runtime, {recursive: true}); fs.mkdirSync(path.join(resources, 'runtime/bin'), {recursive: true}); fs.mkdirSync(path.join(contents, 'MacOS'));
   fs.copyFileSync(node, path.join(resources, 'runtime/bin/node')); fs.copyFileSync(license, path.join(resources, 'runtime/LICENSE'));
-  for (const name of ['release-channel.mjs', 'channel-launcher.mjs']) fs.copyFileSync(path.join(here, name), path.join(runtime, name));
+  for (const name of ['release-channel.mjs', 'channel-launcher.mjs', 'auto-update.mjs', 'update-transport.mjs']) fs.copyFileSync(path.join(here, name), path.join(runtime, name));
   fs.writeFileSync(path.join(runtime, 'channel.json'), `${JSON.stringify(config, null, 2)}\n`, {flag: 'wx'});
   fs.writeFileSync(path.join(contents, 'Info.plist'), infoPlist('1.0.0', process.arch)
     .replaceAll('Autograde IDE', 'Autograde Channel').replaceAll('info.cbchoi.autograde.launcher', 'info.cbchoi.autograde.channel')

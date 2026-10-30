@@ -119,6 +119,7 @@ class PlatformFileResponse:
     content_type: str = "application/octet-stream"
     headers: Mapping[str, str] = field(default_factory=dict)
     retained_checkpoint: bool = False
+    public_ide_update: bool = False
 
 
 class SubmissionNotifier(Protocol):

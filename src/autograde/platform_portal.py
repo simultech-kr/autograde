@@ -32,12 +32,13 @@ class CourseAPI:
         "get_learning_runtime", "create_learning_runtime", "run_learning_runtime", "close_learning_runtime",
     })
 
-    def __init__(self, services: Mapping[str, StudentPlatformService], secret: bytes, *, courses=None, student_materials=None, content_service=None, extension_distribution=None, operations=None):
+    def __init__(self, services: Mapping[str, StudentPlatformService], secret: bytes, *, courses=None, student_materials=None, content_service=None, extension_distribution=None, operations=None, ide_updates=None):
         self.services = services
         self.courses = courses
         self.student_materials = student_materials
         self.content_service = content_service
         self.extension_distribution = extension_distribution
+        self.ide_updates = ide_updates
         self.operations = operations
         self.secret = secret
         self.state = courses.state if courses is not None else next(iter(services.values())).state
@@ -89,6 +90,11 @@ class CourseAPI:
     def list_ide_extensions(self, access_token):
         from .extension_distribution_api import catalog
         return catalog(self, access_token)
+
+    def get_ide_update(self, channel, name, platform=None, architecture=None):
+        if self.ide_updates is None:
+            raise PlatformAPIError(404, 'not_found', 'IDE update publication not found')
+        return self.ide_updates.download(channel, name, platform, architecture)
 
     def get_ide_extension_package(self, access_token, release_id):
         from .extension_distribution_api import download

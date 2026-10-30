@@ -147,6 +147,7 @@ class HTTPFileResult:
     content_type: str = "application/octet-stream"
     headers: Mapping[str, str | tuple[str, ...]] = field(default_factory=dict)
     retained_checkpoint: bool = False
+    public_ide_update: bool = False
 
 
 class PlatformHTTPError(RuntimeError):
@@ -655,6 +656,13 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
             return route, {}, allowed
 
         parts = path.split("/")
+        if callable(getattr(facade, 'get_ide_update', None)):
+            update = re.fullmatch(
+                r'/v1/ide-updates/(?P<channel>pilot|production)/(?:'
+                r'(?P<platform>darwin|linux|win32)/(?P<architecture>arm64|x64)/)?'
+                r'(?P<name>feed\.json|[0-9a-f]{64}\.agupdate\.gz)', path)
+            if update:
+                return 'ide_update', update.groupdict(), frozenset({'GET'})
         if (len(parts) == 6 and parts[:4] == ["", "v1", "ide", "extensions"]
                 and re.fullmatch(r'er_[0-9a-f]{32}', parts[4])):
             if parts[5] == 'package' and callable(getattr(facade, 'get_ide_extension_package', None)):
@@ -942,6 +950,11 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
             if route == 'ide_extensions':
                 return facade.list_ide_extensions(token), 200
             return facade.get_ide_extension_package(token, parameters['release_id']), 200
+        if route == 'ide_update':
+            if query:
+                raise PlatformHTTPError(400, 'invalid_request', 'Unexpected query parameter')
+            self._ensure_no_body()
+            return facade.get_ide_update(**parameters), 200
         if route in {"content_context", "content_collections", "content_manifest", "content_object", "content_verify"}:
             if query:
                 raise PlatformHTTPError(400, "invalid_request", "Unexpected query parameter")
@@ -1506,7 +1519,11 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
             # descriptor still streams the exact validated inode safely.
             if not stat.S_ISREG(info.st_mode) or info.st_nlink not in allowed_links:
                 raise ValueError("file response must be one regular file")
-            if info.st_size < 0 or info.st_size > self.platform_server.max_file_response_bytes:
+            limit = self.platform_server.max_file_response_bytes
+            if result.public_ide_update is True:
+                from .ide_update_distribution import MAX_UPDATE_ARTIFACT_BYTES, MAX_UPDATE_FEED_BYTES
+                limit = MAX_UPDATE_FEED_BYTES if path.name == 'feed.json' else MAX_UPDATE_ARTIFACT_BYTES
+            if info.st_size < 0 or info.st_size > limit:
                 raise ValueError("file response is too large")
         except Exception as exc:
             if descriptor is not None:
@@ -1543,6 +1560,9 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
             if not any(name.casefold() == 'x-request-id' for name in headers):
                 self.send_header('X-Request-ID', getattr(self, 'operation_request_id', ''))
             for name, value in _SECURITY_HEADERS.items():
+                if name == 'Cache-Control' and result.public_ide_update is True:
+                    value = ('no-store' if path.name == 'feed.json'
+                             else 'public, max-age=31536000, immutable')
                 self.send_header(name, value)
             self.send_header("Connection", "close")
             self.send_header("Content-Length", str(info.st_size))
@@ -1624,6 +1644,7 @@ def _normalize_result(value: Any, default_status: int) -> HTTPResult | HTTPFileR
         return HTTPFileResult(
             value.status, Path(value.path), value.content_type, value.headers,
             retained_checkpoint=getattr(value, "retained_checkpoint", False),
+            public_ide_update=getattr(value, "public_ide_update", False),
         )
     # Keep the application layer independent from the transport module while
     # still allowing a small response dataclass for HTML and redirects.
