@@ -6,6 +6,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { parseOptions, readBuildSource, sha256 } from './build-runtime.mjs';
 import { verifyReports, buildTargets } from './finalize-artifacts.mjs';
+import { legacyOutputPrefix } from './build-resume.mjs';
 
 function temporaryDirectory(t, prefix) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -168,3 +169,50 @@ for (const localMarker of [{ status: 'local-build' }, { buildMode: 'local' }]) {
     assert.throws(() => verifyReports(directory, expected), /Local build outputs cannot be finalized/);
   });
 }
+
+test('candidate collection excludes preserved legacy reports and nested links without changing the backup', t => {
+  const { directory, expected } = inventory(t);
+  const backup = fs.mkdtempSync(path.join(directory, legacyOutputPrefix));
+  const legacy = path.join(backup, 'output');
+  fs.cpSync(path.join(directory, 'linux-x64'), legacy, { recursive: true });
+  const duplicate = path.join(legacy, 'build-linux-x64.json');
+  const original = fs.readFileSync(duplicate);
+  const broken = path.join(legacy, 'build-windows-x64.json');
+  fs.writeFileSync(broken, '{interrupted report');
+  const outside = temporaryDirectory(t, 'autograde-legacy-outside-');
+  fs.writeFileSync(path.join(outside, 'keep.txt'), 'outside the build');
+  const link = path.join(legacy, 'partial-runtime-link');
+  fs.symlinkSync(outside, link, process.platform === 'win32' ? 'junction' : 'dir');
+  const reports = verifyReports(directory, expected);
+  assert.equal(reports.length, 3);
+  assert.ok(reports.every(({ file }) => !file.includes(legacyOutputPrefix)));
+  assert.deepEqual(fs.readFileSync(duplicate), original);
+  assert.equal(fs.readFileSync(broken, 'utf8'), '{interrupted report');
+  assert.equal(fs.lstatSync(link).isSymbolicLink(), true);
+  assert.equal(fs.readFileSync(path.join(outside, 'keep.txt'), 'utf8'), 'outside the build');
+});
+
+test('preserved output and its descendants cannot be selected directly or through an alias', t => {
+  const { directory, expected } = inventory(t);
+  const backup = fs.mkdtempSync(path.join(directory, legacyOutputPrefix));
+  const legacy = path.join(backup, 'output');
+  fs.mkdirSync(legacy);
+  for (const input of [backup, legacy]) {
+    assert.throws(() => verifyReports(input, expected), /Preserved legacy output/);
+  }
+  const aliases = temporaryDirectory(t, 'autograde-legacy-aliases-');
+  const alias = path.join(aliases, 'current');
+  fs.symlinkSync(legacy, alias, process.platform === 'win32' ? 'junction' : 'dir');
+  assert.throws(() => verifyReports(alias, expected), /Preserved legacy output/);
+  const inside = path.join(backup, 'alias-to-current');
+  fs.symlinkSync(directory, inside, process.platform === 'win32' ? 'junction' : 'dir');
+  assert.throws(() => verifyReports(inside, expected), /Preserved legacy output/);
+});
+
+test('a link with the reserved backup prefix still fails ordinary candidate input validation', t => {
+  const { directory, expected } = inventory(t);
+  const outside = temporaryDirectory(t, 'autograde-unowned-backup-');
+  const link = path.join(directory, legacyOutputPrefix + 'linked');
+  fs.symlinkSync(outside, link, process.platform === 'win32' ? 'junction' : 'dir');
+  assert.throws(() => verifyReports(directory, expected), /symbolic links/);
+});

@@ -166,15 +166,117 @@ test('corrupt or structurally invalid journals are rejected without rewriting', 
   }
 });
 
-test('unowned output files are never adopted or removed, and source files survive', t => {
+test('resume preserves legacy output in a sibling backup without adopting prior successes', t => {
   const f = fixture(t); fs.mkdirSync(f.source); fs.mkdirSync(f.output);
   const sourceFile = path.join(f.source, 'unfinished-work'); fs.writeFileSync(sourceFile, 'source work');
-  const outputFile = path.join(f.output, 'build-linux-x64.json'); fs.writeFileSync(outputFile, 'old report');
+  const outputFile = path.join(f.output, 'build-linux-x64.json'); fs.writeFileSync(outputFile, '{untrusted old report');
+  fs.mkdirSync(path.join(f.output, 'partial package'));
+  const payload = Buffer.from([0, 255, 1, 128]);
+  fs.writeFileSync(path.join(f.output, 'partial package', '기존 파일.zip'), payload);
   assert.throws(() => openBuildJournal(f), /nonempty.*--resume/);
-  assert.throws(() => openBuildJournal({ ...f, resume: true }), /without a build checkpoint/);
-  assert.equal(fs.readFileSync(sourceFile, 'utf8'), 'source work');
-  assert.equal(fs.readFileSync(outputFile, 'utf8'), 'old report');
   assert.equal(fs.existsSync(f.statePath), false);
+  const journal = open(t, f, {resume: true}), state = readState(f);
+  assert.equal(journal.resumed, false);
+  assert.deepEqual(state.steps, {});
+  assert.equal(path.dirname(path.dirname(state.legacyOutput.backup)), f.directory);
+  assert.notEqual(path.dirname(state.legacyOutput.backup), f.output);
+  assert.deepEqual(fs.readdirSync(f.output), [buildStateFilename]);
+  assert.equal(fs.readFileSync(sourceFile, 'utf8'), 'source work');
+  assert.equal(fs.readFileSync(path.join(state.legacyOutput.backup, path.basename(outputFile)), 'utf8'), '{untrusted old report');
+  assert.deepEqual(fs.readFileSync(path.join(state.legacyOutput.backup, 'partial package', '기존 파일.zip')), payload);
+  let runs = 0;
+  journal.step('compile', {key: 'same'}, () => { runs++; });
+  journal.close();
+  const second = open(t, f, {resume: true});
+  second.step('compile', {key: 'same'}, () => { runs++; });
+  assert.equal(runs, 1);
+  assert.deepEqual(readState(f).legacyOutput, state.legacyOutput);
+  assert.equal(second.resumed, true);
+});
+
+const backupOutputs = f => fs.readdirSync(f.directory)
+  .filter(name => name.startsWith('.autograde-legacy-output-'))
+  .map(name => path.join(f.directory, name, 'output'));
+
+test('legacy output links are moved as entries without following or modifying their targets', t => {
+  const f = fixture(t); fs.mkdirSync(f.output);
+  const outside = path.join(f.directory, 'outside'); fs.mkdirSync(outside);
+  const original = path.join(outside, 'keep.txt'); fs.writeFileSync(original, 'private contents');
+  fs.symlinkSync(outside, path.join(f.output, 'directory-alias'), process.platform === 'win32' ? 'junction' : 'dir');
+  fs.linkSync(original, path.join(f.output, 'hard-link'));
+  open(t, f, {resume: true});
+  const backup = readState(f).legacyOutput.backup;
+  assert.equal(fs.lstatSync(path.join(backup, 'directory-alias')).isSymbolicLink(), true);
+  assert.equal(fs.lstatSync(path.join(backup, 'hard-link')).nlink, 2);
+  assert.equal(fs.readFileSync(original, 'utf8'), 'private contents');
+  assert.deepEqual(fs.readdirSync(f.output), [buildStateFilename]);
+});
+
+test('a locked legacy output remains intact and releases build locks for retry', t => {
+  const f = fixture(t); fs.mkdirSync(f.output);
+  fs.writeFileSync(path.join(f.output, 'keep.zip'), 'keep');
+  const rename = fs.renameSync;
+  const mock = t.mock.method(fs, 'renameSync', (from, to) => {
+    if (from === f.output) throw Object.assign(new Error('synthetic Windows sharing violation'), {code: 'EPERM'});
+    return rename(from, to);
+  });
+  assert.throws(() => openBuildJournal({...f, resume: true}), /sharing violation/);
+  assert.equal(fs.readFileSync(path.join(f.output, 'keep.zip'), 'utf8'), 'keep');
+  assert.equal(fs.existsSync(f.statePath), false);
+  for (const directory of [f.source, f.output]) assert.equal(fs.existsSync(lockPath(directory)), false);
+  mock.mock.restore();
+  open(t, f, {resume: true});
+  assert.equal(fs.readFileSync(path.join(readState(f).legacyOutput.backup, 'keep.zip'), 'utf8'), 'keep');
+});
+
+test('failure recreating output after its atomic move preserves the backup and permits retry', t => {
+  const f = fixture(t); fs.mkdirSync(f.output);
+  fs.writeFileSync(path.join(f.output, 'keep.zip'), 'keep');
+  const mkdir = fs.mkdirSync;
+  const mock = t.mock.method(fs, 'mkdirSync', (directory, ...args) => {
+    if (directory === f.output) throw new Error('synthetic output creation failure');
+    return mkdir(directory, ...args);
+  });
+  assert.throws(() => openBuildJournal({...f, resume: true}), /output creation failure/);
+  assert.equal(fs.existsSync(f.output), false);
+  assert.equal(backupOutputs(f).length, 1);
+  const backup = backupOutputs(f)[0];
+  assert.equal(fs.readFileSync(path.join(backup, 'keep.zip'), 'utf8'), 'keep');
+  mock.mock.restore();
+  const journal = open(t, f, {resume: true});
+  assert.equal(journal.resumed, false);
+  assert.deepEqual(readState(f).steps, {});
+  assert.equal(fs.readFileSync(path.join(backup, 'keep.zip'), 'utf8'), 'keep');
+});
+
+test('a process killed after moving legacy output can reopen its original path without data loss', t => {
+  const f = fixture(t); fs.mkdirSync(f.output);
+  fs.writeFileSync(path.join(f.output, 'keep.zip'), 'keep');
+  const result = spawnSync(process.execPath, ['--input-type=module', '-e', `
+    import fs from 'node:fs'; import {openBuildJournal} from ${JSON.stringify(moduleUrl)};
+    const config = ${JSON.stringify(f)}, rename = fs.renameSync;
+    fs.renameSync = (from, to) => { rename(from, to); if (from === config.output) process.exit(42); };
+    openBuildJournal({...config, resume: true});
+  `], {encoding: 'utf8'});
+  assert.equal(result.status, 42, result.stderr);
+  assert.equal(fs.existsSync(f.output), false);
+  const backups = backupOutputs(f);
+  assert.equal(backups.length, 1);
+  const journal = open(t, f, {resume: true});
+  assert.equal(journal.resumed, false);
+  assert.equal(fs.readFileSync(path.join(backups[0], 'keep.zip'), 'utf8'), 'keep');
+  assert.deepEqual(readState(f).steps, {});
+});
+
+test('an active lock prevents migration of legacy output without changing any file', t => {
+  const f = fixture(t); fs.mkdirSync(f.output);
+  fs.writeFileSync(path.join(f.output, 'keep.zip'), 'keep');
+  fs.writeFileSync(lockPath(f.output), JSON.stringify({schema: 1, hostname: os.hostname(), pid: process.pid}));
+  assert.throws(() => openBuildJournal({...f, resume: true}), /locked by process/);
+  assert.equal(fs.readFileSync(path.join(f.output, 'keep.zip'), 'utf8'), 'keep');
+  assert.deepEqual(backupOutputs(f), []);
+  assert.equal(fs.existsSync(f.statePath), false);
+  assert.equal(fs.existsSync(lockPath(f.source)), false);
 });
 
 test('fresh and resume modes can initialize an empty output without changing source contents', t => {

@@ -5,6 +5,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { sha256 } from './build-runtime.mjs';
+import { legacyOutputPrefix } from './build-resume.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const read = file => JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -17,15 +18,35 @@ const targets = {
 for (const target of ['macos-arm64', 'linux-x64', 'windows-x64']) targets[target].checks.push(
   'managed-node-build-compatibility', 'code-oss-source-typecheck', 'code-oss-extension-compile', 'code-oss-extension-media', 'code-oss-monaco-typecheck');
 
+function currentInputDirectory(input) {
+  const resolved = path.resolve(input), canonical = fs.realpathSync(resolved);
+  // Check both names so aliases into, or through, preserved output cannot make
+  // legacy reports eligible for candidate publication.
+  for (const start of [resolved, canonical]) {
+    let directory = start;
+    for (;;) {
+      if (path.basename(directory).startsWith(legacyOutputPrefix)) throw new Error('Preserved legacy output cannot be used as candidate input');
+      const parent = path.dirname(directory);
+      if (parent === directory) break;
+      directory = parent;
+    }
+  }
+  return canonical;
+}
+
 function walk(directory) {
   return fs.readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
     const file = path.join(directory, entry.name);
     if (entry.isSymbolicLink()) throw new Error('Artifact input must not contain symbolic links');
+    // Recovery keeps old and partial output beside the active output. Never
+    // inspect or certify those backups when collecting a shared parent folder.
+    if (entry.isDirectory() && entry.name.startsWith(legacyOutputPrefix)) return [];
     return entry.isDirectory() ? walk(file) : [file];
   });
 }
 
 export function verifyReports(input, expected) {
+  input = currentInputDirectory(input);
   const reports = walk(input).filter(file => /^build-(macos-arm64|linux-x64|windows-x64|windows-launcher)\.json$/.test(path.basename(file)));
   const seen = new Set(), filenames = new Set(), result = [];
   for (const file of reports) {
@@ -64,7 +85,7 @@ export function verifyReports(input, expected) {
 }
 
 export function finalize(input, output) {
-  input = fs.realpathSync(input); output = path.resolve(output);
+  input = currentInputDirectory(input); output = path.resolve(output);
   if (fs.existsSync(output)) throw new Error('Choose a new candidate output directory');
   const expected = { upstream: read(path.join(root, 'ide/code-oss/upstream.json')),
     extensionVersion: read(path.join(root, 'extensions/vscode/package.json')).version,

@@ -166,9 +166,14 @@ test('excluding regenerated source maps preserves JS validation for Windows exte
   assert.equal(snapshotMatches(f.source, snapshot), false);
 });
 
-test('a package failure retries only packaging and artifact tampering creates a new preserved publication', t => {
+for (const legacy of [false, true]) test(`a package failure retries only packaging and artifact tampering creates a new preserved publication (legacy output: ${legacy})`, t => {
   const f = fixture(t), identity = {target: 'linux-x64', node: process.versions.node, local: true};
   fs.mkdirSync(f.source);
+  if (legacy) {
+    fs.mkdirSync(f.output);
+    fs.writeFileSync(path.join(f.output, 'build-linux-x64.json'), 'an unverified report from the previous builder');
+    fs.writeFileSync(path.join(f.output, 'old.zip'), 'preserve legacy archive');
+  }
   let compiled = 0, packaged = 0, fail = true;
   const attempts = [], compileOutput = path.join(f.source, 'compiled.js');
   function run(resume) {
@@ -188,11 +193,16 @@ test('a package failure retries only packaging and artifact tampering creates a 
       });
     } finally { journal.close(); }
   }
-  assert.throws(() => run(false), /Build stage package-linux failed: Package checksum mismatch/);
+  assert.throws(() => run(legacy), /Build stage package-linux failed: Package checksum mismatch/);
   assert.equal(compiled, 1); assert.equal(packaged, 1);
   assert.equal(fs.existsSync(attempts[0]), true);
   const state = JSON.parse(fs.readFileSync(path.join(f.output, buildStateFilename), 'utf8'));
   assert.equal(state.steps.compile.status, 'passed'); assert.equal(state.steps['package-linux'].status, 'failed');
+  if (legacy) {
+    assert.equal(fs.readFileSync(path.join(state.legacyOutput.backup, 'old.zip'), 'utf8'), 'preserve legacy archive');
+    assert.equal(fs.readFileSync(path.join(state.legacyOutput.backup, 'build-linux-x64.json'), 'utf8'), 'an unverified report from the previous builder');
+    assert.equal(fs.existsSync(path.join(f.output, 'build-linux-x64.json')), false);
+  }
   fail = false;
   const first = run(true);
   assert.equal(compiled, 1); assert.equal(packaged, 2);

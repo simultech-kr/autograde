@@ -5,6 +5,8 @@ import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 
 export const buildStateFilename = '.autograde-build-state.json';
+// Reserved for preserved, unverified outputs; candidate discovery ignores it.
+export const legacyOutputPrefix = '.autograde-legacy-output-';
 
 function json(value, seen = new Set()) {
   if (value === null || typeof value === 'string' || typeof value === 'boolean') return value;
@@ -111,6 +113,27 @@ function readState(file) {
   return state;
 }
 
+function preserveLegacyOutput(output) {
+  // Reserve a sibling on the same filesystem, then move the entire directory.
+  // Never walk unknown payloads or follow links inside a failed old package.
+  // Both build locks stay at their original sibling paths throughout the move.
+  const directory = fs.mkdtempSync(path.join(path.dirname(output), legacyOutputPrefix));
+  const backup = path.join(directory, 'output');
+  console.log(`[resume] No checkpoint; preserving previous output at: ${backup}`);
+  try { fs.renameSync(output, backup); }
+  catch (error) {
+    throw new Error(`Cannot preserve existing output ${output}: ${error.message}; close programs using that folder and retry --resume`, {cause: error});
+  }
+  // If interrupted here, the complete old output is already safe in backup.
+  // A later --resume can initialize the missing/empty original output path.
+  try { fs.mkdirSync(output); }
+  catch (error) {
+    throw new Error(`Previous output is preserved at ${backup}; cannot recreate ${output}: ${error.message}`, {cause: error});
+  }
+  console.log('[resume] Starting a new checkpoint; previous build stages have no verified success records and will run again.');
+  return {backup, preservedAt: new Date().toISOString()};
+}
+
 /** Open one exclusively owned build. Call close() in a finally block. */
 export function openBuildJournal({ source, output, identity, resume = false }) {
   if (typeof resume !== 'boolean') throw new Error('Build resume mode must be a boolean');
@@ -140,9 +163,9 @@ export function openBuildJournal({ source, output, identity, resume = false }) {
     const stateExists = regularFile(statePath);
     const entries = fs.readdirSync(output);
     if (!resume && entries.length) throw new Error(`Refusing an existing nonempty build output without --resume: ${output}`);
-    if (resume && !stateExists && entries.length) throw new Error(`Cannot resume a nonempty output without a build checkpoint: ${output}`);
+    const legacyOutput = resume && !stateExists && entries.length ? preserveLegacyOutput(output) : undefined;
     const resumed = Boolean(stateExists);
-    const state = stateExists ? readState(statePath) : { schema: 1, source, output, identity, steps: {} };
+    const state = stateExists ? readState(statePath) : { schema: 1, source, output, identity, steps: {}, ...(legacyOutput ? {legacyOutput} : {}) };
     if (state.source !== source || state.output !== output || fingerprint(state.identity) !== fingerprint(identity)) {
       throw new Error('Build checkpoint identity or source/output paths do not match this build');
     }

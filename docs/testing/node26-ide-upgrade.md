@@ -99,15 +99,25 @@ node .\scripts\ide\build-runtime.mjs --target windows-x64 --source .\.cache\code
 다르면 재개하지 않는다.
 `--resume` 없는 기본 실행은 계속 기존 source/output 경로를 거절한다.
 
-이전 도구의 `npm ci` 실패로 상태 파일이 없다면, 고정 버전과 관리된 Node 호환 변경이 확인된
-Code-OSS checkout과 비어 있는 output을 채택할 수 있다. clone은 생략하지만 이전 단계의
-성공을 추측하지 않으므로 의존성 설치와 검사는 다시 수행한다. 상태 파일 없이 output이
-비어 있지 않으면 채택을 거절한다. 이때 source는 그대로 두고 output만 새 경로로 바꿔
-`--resume`으로 실행한다. 기존 Code-OSS 소스는 자동 삭제하지 않는다.
+이전 도구의 실패로 상태 파일이 없다면, 고정 버전과 관리된 Node 호환 변경이 확인된
+Code-OSS checkout을 재사용하고 새 체크포인트를 만든다. output에 기존 내용이 있으면 전체를
+형제 경로 `.autograde-legacy-output-<고유값>/output`으로 옮겨 보존하고 원래 output 경로를
+다시 사용한다. 백업 경로는 콘솔과 체크포인트의 `legacyOutput.backup`에 기록한다.
+clone은 생략하지만 이전 단계의 성공을 추측하지 않으므로 의존성 설치와 검사는 다시 수행한다.
+그 다음 재개부터 새 기록을 사용한다. 기존 Code-OSS 소스와 백업은 자동 삭제하지 않는다.
+예전 `Cannot resume a nonempty output without a build checkpoint` 오류에도 output 이름을
+바꿀 필요 없이 수정본 적용 후 같은 명령으로 재시도할 수 있다. 손상되거나 다른 빌드의
+체크포인트는 이 방식으로 초기화하지 않는다.
 
 이 재개 변경에 대한 실제 Windows 네이티브 빌드는 여기서 수행하지 않았다.
 Windows Spectre 라이브러리 준비와 재개 조건은
 [전체 빌드 운영 안내](../operations/institution-ide-builds.md#실패한-빌드-재개)를 따른다.
+
+2026-11-03: 체크포인트 없는 출력 폴더의 백업·재개 보완 후 macOS에서
+`node --test scripts/ide/*.test.mjs ide/code-oss/windows-native-bootstrap.test.mjs ide/code-oss/package-windows.test.mjs`
+82개 통과(실패·건너뜀 0개). 기존 내용·링크 대상 보존, 파일 잠금 모의 오류, 백업 이동 직후
+프로세스 종료와 재시도, 성공 단계 재사용, 후보 묶음에서 백업 제외를 확인했다.
+이 결과는 Windows에서 실제로 파일이 잠긴 상태나 전체 IDE 빌드를 실행한 결과를 대신하지 않는다.
 
 소스를 직접 준비할 때는 upstream `npm ci` 이전에 다음을 실행한다. 자동 전체 빌드 도구는
 이 단계를 수행한다. 기존 소스의 변경 내용은 덮어쓰지 않으며 충돌 시 새 checkout을 사용한다.
