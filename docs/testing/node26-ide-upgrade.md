@@ -78,17 +78,36 @@ node --test ide/code-oss/*.test.mjs scripts/ide/*.test.mjs
 
 Windows에서 현재 작업 중인 변경 내용을 포함한 전체 빌드는 저장소 루트에서 다음과 같이 실행한다.
 `git status --short`로 변경 내용을 확인할 수 있으며, 이를 위해 stash·삭제하거나 일괄 commit할
-필요는 없다. source/output은 모두 새 경로여야 하므로 기존 경로라면 이름의 `01`을 바꾼다.
+필요는 없다. 다음 명령은 앞서 실패한 빌드와 같은 source/output을 사용하며, 처음 실행할 때도
+사용할 수 있다. 실제로 다른 경로를 사용했다면 그 원래 경로를 지정한다.
 
 ```powershell
 git status --short
-node .\scripts\ide\build-runtime.mjs --target windows-x64 --source .\.cache\code-oss-windows-26-local-01 --output .\dist\windows-node26-local-01 --local
+node .\scripts\ide\build-runtime.mjs --target windows-x64 --source .\.cache\code-oss-windows-26-local-01 --output .\dist\windows-node26-local-01 --local --resume
 ```
 
 `--local`은 시험·고정 버전/commit·해시·서명 검사를 유지하고 실제 `sourceDirty`를 기록한다.
-압축 파일 이름은 `Autograde-IDE-<version>-local-<target>.zip` 또는 `.tar.gz`이며,
+압축 파일 이름에는 `Autograde-IDE-<version>-local-<target>`과 고유한 `-build-<id>`가
+포함되며 확장자는 `.zip` 또는 `.tar.gz`다. 최종 보고서에서 정확한 파일명을 확인한다.
 깨끗한 작업 트리에서 실행해도 `local-build`를 후보 묶음에 포함할 수 없다.
 실제 Windows 빌드·GUI 인수 결과는 위 Mac 검증과 별도로 기록한다.
+
+`--resume`은 `--local`과 별개로 기존 빌드의 재개를 허용한다. output의
+`.autograde-build-state.json`에 성공한 단계와 입력을 기록하고, 입력 및 실제 산출물이
+일치하는 단계만 재사용한다. 실패한 단계는 다시 실행하고 Autograde 소스 변경에 영향받는
+단계도 다시 검사한다. PC 이름·대상 OS·architecture·Node 버전·upstream pin·빌드 모드가
+다르면 재개하지 않는다.
+`--resume` 없는 기본 실행은 계속 기존 source/output 경로를 거절한다.
+
+이전 도구의 `npm ci` 실패로 상태 파일이 없다면, 고정 버전과 관리된 Node 호환 변경이 확인된
+Code-OSS checkout과 비어 있는 output을 채택할 수 있다. clone은 생략하지만 이전 단계의
+성공을 추측하지 않으므로 의존성 설치와 검사는 다시 수행한다. 상태 파일 없이 output이
+비어 있지 않으면 채택을 거절한다. 이때 source는 그대로 두고 output만 새 경로로 바꿔
+`--resume`으로 실행한다. 기존 Code-OSS 소스는 자동 삭제하지 않는다.
+
+이 재개 변경에 대한 실제 Windows 네이티브 빌드는 여기서 수행하지 않았다.
+Windows Spectre 라이브러리 준비와 재개 조건은
+[전체 빌드 운영 안내](../operations/institution-ide-builds.md#실패한-빌드-재개)를 따른다.
 
 소스를 직접 준비할 때는 upstream `npm ci` 이전에 다음을 실행한다. 자동 전체 빌드 도구는
 이 단계를 수행한다. 기존 소스의 변경 내용은 덮어쓰지 않으며 충돌 시 새 checkout을 사용한다.

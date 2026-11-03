@@ -51,8 +51,9 @@ native OS이며 필요할 때만 `include_wsl`을 선택한다. 토큰은 `conte
 checkout 자격증명을 보존하지 않는다.
 
 1. 빌드 검증 시험과 예제 기관 제품 정의를 검사한다. 예제를 운영 승인본으로 변경하지 않는다.
-2. OS별 새 경로에 고정 Code-OSS tag를 clone하고 실제 commit·원본 `.nvmrc`를 확인하고 관리된 Node 호환 변경을 적용한다.
-3. 각 OS에서 의존성을 새로 설치한다. `node_modules`를 OS 간 전달하거나 캐시하지 않는다.
+2. 기본 새 빌드는 OS별 새 경로에 고정 Code-OSS tag를 clone하고 실제 commit·원본 `.nvmrc`를 확인하고 관리된 Node 호환 변경을 적용한다.
+3. 첫 빌드는 각 OS에서 의존성을 새로 설치한다. `--resume`은 같은 PC의 성공 기록과
+   산출물을 검증한 뒤 설치 결과를 재사용한다. `node_modules`를 OS 간 전달하지 않는다.
    Linux에서 Node 26을 실행하기 전에 `libatomic1`을 설치한다. Electron native 모듈은
    Ubuntu 22.04의 Clang 15와 upstream Electron 헤더로 빌드한다. Node 자체를 소스에서 빌드하는
    도구 요구사항을 Electron addon 빌드 요구사항과 혼동하지 않는다.
@@ -83,7 +84,56 @@ label을 지정할 수 있다. 기본 label은 위 표와 같으며 Linux 대체
 [Node 26.13.0 플랫폼 요구사항](https://github.com/nodejs/node/blob/v26.13.0/BUILDING.md#platform-list)과
 [공식 LTS 릴리스 안내](https://nodejs.org/en/blog/release/v26.13.0)를 기준으로 한다.
 Node 버전 변경만으로 기존 Windows/Linux 인수 결과를 새 버전의 통과 결과로 기록하지 않는다. 로컬 명령도 네트워크로 소스·의존성·Electron을 받는다.
-source/output은 기존 파일이 없는 새 경로여야 한다.
+기본 실행은 새 source/output 경로를 요구한다. 실패한 빌드의 같은 경로를 이어 쓰려면 아래의
+`--resume`을 명시한다.
+
+### Windows 빌드 PC의 C++ 구성 요소
+
+IDE를 소스에서 빌드하는 PC에는 **C++ 데스크톱 개발**, MSVC x64/x86 도구, Windows SDK와
+**빌드에 사용하는 MSVC 버전의 x64/x86 Spectre 완화 라이브러리**가 필요하다.
+`@vscode/native-watchdog`는 `SpectreMitigation=Spectre`를 요구한다. C++ 워크로드만
+설치되어 있고 이 선택 구성 요소가 빠지면 `npm ci`에서 `MSB8040`이 발생한다.
+
+오류에 `Visual Studio\2022\BuildTools`가 표시되는 경우:
+
+1. **Visual Studio Installer → Visual Studio Build Tools 2022 → 수정**을 연다.
+2. **개별 구성 요소**에서 `Spectre`를 검색한다.
+3. **MSVC v143 - VS 2022 C++ x64/x86 Spectre-mitigated libs (Latest)**를 선택한다.
+   특정 MSVC 버전을 지정한 빌드는 그 버전의 라이브러리를 선택한다.
+   일반 최신 버전의 구성 요소 ID는 `Microsoft.VisualStudio.Component.VC.Runtimes.x86.x64.Spectre`다.
+4. 설치를 완료하고 빌드 터미널을 새로 연다. 별도 Community/Professional 설치본이 아니라
+   오류 경로에 표시된 Build Tools 설치본에 추가해야 한다.
+
+다음은 해당 설치본의 **기본 MSVC 도구 버전**을 대상으로 하는 읽기 전용 사전 점검이다.
+`spectreX64Present`가 `True`인지 확인한다. `libcmt.lib`의 존재를 확인하는 점검이므로
+라이브러리 전체의 무결성이나 실제 네이티브 컴파일 검증을 대신하지 않는다.
+
+```powershell
+$vsRoot = 'C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools'
+$toolset = (Get-Content -LiteralPath (Join-Path $vsRoot 'VC\Auxiliary\Build\Microsoft.VCToolsVersion.default.txt') -Raw).Trim()
+$spectre = Join-Path $vsRoot "VC\Tools\MSVC\$toolset\lib\spectre\x64"
+[pscustomobject]@{
+  installation = $vsRoot
+  toolset = $toolset
+  spectreX64Path = $spectre
+  spectreX64Present = (Test-Path -LiteralPath (Join-Path $spectre 'libcmt.lib') -PathType Leaf)
+}
+```
+
+`VCToolsVersion`, `VCToolsInstallDir` 등으로 도구 버전을 별도 지정했다면 위 기본 버전이
+아닌 실제 지정 버전의 같은 경로를 확인한다. 다른 설치본이나 오래된 도구 버전에 라이브러리가
+있어도 현재 빌드의 누락을 해결하지 못한다. 생성된 `.vcxproj`의 Spectre 설정을 끄거나
+`node_modules`를 수정하여 우회하지 않는다.
+
+설치 후 실패한 빌드와 같은 source/output 경로에 `--resume`을 추가해 다시 실행한다.
+작업 중인 Autograde 변경 내용을 사용했다면 `--local`도 유지한다. 이전 도구로 실패해 상태 파일이
+없는 경우에도 고정 버전의 Code-OSS checkout과 빈 output을 검증하면 소스를 다시 clone하지
+않고 `npm ci`와 필요한 검사를 다시 수행한다. 자세한 조건은 아래 재개 안내를 따른다.
+
+근거: [Microsoft MSB8040 안내](https://learn.microsoft.com/en-us/visualstudio/msbuild/errors/msb8040?view=vs-2022),
+[Visual Studio Build Tools 구성 요소 목록](https://learn.microsoft.com/en-us/visualstudio/install/workload-component-id-vs-build-tools?view=vs-2022&preserve-view=true).
+
+### 플랫폼별 전체 빌드 명령
 
 ```sh
 node scripts/ide/build-runtime.mjs --target macos-arm64 --source /tmp/code-oss-mac-new --output /tmp/mac-artifacts-new
@@ -100,9 +150,11 @@ node .\scripts\ide\build-runtime.mjs --target windows-x64 --source .\.cache\code
 .\scripts\ide\build-windows.ps1 -OutputDirectory .\dist\wsl-launcher-01
 ```
 
-`--source`는 새로 clone할 Code-OSS 위치이고 `--output`은 배포 ZIP·해시·보고서의 출력 위치다.
-둘 다 현재 디렉터리 기준으로 해석한다. 이미 존재하면 `-02`처럼 새 경로를 사용하며 이전
-빌드 폴더를 자동 삭제하지 않는다. Windows 설정·요구사항은 아래의 전용 설치 안내를 따른다.
+`--source`는 Code-OSS 위치이고 `--output`은 배포 ZIP·해시·보고서의 출력 위치다.
+둘 다 현재 디렉터리 기준으로 해석한다. 기본 실행은 이미 존재하는 경로를 거절한다.
+새 빌드를 시작할 때는 `-02`처럼 새 경로를 쓰고, 실패한 빌드를 재개할 때는 같은 경로와
+`--resume`을 사용한다. 기존 소스 폴더를 자동 삭제하지 않는다. Windows 설정·요구사항은
+아래의 전용 설치 안내를 따른다.
 
 `Candidate builds require a clean committed checkout` 오류가 나고 현재 변경 내용을 직접
 시험하려는 경우, 저장소 루트에서 다음과 같이 실행한다. `git status --short`는 변경 내용을
@@ -113,10 +165,43 @@ git status --short
 node .\scripts\ide\build-runtime.mjs --target windows-x64 --source .\.cache\code-oss-windows-26-local-01 --output .\dist\windows-node26-local-01 --local
 ```
 
-`--local`에서도 source/output은 새 경로여야 하며, 이미 존재하면 두 경로 모두 새 이름으로 바꾼다.
-로컬 빌드의 압축 파일 이름은 `Autograde-IDE-<version>-local-<target>.zip` 또는 `.tar.gz`다.
+`--local`은 현재 Autograde 작업 트리 사용 여부를 정하며, 기존 빌드 재개 여부를 정하는
+`--resume`과 별개다. `--resume` 없는 로컬 빌드도 새 source/output 경로를 요구한다.
+로컬 빌드의 압축 파일 이름에는 `Autograde-IDE-<version>-local-<target>`과 고유한
+`-build-<id>`가 포함되며, 확장자는 `.zip` 또는 `.tar.gz`다. 정확한 파일명은 최종
+`build-<target>.json`의 `artifacts`에 기록한다. 재패키징해도 이전 ZIP을 덮어쓰지 않는다.
 작업 트리가 깨끗해도 `--local`로 만든 보고서는 `local-build`이고, 후보 묶음 생성기는 이를
 거절한다. 기관 배포 후보가 필요하면 별도의 깨끗한 checkout에서 `--local` 없이 빌드한다.
+
+### 실패한 빌드 재개
+
+`--resume`은 output의 `.autograde-build-state.json`에 기록한 진행 상태를 읽는다.
+성공한 단계는 입력과 실제 산출물이 모두 검증될 때만 재사용하며, 실패하거나 검증되지 않은
+단계는 다시 실행한다. Autograde 소스가 바뀌면 영향을 받는 단계의 기록을 무효화한다.
+PC 이름·대상 OS·architecture·Node 버전·upstream pin·빌드 모드가 이전 빌드와 다르면 재개를 거절하므로,
+이 경우에는 새 source/output 경로로 빌드한다. 상태 파일을 편집해 검증을 우회하지 않는다.
+
+예를 들어 Spectre 라이브러리를 설치한 뒤, 앞의 로컬 빌드를 같은 두 경로에서 재시도한다.
+실제로 다른 output 경로를 사용했다면 아래에도 그 원래 경로를 넣는다.
+
+```powershell
+node .\scripts\ide\build-runtime.mjs --target windows-x64 --source .\.cache\code-oss-windows-26-local-01 --output .\dist\windows-node26-local-01 --local --resume
+```
+
+처음 실행할 때부터 `--resume`을 붙여도 된다. 아직 상태 파일이 없는 기존 소스는 고정
+Code-OSS 저장소·commit·Node 호환 변경을 검증하고, output이 없거나 비어 있을 때만 채택한다.
+이 경우 이전에 완료한 단계를 추측하지 않으므로 의존성 설치와 검사는 다시 수행한다.
+소스 clone은 반복하지 않는다. 상태 파일 없는 output이 비어 있지 않으면 채택할 수 없다는
+오류를 내므로, 기존 source는 유지하고 `--output`만 사용하지 않은 경로로 바꿔
+`--resume`과 함께 실행한다.
+
+재개 중에도 기존 Code-OSS 소스를 지우지 않는다. 실패한 `npm ci` 단계 자체를 재시도할 때는
+npm이 그 단계의 의존성 폴더를 다시 설치한다. 패키징·패키지 실행 검사는 하나의 재시도 단위이며
+output 옆의 고유한 임시 작업 폴더를 사용한다. 실패한 패키징 폴더와 이전 ZIP은 보존한다.
+최종 보고서는 모든 단계가 성공한 뒤 생성하며 재개 전 보고서는 별도 이름으로 보존한다.
+상태 파일의 `steps`에서 단계별 `running`·`failed`·`passed`와 실패 원인을 볼 수 있다.
+재개 기록은 실제 대상 OS에서의 빌드·실행 검증을
+대신하지 않으며, 이 변경의 실제 Windows 네이티브 빌드는 여기서 검증하지 않았다.
 
 ### Windows에서 확장 테스트가 실패하는 경우
 
@@ -137,7 +222,8 @@ npm --prefix .\extensions\vscode run compile
 node --test .\extensions\vscode\out\test\filesystemFixtures.test.js .\extensions\vscode\out\test\learningExport.test.js .\extensions\vscode\out\test\managedExtensionsView.test.js .\extensions\vscode\out\test\sharedLearningSession.test.js
 ```
 
-실패가 없으면 새 source/output 경로로 빌드를 다시 실행한다. 건너뛴 파일 심볼릭 링크
+실패가 없으면 원래 source/output 경로에 `--resume`을 추가해 빌드를 다시 실행한다.
+작업 중인 변경을 시험한다면 `--local`도 유지한다. 건너뛴 파일 심볼릭 링크
 검사는 통과한 검사와 구분하여 기록하며, 최종 인수에는 링크 생성이 가능한 Windows 시험
 환경의 결과도 포함한다. 일반 빌드 담당자에게 관리자 실행을 요구하지 않는다.
 

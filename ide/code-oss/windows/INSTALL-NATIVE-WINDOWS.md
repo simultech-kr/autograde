@@ -16,6 +16,15 @@
 - 디버거·C/C++ 언어 기능은 교수자가 허용한 확장을 수업 정책으로 배포한다. 이 후보에
   상용 C/C++ 확장 또는 디버거 UI가 기본 포함되었다고 간주하지 않는다.
 
+IDE 자체를 소스에서 빌드하는 담당자 PC에는 사용하는 MSVC 버전과 일치하는 **x64/x86
+Spectre 완화 라이브러리**도 설치한다. `@vscode/native-watchdog` 빌드의 `MSB8040` 오류는
+Visual Studio Installer에서 해당 Build Tools 설치본의 **수정 → 개별 구성 요소 → Spectre**로
+추가한다. VS2022 최신 도구의 항목은 **MSVC v143 - VS 2022 C++ x64/x86 Spectre-mitigated
+libs (Latest)**다. 도구 버전을 지정했다면 동일 버전의 항목을 선택한다.
+[전체 빌드 안내와 사전 점검](../../../docs/operations/institution-ide-builds.md#windows-빌드-pc의-c-구성-요소)을
+따른다. 완성된 IDE를 실행하거나 일반 학생 과제를 컴파일하는 PC가 이 선택 라이브러리를
+항상 요구하는 것은 아니다. 해당 과제의 컴파일 옵션에 따라 결정된다.
+
 실행기는 설치된 `vswhere`와 Microsoft `vcvarsall.bat`로 x64 개발 환경을 찾는다. `cl.exe`,
 Windows SDK 헤더와 라이브러리가 없으면 설명을 표시하고 시작을 멈춘다. IDE 터미널은
 해당 환경을 사용하며 사용자 범위의 C17·C++17 현재 파일 빌드 작업을 제공한다.

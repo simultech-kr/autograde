@@ -15,8 +15,23 @@ namespace Autograde.NativeWindows
         private static bool Blocked(Action action)
         {
             try { action(); return false; }
+            // InvalidDataException is not an IOException. Ownership and reparse
+            // guards deliberately throw it when recovery must preserve files.
+            catch (InvalidDataException) { return true; }
             catch (IOException) { return true; }
             catch (InvalidOperationException) { return true; }
+        }
+        private static void CheckBlockedHelper()
+        {
+            Assert(!Blocked(() => { }), "Successful recovery was reported as blocked.");
+            Assert(Blocked(() => { throw new InvalidDataException("synthetic ownership guard"); }), "Ownership rejection escaped the recovery assertion.");
+            Assert(Blocked(() => { throw new IOException("synthetic locked file"); }), "I/O rejection escaped the recovery assertion.");
+            Assert(Blocked(() => { throw new InvalidOperationException("synthetic live launcher"); }), "Live-launcher rejection escaped the recovery assertion.");
+            var unexpected = new ArgumentException("synthetic unexpected failure"); bool propagated = false;
+            try { Blocked(() => { throw unexpected; }); }
+            catch (ArgumentException error) { propagated = Object.ReferenceEquals(error, unexpected); }
+            Assert(propagated, "An unexpected exception was hidden as a successful safety check.");
+            Console.WriteLine("PASS: recovery assertion recognizes expected guards and propagates unexpected failures");
         }
         private static void ReplaceOwner(string file, IDictionary<string, object> owner) { File.Delete(file); NativePaths.WriteJson(file, owner); }
         private static void MarkStopped(NativeSessionStore store, string session)
@@ -86,6 +101,7 @@ namespace Autograde.NativeWindows
             if (args.Length == 2 && args[0] == "--child") { Process.Start(new ProcessStartInfo(Assembly.GetExecutingAssembly().Location, "--grandchild " + NativePaths.Quote(args[1])) { UseShellExecute = false, CreateNoWindow = true }); Thread.Sleep(Timeout.Infinite); return 0; }
             string root = Path.Combine(Path.GetTempPath(), "autograde-native-check-" + Guid.NewGuid().ToString("N"));
             try {
+                CheckBlockedHelper();
                 using (var store = new NativeSessionStore(root)) {
                     string exported = Path.Combine(store.Exports, "kept.txt"); File.WriteAllText(exported, "synthetic export");
                     bool blocked = false; try { using (var second = new NativeSessionStore(root)) { } } catch (IOException) { blocked = true; }

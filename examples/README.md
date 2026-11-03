@@ -1,5 +1,7 @@
 # Examples
 
+- [mediator-chain/](mediator-chain/README.md): C++17 Mediator·Chain of Responsibility 통합 실습. 지원 요청 중계, 체인 순서 변경, 오프라인·중복·재시도 처리와 14개 항목의 100점 채점 자료·수정 힌트.
+
 - [iterator-pattern/](iterator-pattern/README.md): C++17 Iterator 단독 과제. 점수 필터, 독립 순회, 스냅샷·종료·재순회 구현과 100점 평가 기준·수정 힌트.
 
 - [creational-patterns/](creational-patterns/README.md): C++17 Factory Method·Abstract Factory·Singleton 통합 과제. 학생용 문제·힌트·TODO 코드, 100점 채점 자료와 항목별 평가 요소.

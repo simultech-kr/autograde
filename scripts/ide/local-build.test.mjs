@@ -45,10 +45,10 @@ const requiredOptions = ['--target', 'linux-x64', '--source', '/new/source', '--
 
 test('candidate remains the CLI default and local mode composes with optional WSL packaging', () => {
   assert.deepEqual(parseOptions(requiredOptions), {
-    target: 'linux-x64', source: '/new/source', output: '/new/output', includeWsl: false, local: false,
+    target: 'linux-x64', source: '/new/source', output: '/new/output', includeWsl: false, local: false, resume: false,
   });
   assert.deepEqual(parseOptions(['--local', ...requiredOptions, '--include-wsl']), {
-    target: 'linux-x64', source: '/new/source', output: '/new/output', includeWsl: true, local: true,
+    target: 'linux-x64', source: '/new/source', output: '/new/output', includeWsl: true, local: true, resume: false,
   });
   assert.throws(() => parseOptions([...requiredOptions, '--local', '--local']), /Usage/);
   assert.throws(() => parseOptions([...requiredOptions, '--local', 'true']), /Usage/);
