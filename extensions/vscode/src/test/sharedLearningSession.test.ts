@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
-import { chmod, lstat, mkdir, mkdtemp, readFile, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, link, lstat, mkdir, mkdtemp, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
 import { SharedLearningSession, SHARED_AUTH_USED, SHARED_SESSION_MARKER } from "../sharedLearningSession";
+import { symlinkDirectory, symlinkFileOrSkip } from "./filesystemFixtures";
 
 async function fixture(legacy = false) {
   const parent = await mkdtemp(path.join(await realpath(os.tmpdir()), "ag-shared-extension-"));
@@ -53,33 +54,75 @@ test("only current managed workspace descendants are allowed; materials and expo
     await mkdir(nested); await session.assertWorkspacePath(f.workspace); await session.assertWorkspacePath(nested);
     for (const outside of [f.parent, f.root, f.materials]) await assert.rejects(session.assertWorkspacePath(outside), /이번 세션/);
     const external = path.join(f.parent, "external"); await mkdir(external); await writeFile(path.join(external, "keep.cpp"), "keep");
-    await symlink(external, path.join(f.workspace, "linked"), "dir");
+    await symlinkDirectory(external, path.join(f.workspace, "linked"));
     await assert.rejects(session.assertWorkspacePath(path.join(f.workspace, "linked")), /공용 실습/);
     assert.equal(await readFile(path.join(external, "keep.cpp"), "utf8"), "keep");
   } finally { await f.dispose(); }
 });
 
-test("forged root name, different session, dead supervisor and changed inode are rejected", async () => {
-  const f = await fixture();
-  try {
-    for (const replacement of [{sessionId: "f".repeat(24)}, {root: f.parent}, {rootIno: f.marker.rootIno + 1},
-      {phase: "prepared"}, {launcherPid: 2147483647}]) {
+for (const [name, replace] of [
+  ["different session", (f) => ({sessionId: f.id === "f".repeat(24) ? "a".repeat(24) : "f".repeat(24)})],
+  ["different root", (f) => ({root: f.parent})],
+  // NTFS file IDs may exceed Number.MAX_SAFE_INTEGER, so adding 1 can leave the value unchanged.
+  ["changed inode", (f) => ({rootIno: f.marker.rootIno === 0 ? 1 : 0})],
+  ["prepared phase", () => ({phase: "prepared"})],
+  ["dead supervisor", () => ({launcherPid: 2147483647})],
+] satisfies Array<[string, (f: Awaited<ReturnType<typeof fixture>>) => Record<string, unknown>]>) {
+  test(`shared session marker rejects ${name}`, async () => {
+    const f = await fixture();
+    try {
+      const replacement = replace(f);
+      assert.notDeepEqual({...f.marker, ...replacement}, f.marker, "fixture must change the marker");
       await writeFile(path.join(f.root, SHARED_SESSION_MARKER), JSON.stringify({...f.marker, ...replacement}), {mode: 0o600});
       await assert.rejects(f.read(), /공용 실습/);
-    }
+    } finally { await f.dispose(); }
+  });
+}
+
+test("forged root name and unmanaged workspace environment are rejected", async () => {
+  const f = await fixture();
+  try {
     await assert.rejects(SharedLearningSession.fromEnvironment("Autograde IDE", {...f.environment, AUTOGRADE_SESSION_ROOT: f.parent}), /공용 실습/);
     await assert.rejects(SharedLearningSession.fromEnvironment("Autograde IDE", {...f.environment, AUTOGRADE_LEARNER_WORKSPACE: f.parent}), /공용 실습/);
   } finally { await f.dispose(); }
 });
 
-test("symlinked or corrupt authentication-used marker is never treated as an unused session", async () => {
+test("symlinked authentication-used marker is never treated as an unused session", async (t) => {
   const f = await fixture();
   try {
     const file = path.join(f.root, SHARED_AUTH_USED), external = path.join(f.parent, "external.json");
     await writeFile(external, JSON.stringify({schema: 1, sessionId: f.id, authenticated: true}), {mode: 0o600});
-    await symlink(external, file); await assert.rejects(f.read()); await rm(file);
-    await symlink(path.join(f.parent, "missing.json"), file); await assert.rejects(f.read(), /공용 실습/); await rm(file);
+    if (!await symlinkFileOrSkip(t, external, file)) return;
+    await assert.rejects(f.read(), /공용 실습/);
+    assert.equal(JSON.parse(await readFile(external, "utf8")).authenticated, true);
+  } finally { await f.dispose(); }
+});
+
+test("dangling authentication-used marker is never treated as an unused session", async (t) => {
+  const f = await fixture();
+  try {
+    if (!await symlinkFileOrSkip(t, path.join(f.parent, "missing.json"), path.join(f.root, SHARED_AUTH_USED))) return;
+    await assert.rejects(f.read(), /공용 실습/);
+  } finally { await f.dispose(); }
+});
+
+test("corrupt authentication-used marker is never treated as an unused session", async () => {
+  const f = await fixture();
+  try {
+    const file = path.join(f.root, SHARED_AUTH_USED);
     await writeFile(file, JSON.stringify({schema: 1, sessionId: "other", authenticated: true}), {mode: 0o600});
+    await assert.rejects(f.read(), /공용 실습/);
+    await writeFile(file, "{", {mode: 0o600});
+    await assert.rejects(f.read(), SyntaxError);
+  } finally { await f.dispose(); }
+});
+
+test("hard-linked authentication-used marker is never treated as an unused session", async () => {
+  const f = await fixture();
+  try {
+    const file = path.join(f.root, SHARED_AUTH_USED), external = path.join(f.parent, "external.json");
+    await writeFile(external, JSON.stringify({schema: 1, sessionId: f.id, authenticated: true}), {mode: 0o600});
+    await link(external, file);
     await assert.rejects(f.read(), /공용 실습/);
     assert.equal(JSON.parse(await readFile(external, "utf8")).authenticated, true);
   } finally { await f.dispose(); }

@@ -118,6 +118,29 @@ node .\scripts\ide\build-runtime.mjs --target windows-x64 --source .\.cache\code
 작업 트리가 깨끗해도 `--local`로 만든 보고서는 `local-build`이고, 후보 묶음 생성기는 이를
 거절한다. 기관 배포 후보가 필요하면 별도의 깨끗한 checkout에서 `--local` 없이 빌드한다.
 
+### Windows에서 확장 테스트가 실패하는 경우
+
+`EPERM ... symlink`가 테스트용 임시 폴더에서 발생하면 파일 링크를 만드는 권한이 없는
+경우다. 폴더 별칭 검사는 Windows junction을 사용하며, 파일 심볼릭 링크를 만들 수 없는
+Windows 환경에서는 그 개별 테스트만 사유를 출력하고 건너뛴다. 하드 링크·경로 이탈·인증
+표식 변조 검사는 별도로 계속 실행한다. 다른 오류는 건너뛰지 않는다.
+
+`438 !== 384`는 Windows의 파일 모드 표시 `0666`을 POSIX 전용 `0600`과 비교한
+테스트 문제다. Windows 접근 권한은 실행기가 설정한 ACL로 관리하므로 POSIX 모드 비교는
+POSIX에서만 실행한다. 또한 NTFS의 큰 파일 ID에 `1`을 더하는 방식으로 변조 값을 만들면
+JavaScript 숫자 정밀도 때문에 원래 값과 같아질 수 있어, 테스트는 확실히 다른 값을 사용한다.
+
+수정본을 적용한 뒤 아래 명령으로 관련 테스트를 먼저 확인할 수 있다.
+
+```powershell
+npm --prefix .\extensions\vscode run compile
+node --test .\extensions\vscode\out\test\filesystemFixtures.test.js .\extensions\vscode\out\test\learningExport.test.js .\extensions\vscode\out\test\managedExtensionsView.test.js .\extensions\vscode\out\test\sharedLearningSession.test.js
+```
+
+실패가 없으면 새 source/output 경로로 빌드를 다시 실행한다. 건너뛴 파일 심볼릭 링크
+검사는 통과한 검사와 구분하여 기록하며, 최종 인수에는 링크 생성이 가능한 Windows 시험
+환경의 결과도 포함한다. 일반 빌드 담당자에게 관리자 실행을 요구하지 않는다.
+
 ## 정리와 인수
 
 Windows native는 POSIX 정리 코드를 재사용하지 않는다. SID에 제한한 NTFS ACL, exclusive file

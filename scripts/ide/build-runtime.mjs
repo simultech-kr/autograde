@@ -111,7 +111,7 @@ export function buildRuntime({ target, source, output, includeWsl = false, local
   npmCheck('extension-dependencies', ['ci'], path.join(root, 'extensions/vscode'));
   if (process.platform === 'win32') {
     npmCheck('extension-compile', ['run', 'compile'], path.join(root, 'extensions/vscode'));
-    check('extension-platform-tests', node, ['--test', 'out/test/helpers.test.js', 'out/test/learningEnvironment.test.js',
+    check('extension-platform-tests', node, ['--test', 'out/test/helpers.test.js', 'out/test/filesystemFixtures.test.js', 'out/test/learningEnvironment.test.js',
       'out/test/learningExport.test.js', 'out/test/learningExportView.test.js', 'out/test/sharedLearningSession.test.js',
       'out/test/learningCheckpoint.test.js',
       'out/test/managedExtensions.test.js', 'out/test/managedExtensionsApi.test.js', 'out/test/managedExtensionsView.test.js'], path.join(root, 'extensions/vscode'));

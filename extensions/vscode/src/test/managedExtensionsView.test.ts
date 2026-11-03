@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
-import { mkdtemp, mkdir, writeFile, readFile, readdir, realpath, rm, rename, symlink, lstat } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, readFile, readdir, realpath, rm, rename, lstat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import type * as vscode from "vscode";
@@ -8,6 +8,7 @@ import { AssignmentOperationGate } from "../assignmentOperation";
 import { SharedLearningSession, SHARED_SESSION_MARKER } from "../sharedLearningSession";
 import { ExtensionInstallError, type ExtensionRelease } from "../managedExtensions";
 import type { LearningEnvironment } from "../learningEnvironment";
+import { symlinkDirectory } from "./filesystemFixtures";
 
 interface Loader {_load(name: string, parent: unknown, main: boolean): unknown}
 const loader = require("node:module") as Loader, original = loader._load;
@@ -69,7 +70,10 @@ test("adapter passes the staged local URI and release hash to the private bridge
     staged = argument.fsPath; assert.equal(argument.scheme, "file");
     assert.ok(staged.startsWith(path.join(f.root, "r", "extension-install-")));
     assert.deepEqual(await readFile(staged), bytes);
-    assert.equal((await lstat(staged)).mode & 0o777, 0o600);
+    const info = await lstat(staged);
+    assert.equal(info.isFile(), true); assert.equal(info.isSymbolicLink(), false);
+    // Windows inherits the launcher's ACLs; POSIX mode bits do not describe its access controls.
+    if (process.platform !== "win32") assert.equal(info.mode & 0o777, 0o600);
   };
   await f.installer.install(release, bytes, () => {});
   assert.equal(state.calls.length, 1); await assert.rejects(lstat(staged), {code: "ENOENT"});
@@ -123,7 +127,7 @@ test("replaced launcher-owned root fails closed instead of staging into a replac
 test("runtime symlink never stages a VSIX outside the session", async t => {
   const f = await fixture(t), outside = path.join(f.base, "outside");
   await mkdir(outside); await rm(path.join(f.root, "r"), {recursive: true});
-  await symlink(outside, path.join(f.root, "r"));
+  await symlinkDirectory(outside, path.join(f.root, "r"));
   await assert.rejects(f.installer.install(release, bytes, () => {}), {code: "package_invalid"});
   assert.deepEqual(await readdir(outside), []); assert.equal(state.calls.length, 0);
 });

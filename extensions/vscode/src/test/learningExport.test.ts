@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtemp, mkdir, writeFile, readFile, readdir, rm, symlink, link, truncate } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, readFile, readdir, rm, link, truncate } from "node:fs/promises";
 import { existsSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { inflateRawSync } from "node:zlib";
 import { collectLearningCode, learningExportDirectory, MAX_LEARNING_EXPORT_BYTES, saveLearningExport, validExportPath } from "../learningExport";
+import { symlinkDirectory, symlinkFileOrSkip } from "./filesystemFixtures";
 
 const guard = () => {};
 async function fixture() {
@@ -65,22 +66,38 @@ test("rejects destinations in managed sessions, code trees and symlink aliases",
   const f = await fixture();
   try {
     await assert.rejects(learningExportDirectory(f.source, [path.dirname(f.source)]), /학습 공간 밖/);
-    const alias = path.join(f.root, "alias"); await symlink(path.dirname(f.source), alias);
+    const alias = path.join(f.root, "alias"); await symlinkDirectory(path.dirname(f.source), alias);
     await assert.rejects(learningExportDirectory(path.join(alias, "workspace"), [path.dirname(f.source)]), /학습 공간 밖/);
     await assert.rejects(learningExportDirectory(alias, []), /일반 폴더/);
     assert.ok(await learningExportDirectory(f.output, [path.dirname(f.source)]));
   } finally {await f.close();}
 });
 
-test("code collection rejects symbolic and hard links without reading outside source", async () => {
-  for (const kind of ["symbolic", "hard"]) {
+for (const kind of ["symbolic", "hard"]) {
+  test(`code collection rejects ${kind} file links without reading outside source`, async context => {
     const f = await fixture();
     try {
       const secret = path.join(f.root, "private.txt"); await writeFile(secret, "never copy");
-      if (kind === "symbolic") await symlink(secret, path.join(f.source, "linked.txt")); else await link(secret, path.join(f.source, "linked.txt"));
+      if (kind === "symbolic") {
+        if (!await symlinkFileOrSkip(context, secret, path.join(f.source, "linked.txt"))) return;
+      } else await link(secret, path.join(f.source, "linked.txt"));
       await assert.rejects(collectLearningCode(f.source, guard), /링크|일반 파일/); assert.deepEqual(await readdir(f.output), []);
+      assert.equal(await readFile(secret, "utf8"), "never copy");
     } finally {await f.close();}
-  }
+  });
+}
+
+test("code collection rejects directory links and Windows junctions without reading outside source", async () => {
+  const f = await fixture();
+  try {
+    const outside = path.join(f.root, "outside"), alias = path.join(f.source, "linked-directory");
+    await mkdir(outside); await writeFile(path.join(outside, "private.txt"), "never copy");
+    await symlinkDirectory(outside, alias);
+    await assert.rejects(collectLearningCode(alias, guard), /심볼릭 링크/);
+    await assert.rejects(collectLearningCode(f.source, guard), /심볼릭 링크/);
+    assert.deepEqual(await readdir(f.output), []);
+    assert.equal(await readFile(path.join(outside, "private.txt"), "utf8"), "never copy");
+  } finally { await f.close(); }
 });
 
 test("unsafe paths and case/Unicode collisions are rejected before creating output", async () => {
