@@ -5,7 +5,8 @@ export class StudentApiError extends Error {
   constructor(status: number, code: string, message: string) { super(message); this.status = status; this.code = code; }
 }
 export function allowedStudentPath(path: string): boolean {
-  if (/^\/student\/api\/(bootstrap|register|login|logout|enroll|withdraw|password|reset|activate)$/.test(path)) return true;
+  if (path === "/student/api/privacy/dismiss") return true;
+  if (/^\/student\/api\/(bootstrap|register|login|logout|enroll|withdraw|password|reset|activate|privacy)$/.test(path)) return true;
   const match = /^\/student\/api\/course\/([a-z0-9][a-z0-9_-]{0,95})(\/(?:claims|privacy))?$/.exec(path);
   return Boolean(match && courseKey(match[1]));
 }

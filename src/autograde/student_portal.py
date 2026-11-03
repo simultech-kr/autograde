@@ -112,10 +112,6 @@ def _home(portal, course, session, overview):
     body += ('<section class="portal-card"><h2>실습 공간</h2><p>원격 환경 연결과 서버 작업 저장 상태를 확인하고 IDE에서 이어서 실습합니다.</p>'
              '<a href="#learning-space">내 실습 공간 확인</a></section></div>')
     body += _password_link(course, session)
-    body += ('<section class="portal-help"><h2>개인정보 활용 · 내 선택</h2>'
-             '<p>연구·수업 개선을 위한 개인정보 활용 여부를 직접 선택할 수 있습니다. '
-             '동의하지 않아도 수업과 점수 확인을 이용할 수 있습니다.</p>'
-             f'<a class="portal-action" href="{course_path}/privacy">동의 내용과 내 선택 확인</a></section>')
     body += _accepted_assignments(course_path, overview, now)
     body += _learning_space(portal.services[course], session, overview)
     if overview['latest']:
@@ -228,7 +224,9 @@ def request(portal, method, path, form, cookies, origin):
         body = (_home if section == 'portal' else _results)(portal, course, session, overview)
         with portal.lock:
             portal._session(course, cookies)
-        return portal._page('내 수업' if section == 'portal' else '내 점수 · 제출 현황', body, wide=True,
+        from .student_privacy_web import prompt_html
+        body += prompt_html(course, session, portal._course_label(course))
+        return portal._page('내 수업' if section == 'portal' else '내 점수 · 제출 현황', body, wide=True, enhanced=True,
                             navigation=portal._student_nav(course, section))
     except (ValueError, InvalidSignedValue, PlatformAPIError, PlatformAccessDenied) as exc:
         status = exc.status if isinstance(exc, PlatformAPIError) else 403

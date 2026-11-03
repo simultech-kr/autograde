@@ -64,6 +64,172 @@ def test_public_policy_is_available_without_login_and_does_not_collect_consent(p
     assert counts(facade) == (0, 0)
 
 
+def test_overview_requires_common_member_and_reads_only_their_active_enrollments(portal):
+    web, _, services, facade, _ = portal
+    legacy = CookieBrowser(web)
+    legacy.legacy_login()
+    assert read_api(legacy, '/student/api/privacy')[0] == 401
+    browser = member_browser(portal)
+    status, headers, body = read_api(browser, '/student/api/privacy')
+    assert status == 200 and not headers.get_all('Set-Cookie')
+    result = body['result']
+    assert result['student_key'] == '20260001' and result['csrf']
+    assert result['policy']['version'] == POLICY_VERSION
+    assert {row['course_key'] for row in result['consents']} == {'come2201', 'come3105'}
+    assert all(row['student_key'] == '20260001' and row['course_name'] and
+               row['decision'] == 'unanswered' and row['history'] == [] for row in result['consents'])
+    assert counts(facade) == (0, 0)
+    assert read_api(browser, '/student/api/privacy', fields={})[0] == 405
+    assert browser.request('/student/api/privacy?student_key=20260002')[0] == 400
+    state = services[COURSE].state
+    with state._write() as db:
+        db.execute("UPDATE platform_enrollments SET active=0 WHERE course_key='come2201'")
+    assert [row['course_key'] for row in read_api(browser, '/student/api/privacy')[2]['result']['consents']] == [COURSE]
+    with state._write() as db:
+        db.execute("UPDATE admin_courses SET status='preparation' WHERE course_key=?", (COURSE,))
+    assert read_api(browser, '/student/api/privacy')[2]['result']['consents'] == []
+
+
+@pytest.mark.parametrize('change', ["active=0", "password_hash='new-verifier'"])
+def test_overview_rechecks_account_in_same_database_snapshot(portal, monkeypatch, change):
+    browser = member_browser(portal)
+    facade = portal[3]
+    original = facade.privacy.overview
+    def revoke(*args, **kwargs):
+        with facade.members.store.state._write() as db:
+            db.execute('UPDATE student_accounts SET ' + change + " WHERE student_key='20260001'")
+        return original(*args, **kwargs)
+    monkeypatch.setattr(facade.privacy, 'overview', revoke)
+    assert read_api(browser, '/student/api/privacy')[0] == 401
+    assert counts(facade) == (0, 0)
+
+
+def test_unverified_member_has_no_consentable_course_or_prompt(portal):
+    browser = member_browser(portal)
+    facade = portal[3]
+    with facade.members.store.state._write() as db:
+        db.execute("UPDATE student_accounts SET verified=0 WHERE student_key='20260001'")
+    result = read_api(browser, '/student/api/privacy')
+    assert result[0] == 200 and result[2]['result']['consents'] == []
+    assert counts(facade) == (0, 0)
+
+
+def test_next_dismissal_survives_reload_and_is_shared_with_legacy_course_pages(portal):
+    web, _, _, facade, _ = portal
+    browser = member_browser(portal)
+    endpoint = '/student/api/privacy'
+    overview = read_api(browser, endpoint)[2]['result']
+    assert len(overview['consents']) == 2
+    assert all(row['prompt_dismissed'] is False for row in overview['consents'])
+    response = read_api(browser, endpoint + '/dismiss', fields={'csrf': overview['csrf'], 'policy_version': POLICY_VERSION})
+    assert response[0] == 200 and response[2]['result']['dismissed'] is True
+    # A new page load reads the same server-side session marker.
+    refreshed = read_api(browser, endpoint)[2]['result']
+    assert all(row['prompt_dismissed'] is True and row['decision'] == 'unanswered' for row in refreshed['consents'])
+    for row in refreshed['consents']:
+        assert read_api(browser, f'/student/api/course/{row["course_key"]}/privacy')[2]['result']['prompt_dismissed'] is True
+        assert browser.request(f'/courses/{row["course_key"]}/portal')[0] == 200
+    assert counts(facade) == (0, 0)
+    # A remembered reminder never substitutes for consent, nor follows a new login.
+    fresh = CookieBrowser(web)
+    _, _, page = fresh.request('/student/login')
+    assert fresh.request('/student/login', data={'csrf': csrf(page), 'student_key': '20260001', 'password': PASSWORD})[0] == 303
+    assert all(row['prompt_dismissed'] is False for row in read_api(fresh, endpoint)[2]['result']['consents'])
+    assert read_api(browser, endpoint)[0] == 401
+
+
+def test_legacy_dismissal_is_visible_in_next_overview_and_version_scoped(portal):
+    browser = member_browser(portal)
+    values = form(browser)
+    assert read_api(browser, WEB_PATH + '/dismiss', fields={'csrf': values['csrf'], 'policy_version': POLICY_VERSION})[0] == 200
+    rows = {row['course_key']: row for row in read_api(browser, '/student/api/privacy')[2]['result']['consents']}
+    assert rows[COURSE]['prompt_dismissed'] is True
+    assert rows['come2201']['prompt_dismissed'] is False
+    facade = portal[3]
+    for member in facade.members.sessions.values():
+        member.privacy_prompt_dismissed[COURSE] = 'previous-policy-version'
+    assert all(row['prompt_dismissed'] is False for row in read_api(browser, '/student/api/privacy')[2]['result']['consents'])
+    assert counts(facade) == (0, 0)
+
+
+@pytest.mark.parametrize('dismiss_path', ['/student/api/privacy/dismiss', WEB_PATH + '/dismiss'])
+def test_reminder_suppression_survives_claim_code_consuming_short_course_session(portal, dismiss_path):
+    browser = member_browser(portal)
+    facade = portal[3]
+    values = form(browser)
+    assert read_api(browser, dismiss_path, fields={'csrf': values['csrf'], 'policy_version': POLICY_VERSION})[0] == 200
+    previous_sessions = set(facade.sessions)
+    assert browser.request(f'/courses/{COURSE}/claims', data={
+        'csrf': values['csrf'], 'assignment_id': f'asn_{COURSE}'})[0] == 200
+    # Claim issuance intentionally consumes a course grant; a common member is
+    # still logged in, so recreating it must not re-open the same reminder.
+    assert previous_sessions - set(facade.sessions)
+    assert read_api(browser)[2]['result']['prompt_dismissed'] is True
+    rows = {row['course_key']: row for row in read_api(browser, '/student/api/privacy')[2]['result']['consents']}
+    assert rows[COURSE]['prompt_dismissed'] is True
+    assert rows[COURSE]['decision'] == 'unanswered'
+    assert counts(facade) == (0, 0)
+
+
+def test_shared_dismissal_requires_member_origin_csrf_and_current_policy(portal):
+    web, _, _, facade, _ = portal
+    unauthenticated = CookieBrowser(web)
+    endpoint = '/student/api/privacy/dismiss'
+    assert read_api(unauthenticated, endpoint, fields={'csrf': 'wrong', 'policy_version': POLICY_VERSION})[0] == 401
+    browser = member_browser(portal)
+    overview = read_api(browser, '/student/api/privacy')[2]['result']
+    values = {'csrf': overview['csrf'], 'policy_version': POLICY_VERSION}
+    assert browser.request(endpoint)[0] == 405
+    for origin in (None, 'null', 'https://other.invalid'):
+        assert read_api(browser, endpoint, fields=values, origin=origin)[0] == 403
+    assert read_api(browser, endpoint, fields={**values, 'csrf': 'wrong'})[0] == 403
+    for change in ({'policy_version': 'old'}, {'student_key': '20260002'}, {'course_key': COURSE}, {'decision': 'declined'}):
+        assert read_api(browser, endpoint, fields={**values, **change})[0] == 400
+    assert all(row['prompt_dismissed'] is False for row in read_api(browser, '/student/api/privacy')[2]['result']['consents'])
+    assert counts(facade) == (0, 0)
+
+
+@pytest.mark.parametrize('mode', ['legacy', 'member'])
+def test_reminder_later_is_session_only_not_a_recorded_opt_out(portal, mode):
+    web, _, _, facade, _ = portal
+    browser = member_browser(portal) if mode == 'member' else CookieBrowser(web)
+    if mode == 'legacy':
+        browser.legacy_login()
+    values = form(browser)
+    assert read_api(browser)[2]['result']['prompt_dismissed'] is False
+    dismiss = {'csrf': values['csrf'], 'policy_version': POLICY_VERSION}
+    assert read_api(browser, WEB_PATH + '/dismiss', fields=dismiss)[0] == 200
+    assert read_api(browser)[2]['result']['prompt_dismissed'] is True
+    assert read_api(browser)[2]['result']['decision'] == 'unanswered'
+    assert counts(facade) == (0, 0)
+    assert browser.request(f'/courses/{COURSE}/portal')[0] == 200
+    assert browser.request(WEB_PATH + '/dismiss')[0] == 405
+    # Another login is a new reminder lifetime, with no persisted choice.
+    fresh = CookieBrowser(web)
+    if mode == 'member':
+        _, _, page = fresh.request('/student/login')
+        assert fresh.request('/student/login', data={'csrf': csrf(page), 'student_key': '20260001', 'password': PASSWORD})[0] == 303
+    else:
+        fresh.legacy_login()
+    assert read_api(fresh)[2]['result']['prompt_dismissed'] is False
+    assert counts(facade) == (0, 0)
+
+
+def test_reminder_dismiss_requires_origin_csrf_current_policy_and_own_session(portal):
+    web, _, _, facade, _ = portal
+    browser = CookieBrowser(web)
+    browser.legacy_login()
+    values = form(browser)
+    fields = {'csrf': values['csrf'], 'policy_version': POLICY_VERSION}
+    for origin in (None, 'null', 'https://other.invalid'):
+        assert read_api(browser, WEB_PATH + '/dismiss', fields=fields, origin=origin)[0] == 403
+    assert read_api(browser, WEB_PATH + '/dismiss', fields={**fields, 'csrf': 'wrong'})[0] == 403
+    assert read_api(browser, WEB_PATH + '/dismiss', fields={**fields, 'policy_version': 'old'})[0] == 400
+    assert read_api(browser, WEB_PATH + '/dismiss', fields={**fields, 'decision': 'declined'})[0] == 400
+    assert read_api(browser)[2]['result']['prompt_dismissed'] is False
+    assert counts(facade) == (0, 0)
+
+
 @pytest.mark.parametrize('mode', ['legacy', 'member'])
 def test_initial_read_grant_withdraw_and_refusal_are_explicit_and_do_not_gate_learning(portal, mode):
     web, _, _, facade, _ = portal
@@ -71,6 +237,9 @@ def test_initial_read_grant_withdraw_and_refusal_are_explicit_and_do_not_gate_le
     if mode == 'legacy':
         assert browser.legacy_login()[0] == 200
     fields = form(browser)
+    page = browser.request(WEB_PATH)[2].decode()
+    assert 'value="granted" class="secondary">동의합니다</button>' in page
+    assert 'value="declined" class="secondary">동의하지 않습니다</button>' in page
     status, headers, body = read_api(browser)
     assert status == 200 and not headers.get_all('Set-Cookie')
     assert body['result']['decision'] == 'unanswered' and body['result']['revision'] == 0
@@ -81,6 +250,7 @@ def test_initial_read_grant_withdraw_and_refusal_are_explicit_and_do_not_gate_le
     assert status == 200 and not headers.get_all('Set-Cookie')
     assert body['result']['decision'] == 'granted' and body['result']['research_allowed'] is True
     assert body['result']['revision'] == 1 and counts(facade) == (1, 1)
+    assert 'value="declined" class="secondary">동의 철회</button>' in browser.request(WEB_PATH)[2].decode()
     withdrawn = {**fields, 'decision': 'declined', 'revision': '1'}
     status, headers, _ = browser.request(WEB_PATH, data=withdrawn)
     assert status == 303 and headers['Location'] == WEB_PATH

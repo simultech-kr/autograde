@@ -487,13 +487,20 @@ class InstructorWeb:
                 '교수자의 최종 평가·수료 판정이 아닙니다. 비활성 수강과 비활성 과제는 집계에서 제외합니다. '
                 '미제출은 아직 접수본이 없다는 뜻이며 마감 위반 판정이 아닙니다.</div></details>')
         if code is None:
-            body += f'<p>교과목 {len(groups)}개 · 분반/수업 {len(courses)}개 · <a href="/instructor/admin">현황 새로고침</a></p><div class="grid">'
+            body += (f'<div class="ui-toolbar"><p>교과목 {len(groups)}개 · 분반/수업 {len(courses)}개</p><div class="ui-actions">'
+                     '<a class="ui-action" href="/instructor/admin">현황 새로고침</a>')
+            if not self.principal or self.principal.role == 'admin':
+                body += '<a class="ui-action primary" href="#course-registration">새 교과목 등록</a>'
+            body += '</div></div><div class="grid">'
             for subject, offerings in groups.items():
                 title = next((c['name'] for c in offerings if c['name']), subject)
-                body += (f'<section><h3><a href="/instructor/admin/subjects/{_e(subject)}">{_e(subject)} · {_e(title)}</a></h3>'
-                         f'<p>{len(offerings)}개 분반/수업 · 수강 중 {sum(c["active_students"] for c in offerings)}건</p>'
-                         f'<p>기준 충족 {sum(c["completed"] for c in offerings)} · 수정 필요 {sum(c["needs_work"] for c in offerings)} · '
-                         f'미제출 {sum(c["not_submitted"] for c in offerings)}</p></section>')
+                body += (f'<section class="ui-subject-card"><span class="ui-subject-code">{_e(subject)}</span><h3>{_e(title)}</h3>'
+                         '<dl class="ui-subject-metrics">'
+                         f'<div><dt>분반·수업</dt><dd>{len(offerings)}</dd></div>'
+                         f'<div><dt>수강 중</dt><dd>{sum(c["active_students"] for c in offerings)}</dd></div>'
+                         f'<div><dt>미제출</dt><dd>{sum(c["not_submitted"] for c in offerings)}</dd></div></dl>'
+                         f'<p>기준 충족 {sum(c["completed"] for c in offerings)} · 수정 필요 {sum(c["needs_work"] for c in offerings)}</p>'
+                         f'<a class="ui-action" href="/instructor/admin/subjects/{_e(subject)}">분반 관리하기 <span aria-hidden="true">→</span></a></section>')
             body += '</div>'
             if not self.principal or self.principal.role == 'admin':
                 body += '<section id="course-registration"><h3>교과목·첫 분반 등록</h3>'
@@ -505,7 +512,11 @@ class InstructorWeb:
             title = '담당 수업 · 교과목별 현황' if self.principal and self.principal.role == 'instructor' else '관리자 · 교과목별 현황'
             return title, body
         offerings = groups[code]
-        body += '<p><a href="/instructor/admin">전체 교과목</a> · <a href="' + _e(path) + '">현황 새로고침</a></p>'
+        body += ('<div class="ui-toolbar"><div class="ui-actions"><a class="ui-action" href="/instructor/admin">전체 교과목</a>'
+                 '<a class="ui-action" href="' + _e(path) + '">현황 새로고침</a></div>')
+        if not self.principal or self.principal.role == 'admin':
+            body += '<a class="ui-action primary" href="#section-registration">새 분반 등록</a>'
+        body += '</div>'
         periods = {}
         for course in offerings:
             periods.setdefault((course['year'], course['semester']), []).append(course)
@@ -521,8 +532,9 @@ class InstructorWeb:
                          str(course['active_assignments']),
                          f'기준 충족 <strong>{course["completed"]}</strong> · 수정 필요 <strong>{course["needs_work"]}</strong><br>'
                          f'미제출 {course["not_submitted"]} · 채점·공개 대기 {course["waiting"]}<br>처리 오류 {course["errors"]} · 확인 필요 {course["unknown"]}',
-                         f'<a href="{base}/students">수강생 관리</a><br><a href="{base}/assignments">과제 등록·관리</a><br>'
-                         f'<a href="{base}/submissions">학생별 결과·코드 확인</a><br><a href="{base}/settings">분반 설정</a>'))
+                         f'<div class="ui-course-actions"><a class="ui-action" href="{base}/students">학생 명단</a>'
+                         + (f'<a class="ui-action" href="{base}/assignments">과제 관리</a>' if self.assignments is not None else '') +
+                         f'<a class="ui-action" href="{base}/submissions">결과·코드 확인</a><a class="ui-action" href="{base}/settings">분반 설정</a></div>'))
             body += result_table(('분반 / 수업명', '운영 상태', '수강 중 / 등록', '활성 과제', '제출 현황 (학생 × 과제)', '관리'),
                                  offering_rows, code + ' 분반별 최신 현황') + '</section>'
         template = next((c for c in offerings if c['year']), offerings[0])
@@ -530,7 +542,7 @@ class InstructorWeb:
                         semester=template['semester'] or '1', section='', status='preparation')
         fields = self._course_fields(defaults)
         if not self.principal or self.principal.role == 'admin':
-            body += '<section><h3>이 교과목에 분반 추가</h3><p>학년도·학기·분반을 확인하세요. 학생·과제·비밀번호는 다른 분반에서 자동 복사하지 않습니다.</p>'
+            body += '<section id="section-registration"><h3>이 교과목에 분반 추가</h3><p>학년도·학기·분반을 확인하세요. 학생·과제·비밀번호는 다른 분반에서 자동 복사하지 않습니다.</p>'
             body += self._form('/instructor/courses', session, fields + _button('새 분반 등록')) + '</section>'
         return code + ' · 학기·분반 관리', body
 
@@ -698,19 +710,26 @@ class InstructorWeb:
         base = self._base(course)
         body = f'<p>수업 상태: <strong>{_e(_STATUS.get(course["status"], course["status"]))}</strong></p>'
         body += course_summary(self, course)
+        if course['status'] != 'archived' and not (self.principal and self.principal.read_only):
+            body += ('<div class="ui-task-launcher"><div><h3>다음 실습을 준비하세요</h3>'
+                     '<p>학생 명단을 확인하고 문제·채점 자료를 함께 등록하면 수업 준비를 시작할 수 있습니다.</p></div><div class="ui-actions">')
+            if self.assignments is not None:
+                body += f'<a class="ui-action primary" href="{base}/assignments/new">새 과제 만들기</a>'
+            body += f'<a class="ui-action" href="{base}/students">학생 명단 관리</a></div></div>'
         body += '<div class="portal-section-heading"><h3>수업 업무</h3>'
         body += f'<a href="/courses/{_e(course["course_key"])}">학생용 수업 화면</a></div>'
         body += course_workflows(self, course)
         if self.catalog:
             catalog = self.catalog.list(course['course_key'], visibility='open')
-            body += f'<section><h3>진행 중인 과제 {catalog["count"]}개</h3><p class="meta">{_e(_timestamp(catalog["generated_at"]))} KST 기준 · 수락·제출 학생 수는 해당 공개본 전체 이력 기준입니다.</p>'
+            body += f'<section><div class="ui-toolbar"><h3>진행 중인 과제 {catalog["count"]}개</h3><a class="ui-action" href="{base}/assignments?visibility=open">진행 과제 전체 보기</a></div><p class="meta">{_e(_timestamp(catalog["generated_at"]))} KST 기준 · 수락·제출 학생 수는 해당 공개본 전체 이력 기준입니다.</p>'
             if not catalog['items']:
                 body += '<p>진행 중인 과제가 없습니다. 초안·공개 예약·마감 과제는 과제 관리에서 확인하세요.</p>'
+            body += '<ul class="ui-assignment-list">'
             for item in catalog['items'][:5]:
-                body += f'<h3><a href="{base}/assignments/{_e(item["assignment_id"])}">{_e(item["title"])}</a></h3><p>마감: {_e(_timestamp(item["due_at"]) or "마감 없음")} · 수락 {item["accepted_students"]}명 · 제출 {item["submitted_students"]}명</p>'
-            if catalog['count'] > 5:
-                body += f'<a href="{base}/assignments?visibility=open">진행 과제 전체 보기</a>'
-            body += '</section>'
+                body += (f'<li><div><h4>{_e(item["title"])}</h4><p>마감: {_e(_timestamp(item["due_at"]) or "마감 없음")} · '
+                         f'수락 {item["accepted_students"]}명 · 제출 {item["submitted_students"]}명</p></div>'
+                         f'<a class="ui-action" href="{base}/assignments/{_e(item["assignment_id"])}" aria-label="{_e(item["title"])} 관리">과제 확인·관리 <span aria-hidden="true">→</span></a></li>')
+            body += '</ul></section>'
         return '수업 개요', body
 
     def _password_result(self, result, base, title='학생 등록 완료'):

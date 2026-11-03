@@ -30,7 +30,14 @@
 .handoffSteps strong{font-size:13px}
 .scores{background:var(--surface-raised);padding:16px!important;border:1px solid var(--border);border-radius:var(--radius-sm)}
 .course>.scores{width:100%}
+.learningWelcome{display:flex;align-items:center;justify-content:space-between;gap:32px;padding:28px;background:var(--soft);border:1px solid var(--border);border-radius:var(--radius-md);margin-bottom:32px}
+.learningWelcome h2{font-size:24px;margin:6px 0 8px;letter-spacing:-.03em}.learningWelcome p{margin:0;max-width:580px;color:var(--muted)}
+.learningCounts{display:flex;gap:28px;margin:0!important;flex-shrink:0}.learningCounts>div{border-left:1px solid var(--border);padding-left:24px}.learningCounts dd{font-size:30px;line-height:1.2;font-weight:700;margin:8px 0 0}.learningCounts dd span{font-size:13px;margin-left:4px;font-weight:400;color:var(--muted)}
+.courseCardTop{display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%}.courseCardTop .eyebrow{margin:0}.courseCardTop+h3{font-size:21px;margin:12px 0 0}
+.taskGrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;margin-bottom:28px}.taskTile{display:flex;align-items:center;gap:14px;padding:20px;text-align:left;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:var(--radius-md);min-width:0;transition:background .15s,border-color .15s}.taskTile:hover{background:var(--soft);border-color:var(--accent)}.taskTile>span:nth-child(2){flex:1;min-width:0}.taskTile strong,.taskTile small{display:block}.taskTile strong{font-size:15px}.taskTile small{font-size:12px;line-height:1.6;margin-top:5px;color:var(--muted)}.taskMark{font-size:12px;font-weight:650;color:var(--accent);align-self:flex-start;padding-top:3px}
+.learningSteps{padding:24px 0;border-top:1px solid var(--border);margin-top:28px}.learningSteps h2{font-size:17px}.learningSteps ol{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:24px;padding-left:20px;margin:12px 0 20px}.learningSteps li{padding-left:4px}.learningSteps li strong,.learningSteps li span{display:block}.learningSteps li span{font-size:13px;color:var(--muted);margin-top:5px}.learningSteps>p,.materialNote{font-size:13px;color:var(--muted)}.materialNote{padding:20px 0;border-top:1px solid var(--border);margin-top:24px!important}.footer .quiet{font-size:12px;min-height:32px;padding:0 8px;align-self:flex-start}
 .portal .history summary{min-height:44px;font-weight:600}
+@media(max-width:960px){.learningWelcome{align-items:flex-start;flex-direction:column;gap:20px}.learningCounts>div{border:0;padding:0;min-width:130px}.taskGrid{grid-template-columns:minmax(0,1fr)}.taskTile{padding:18px 20px}.nav{flex-wrap:wrap}.session{margin-left:auto}}
 @media(max-width:700px){
  .header{padding:12px 16px;min-height:64px}
  .brand{font-size:21px}
@@ -39,4 +46,6 @@
  .handoffSteps li{padding:0 0 12px;border-right:0;border-bottom:1px solid var(--border)}
  .handoffSteps li:last-child{padding-bottom:0;border-bottom:0}
  .claim>code{font-size:22px;padding:12px}
+ .nav{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px}.nav button{white-space:nowrap;font-size:12px;padding-inline:5px}.nav .session{grid-column:1/-1;justify-self:end}
+ .learningWelcome{padding:22px 20px;margin-bottom:24px}.learningWelcome h2{font-size:22px}.learningCounts{gap:28px}.learningCounts>div{min-width:0}.learningCounts dd{font-size:26px}.learningSteps ol{grid-template-columns:minmax(0,1fr);gap:18px}.course .actions{width:100%}.course .actions .primary{flex-basis:100%}.course .actions .secondary{flex:1}
 }

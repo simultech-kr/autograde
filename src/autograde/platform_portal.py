@@ -141,6 +141,7 @@ class WebSession:
     expires: float
     course_revision: int | None = None
     member_session: bool = False
+    privacy_prompt_dismissed: str | None = None
 
 
 class CoursePortal:
@@ -407,8 +408,10 @@ class CoursePortal:
         body += '<p>'
         if not session.member_session:
             body += f'<a href="/courses/{course}/password">처음 로그인한 학생 · 개인 비밀번호 설정·변경</a> · '
-        body += f'<a href="/courses/{course}/privacy">개인정보 활용 동의 · 내 선택</a> · <a href="/student/account">내 수강 교과목</a></p>'
-        return self._page("과제 선택", body, status=status, enhanced=bool(available), navigation=self._student_nav(course, 'assignments'))
+        body += f'<a class="portal-action" href="/courses/{course}/privacy">정보 활용 설정</a> · <a href="/student/account">내 수강 교과목</a></p>'
+        from .student_privacy_web import prompt_html
+        body += prompt_html(course, session, self._course_label(course))
+        return self._page("과제 선택", body, status=status, enhanced=True, navigation=self._student_nav(course, 'assignments'))
 
     def portal_request(self, method, path, form, cookies, origin=None, authorization=None):
         if self.instructor is not None:

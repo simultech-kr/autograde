@@ -4,6 +4,8 @@ Navigation stays a link; mutations stay authenticated forms. Presentation never
 changes authorization, storage or browser persistence.
 """
 
+from html import escape
+
 _ICONS = {
     'home': '<path d="m3 10 9-7 9 7v10H3z"/><path d="M9 20v-7h6v7"/>',
     'students': '<circle cx="9" cy="8" r="3"/><path d="M3 20v-2a6 6 0 0 1 12 0v2M16 5a3 3 0 0 1 0 6M18 14a5 5 0 0 1 3 5"/>',
@@ -30,6 +32,14 @@ def navigation_icon(url):
             'content': 'folder', 'materials': 'folder', 'exam-papers': 'folder',
             'extensions': 'folder', 'instructor': 'home', 'student': 'students'}.get(segment, 'grid')
     return icon(name)
+
+
+def task_card(url, title, description, *, action='열기'):
+    """One keyboard-focusable destination with a visible next action."""
+    return (f'<a class="portal-workflow-card ui-task-card" href="{escape(url, quote=True)}">'
+            '<span class="ui-task-icon">' + navigation_icon(url) + '</span>'
+            f'<strong>{escape(title)}</strong><span class="ui-task-description">{escape(description)}</span>'
+            f'<span class="ui-task-next">{escape(action)} <span aria-hidden="true">→</span></span></a>')
 
 
 STYLE = """
@@ -113,6 +123,29 @@ STYLE = """
 .responsive-instructor .portal-tools,.responsive-instructor .catalog-tools{background:var(--surface);padding:16px 20px;border:1px solid var(--border);border-radius:4px;margin:20px 0}
 .responsive-instructor .portal-tools label,.responsive-instructor .catalog-tools label{margin-top:0}
 .responsive-instructor .portal-course-card,.responsive-instructor .portal-workflow-card{border-radius:4px;padding:24px}
+.portal-workflow-group{margin:28px 0}.portal-workflow-group-heading{margin-bottom:14px}
+.portal-workflow-group-heading h4{font-size:16px;letter-spacing:-.02em;margin:0 0 4px}
+.portal-workflow-group-heading p{color:var(--muted);font-size:13px;margin:0}
+.responsive-instructor .ui-task-card{display:flex;flex-direction:column;align-items:flex-start;gap:10px;min-height:170px;overflow-wrap:anywhere}
+.responsive-instructor .ui-task-card strong{color:var(--text);font-size:16px;margin:0}
+.responsive-instructor .ui-task-card .ui-task-icon{color:var(--link);display:inline-flex;background:var(--soft);padding:8px;border-radius:4px}
+.responsive-instructor .ui-task-card .ui-task-description{font-size:13px;line-height:1.7;color:var(--muted)}
+.responsive-instructor .ui-task-card .ui-task-next{color:var(--link);font-size:13px;font-weight:650;margin-top:auto;padding-top:6px}
+.responsive-instructor .ui-task-card:hover,.responsive-instructor .ui-task-card:focus-visible{border-color:var(--accent);background:var(--surface-raised)}
+.ui-task-launcher{display:flex;justify-content:space-between;align-items:center;gap:20px;padding:20px 24px;margin:20px 0;background:var(--soft);border:1px solid var(--border);border-radius:4px}
+.ui-task-launcher h3{font-size:17px;margin:0 0 4px}.ui-task-launcher p{font-size:13px;color:var(--muted);margin:0}
+.ui-task-launcher .ui-actions{flex:none}
+/* These cards are nested sections; override the shared legacy section reset. */
+.responsive-instructor .shell main .ui-subject-card{display:flex;flex-direction:column;gap:12px;margin:0;border:1px solid var(--border);border-radius:4px;padding:24px;background:var(--surface)}
+.ui-toolbar h3{margin:0}
+.ui-subject-card .ui-subject-code{font-size:12px;font-weight:650;letter-spacing:.04em;color:var(--muted)}
+.ui-subject-card h3{margin:0;font-size:20px;line-height:1.4;overflow-wrap:anywhere}.ui-subject-card>p{margin:0;font-size:13px;color:var(--muted)}
+.ui-subject-card .ui-action{margin-top:auto;align-self:flex-start}
+.ui-subject-metrics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;padding-block:14px;margin:0;border-block:1px solid var(--border)}
+.ui-subject-metrics dt{font-size:12px;color:var(--muted)}.ui-subject-metrics dd{font-size:22px;font-weight:650;margin:4px 0 0;font-variant-numeric:tabular-nums}
+.ui-course-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;min-width:210px}.ui-course-actions .ui-action{justify-content:flex-start}
+.ui-assignment-list{list-style:none;padding:0;margin:0}.ui-assignment-list li{display:flex;justify-content:space-between;align-items:center;gap:20px;padding:18px 0;border-top:1px solid var(--border)}
+.ui-assignment-list h4{font-size:16px;margin:0 0 6px;overflow-wrap:anywhere}.ui-assignment-list p{font-size:13px;color:var(--muted);margin:0}.ui-assignment-list .ui-action{flex:none}
 .responsive-instructor .portal-section-heading>a{font-size:13px;font-weight:600;text-decoration:none;padding:8px 12px;border:1px solid var(--border);border-radius:4px;background:var(--surface)}
 .responsive-instructor .draft-navigation{gap:0;padding:6px;border:1px solid var(--border);border-radius:4px;background:var(--surface)}
 .responsive-instructor .draft-navigation li{flex:1;min-width:140px}.responsive-instructor .draft-navigation a{border:0;padding:10px 12px;font-size:13px;text-align:center}
@@ -141,6 +174,10 @@ STYLE = """
  .responsive-instructor .result-table th,.responsive-instructor .result-table td{grid-template-columns:minmax(0,5.5rem) minmax(0,1fr)}
  .draft-overview{padding:16px}.draft-navigation{flex-direction:column}
  .operations-alerts li{align-items:flex-start;flex-direction:column;gap:8px}
+ .ui-task-launcher{align-items:stretch;flex-direction:column;padding:18px}.ui-task-launcher .ui-actions{width:100%}.ui-task-launcher .ui-action{flex:1}
+ .ui-course-actions{min-width:0;grid-template-columns:1fr}.ui-assignment-list li{align-items:flex-start;flex-direction:column;gap:12px}
+ .responsive-instructor .ui-task-card{min-height:0;padding:20px}.ui-subject-metrics dd{font-size:20px}
+ .responsive-instructor .shell main .ui-subject-card{padding:20px}
 }
 @media(prefers-reduced-motion:reduce){.responsive-instructor *{scroll-behavior:auto!important}}
 @media(forced-colors:active){.ui-action,.ui-badge,.instructor-brand-mark,.portal-menu nav a[aria-current=page]{border:1px solid CanvasText}}

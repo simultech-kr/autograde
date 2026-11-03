@@ -21,6 +21,8 @@ const privacyResult = (decision = "unanswered", revision = 0) => ({ok: true, res
   updated_at: revision ? stamp(0) : null, research_allowed: decision === "granted", history: [],
   policy: Object.fromEntries(["version", "title", "purpose", "items", "retention", "choice", "withdrawal", "scope", "contact"].map(key => [key, `synthetic ${key}`]))}});
 
+const privacyOverview = (decision = "unanswered", revision = 0) => ({ok:true, result:{student_key:studentKey, csrf:"synthetic_csrf", policy:privacyResult().result.policy, consents:[{...privacyResult(decision, revision).result, course_name:course.name}]}});
+
 test("only the same unexpired identity and active enrollment can resume private context", () => {
   const value = bootstrap().result as Bootstrap;
   assert.equal(canResumePrivate(studentKey, value, courseKey, now), true);
@@ -132,6 +134,28 @@ test("React: my scores separates the current submission from earlier best and re
   } finally {await app.dispose();}
 });
 
+test("React: learning actions retain the selected course across materials and scores", async () => {
+  const app = await mount(async url => {
+    if (url === "/student/api/privacy") return Response.json(privacyOverview("declined", 1));
+    if (url.endsWith("/bootstrap")) return Response.json(bootstrap());
+    const value = courseResult();
+    Object.assign(value.result.links, {materials:`/courses/${courseKey}/materials`, exam_papers:`/courses/${courseKey}/exam-papers`});
+    return Response.json(value);
+  }, "");
+  try {
+    assert.match(app.document.body.textContent!, /오늘의 실습을 이어가세요/);
+    await app.click("학습 자료");
+    assert.match(app.document.defaultView!.location.search, /course_key=come2201&view=materials/);
+    assert.equal(app.document.querySelector('a[href="/courses/come2201/materials"]')?.textContent?.trim(), "내 자료 다운로드 →");
+    assert.equal(app.document.querySelector('a[href="/courses/come2201/exam-papers"]')?.textContent?.trim(), "시험지 다운로드 →");
+    assert.doesNotMatch(app.document.body.textContent!, /공식 제출 이력/);
+    await app.click("내 점수"); assert.match(app.document.defaultView!.location.search, /course_key=come2201&view=scores/);
+    await app.click("정보 활용 설정"); assert.equal(app.document.defaultView!.location.search, "?view=privacy");
+    await app.click("내 계정"); assert.match(app.document.body.textContent!, /새 회원 비밀번호 확인/);
+    assert.equal(app.requests.filter(r => r.options?.method === "POST").length, 0);
+  } finally {await app.dispose();}
+});
+
 test("React: optional consent is explicit, recorded, withdrawable and stale tabs cannot re-grant", async () => {
   let decision = "unanswered", revision = 0, conflict = false;
   const posts: URLSearchParams[] = [];
@@ -143,20 +167,19 @@ test("React: optional consent is explicit, recorded, withdrawable and stale tabs
         assert.equal(values.get("csrf"), "synthetic_csrf"); assert.equal(values.has("student_key"), false);
         decision = values.get("decision")!; revision++;
       }
-      return Response.json(privacyResult(decision, revision));
+      return Response.json(url === "/student/api/privacy" ? privacyOverview(decision, revision) : privacyResult(decision, revision));
     }
     return Response.json(url.endsWith("/bootstrap") ? bootstrap() : courseResult());
-  });
+  }, "?view=privacy");
   try {
-    assert.equal(posts.length, 0); assert.match(app.document.body.textContent!, /아직 선택하지 않음 · 연구 활용 제외/);
-    assert.ok(app.button("이 실습 연결 코드 발급"));
-    await app.click("동의하고 저장"); assert.equal(posts.length, 1); assert.match(app.document.body.textContent!, /동의함/);
-    await app.click("동의하지 않음 · 철회"); assert.equal(posts.length, 2); assert.equal(posts[1].get("revision"), "1");
-    assert.match(app.document.body.textContent!, /동의하지 않음 · 연구 활용 제외/);
-    conflict = true; await app.click("동의하고 저장"); assert.equal(posts.length, 3);
+    assert.equal(posts.length, 0); assert.match(app.document.body.textContent!, /아직 선택하지 않음/);
+    await app.click("동의합니다"); assert.equal(posts.length, 1); assert.match(app.document.body.textContent!, /동의함/);
+    await app.click("동의 철회"); assert.equal(posts.length, 2); assert.equal(posts[1].get("revision"), "1");
+    assert.match(app.document.body.textContent!, /동의하지 않음/);
+    conflict = true; await app.click("동의합니다"); assert.equal(posts.length, 3);
     assert.match(app.document.body.textContent!, /다른 화면에서 동의 상태가 변경/);
-    assert.equal(Array.from(app.document.querySelectorAll("button")).some(node => node.textContent === "동의하고 저장"), false);
-    await app.click("동의 상태 새로고침"); assert.match(app.document.body.textContent!, /동의하지 않음 · 연구 활용 제외/);
+    assert.equal(Array.from(app.document.querySelectorAll("button")).some(node => node.textContent === "동의합니다"), false);
+    await app.click("상태 새로고침"); assert.match(app.document.body.textContent!, /동의하지 않음/);
     assert.equal(posts.length, 3); assert.equal(app.document.defaultView!.localStorage.length, 0);
   } finally {await app.dispose();}
 });
@@ -169,17 +192,17 @@ test("React: lost consent response clears stale choice and refresh never repeats
         decision = new URLSearchParams(String(options.body)).get("decision")!; revision++; posts++;
         if (fail) return Response.json({ok: false, error: {code: "internal_error", message: "저장 결과를 확인하세요."}}, {status: 500});
       }
-      return Response.json(privacyResult(decision, revision));
+      return Response.json(url === "/student/api/privacy" ? privacyOverview(decision, revision) : privacyResult(decision, revision));
     }
     return Response.json(url.endsWith("/bootstrap") ? bootstrap() : courseResult());
-  });
+  }, "?view=privacy");
   try {
-    await app.click("동의하고 저장"); assert.match(app.document.body.textContent!, /선택이 저장되었습니다/);
-    await app.click("동의 상태 새로고침"); assert.doesNotMatch(app.document.body.textContent!, /선택이 저장되었습니다/);
-    fail = true; await app.click("동의하지 않음 · 철회");
-    assert.equal(Array.from(app.document.querySelectorAll("button")).some(node => node.textContent === "동의하고 저장"), false);
-    await app.click("동의 상태 새로고침");
-    assert.match(app.document.body.textContent!, /동의하지 않음 · 연구 활용 제외/);
+    await app.click("동의합니다"); assert.match(app.document.body.textContent!, /정보 활용에 동의했습니다/);
+    await app.click("상태 새로고침"); assert.doesNotMatch(app.document.body.textContent!, /정보 활용에 동의했습니다/);
+    fail = true; await app.click("동의 철회");
+    assert.equal(Array.from(app.document.querySelectorAll("button")).some(node => node.textContent === "동의합니다"), false);
+    await app.click("상태 새로고침");
+    assert.match(app.document.body.textContent!, /동의하지 않음/);
     assert.equal(posts, 2);
   } finally {await app.dispose();}
 });
@@ -279,7 +302,7 @@ test("React: a late claim after navigation cannot restore a discarded code", asy
   try {
     await app.click("이 실습 연결 코드 발급"); await app.click("내 수업");
     await act(async () => complete(Response.json(claimResult()))); assert.equal(app.code(), null);
-    assert.match(app.document.body.textContent!, /신청한 수업/);
+    assert.match(app.document.body.textContent!, /오늘의 실습을 이어가세요/);
   } finally {await app.dispose();}
 });
 
@@ -288,7 +311,7 @@ test("React: stale enrollment plus denied course does not enter an automatic ret
   const app = await mount(async url => url.endsWith("/bootstrap") ? Response.json(bootstrap()) : restored ? Response.json(courseResult()) : Response.json({ok: false, error: {code: "course_denied", message: "수강 상태를 확인하세요."}}, {status: 403}));
   try {
     await app.settle();
-    assert.equal(app.requests.length, 2); assert.equal(app.surface().hidden, true);
+    assert.equal(app.requests.filter(request => !request.url.endsWith("/student/api/privacy")).length, 2); assert.equal(app.surface().hidden, true);
     assert.match(app.document.body.textContent!, /로그인 상태를 다시 확인/);
     restored = true; await app.click("다시 확인"); assert.equal(app.surface().hidden, false);
     assert.match(app.document.body.textContent!, /Iterator 실습/);

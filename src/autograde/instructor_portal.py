@@ -9,7 +9,7 @@ from __future__ import annotations
 from html import escape
 
 from .portal_runtime_view import STATES as RUNTIME_STATES, overview as runtime_overview, time_label
-from .instructor_design import navigation_icon
+from .instructor_design import navigation_icon, task_card
 
 
 STATUS = {'active': '운영', 'preparation': '준비', 'archived': '보관'}
@@ -191,33 +191,41 @@ def portal_home(web, query):
                      f'<a href="{_e(base)}/classroom">실습 교실</a></div></article>')
         body += '</div>'
     if can_manage_courses(web):
-        body += '<p><a href="/instructor/admin">교과목·분반 관리와 전체 현황 보기</a></p>'
-    body += '<p class="portal-summary-note">학생용 수령·자료 화면은 <a href="/student">학생 포털</a>에서 확인합니다. 교수자 인증으로 학생 계정에 로그인되지는 않습니다.</p>'
+        body += ('<div class="ui-task-launcher"><div><h3>교과목과 분반을 함께 관리하세요</h3>'
+                 '<p>새 수업을 등록하거나, 같은 교과목의 분반별 학생·제출 현황을 비교할 수 있습니다.</p></div>'
+                 '<a class="ui-action" href="/instructor/admin">교과목·분반 관리</a></div>')
+    body += ('<div class="ui-task-launcher"><div><h3>학생에게 안내할 화면이 필요한가요?</h3>'
+             '<p>학생 포털에서 로그인과 과제 수령 절차를 확인하세요. 교수자 계정은 그대로 유지됩니다.</p></div>'
+             '<a class="ui-action" href="/student">학생 시작 화면 보기</a></div>')
     return '교수자 포털', body
 
 
 def course_workflows(web, course):
     base = web._base(course)
-    cards = [(base + '/classroom', '실습 교실', '학생 IDE 연결·최근 활동·공식 제출을 확인하고 수업 요청을 전달합니다.'),
-             (base + '/environments', '실습 환경', '원격 Linux 연결과 학생별 실행공간·서버 저장·종료 상태를 확인합니다.'),
-             (base + '/submissions', '제출·채점 현황', '최신 제출과 이전 최고점, 미제출 학생, 코드와 제출 이력을 확인합니다.'),
-             (base + '/students', '수강생 관리', '가입·본인 확인·수강 상태를 함께 확인하고 필요한 조치를 진행합니다.')]
+    preparation = [(base + '/students', '학생 명단 관리', '수강할 학생을 등록하고 가입·본인 확인·수강 연결 상태를 한곳에서 확인합니다.')]
     if web.assignments is not None:
-        cards.insert(1, (base + '/assignments', '과제 관리', '문제와 채점 자료 등록, 검증·공개, 마감 관리와 파일 다운로드를 진행합니다.'))
-    if web.rubrics:
-        cards.append((base + '/rubrics', '루브릭 관리', '평가 기준과 항목을 관리하고 허용된 제출본에 연결합니다.'))
+        preparation.insert(0, (base + '/assignments', '과제 준비·공개', '문제와 채점 자료를 함께 준비하고, 검증 결과를 확인한 뒤 학생에게 공개합니다.'))
     if web.content_service is not None:
-        cards.append((base + '/content', '콘텐츠', '공통 강의자료를 버전으로 공개하고 학생 IDE에 변경 파일을 배포합니다.'))
+        preparation.append((base + '/content', '강의자료 업데이트', '교재와 예제 파일을 공개하면 학생 IDE에서 변경된 자료를 받을 수 있습니다.'))
     if web.student_materials is not None:
-        cards.append((base + '/materials', '학생별 자료 배포', '학번별 PDF·ZIP 등 개인 자료를 등록하고 배포·수정합니다.'))
+        preparation.append((base + '/materials', '학생별 자료 배포', '학번별 PDF·ZIP을 올려 각 학생에게 필요한 파일을 전달하고 수정합니다.'))
     if web.exam_papers is not None:
-        cards.append((base + '/exam-papers', '시험지 배포', '학생에게 배정된 시험 자료와 수령 상태를 관리합니다.'))
+        preparation.append((base + '/exam-papers', '시험지 배포', '시험 자료를 배정하고 학생들이 수령했는지 확인합니다.'))
+    teaching = [(base + '/classroom', '실습 교실 열기', '접속한 학생과 최근 활동을 확인하고 공지·과제 열기·저장 요청을 전달합니다.'),
+                (base + '/environments', '실습 환경 확인', '학생별 실행공간과 서버 저장·종료 상태를 확인합니다.')]
     if web.extension_distribution is not None:
-        cards.append((base + '/extensions', 'IDE 확장 배포', '교수자가 허용한 IDE 확장의 설치·업데이트를 관리합니다.'))
-    cards.append((base + '/settings', '수업 설정', '수업명·학기·분반·운영 상태와 학생 접속 주소를 확인합니다.'))
-    return '<div class="portal-workflow-grid">' + ''.join(
-        f'<a class="portal-workflow-card" href="{_e(url)}"><strong>{_e(title)}</strong><span>{_e(description)}</span></a>'
-        for url, title, description in cards) + '</div>'
+        teaching.append((base + '/extensions', 'IDE 확장 업데이트', '수업에 필요한 확장을 승인하고 설치·업데이트를 전달합니다.'))
+    review = [(base + '/submissions', '제출·점수 확인', '최신 제출과 이전 최고점을 비교하고, 미제출 학생·코드·제출 이력을 확인합니다.')]
+    if web.rubrics:
+        review.append((base + '/rubrics', '평가 기준 관리', '루브릭의 평가 항목을 준비하고 학생 제출본에 적용합니다.'))
+    review.append((base + '/settings', '수업 설정', '수업명·학기·분반과 운영 상태를 변경하고 수업 종료 절차를 진행합니다.'))
+    groups = [('수업 준비', '학생과 과제, 배포할 자료를 준비합니다.', preparation),
+              ('수업 진행', '현재 실습 상황을 확인하고 학생을 지원합니다.', teaching),
+              ('평가·수업 관리', '제출 결과를 살펴보고 다음 수업을 준비합니다.', review)]
+    return ''.join('<div class="portal-workflow-group"><div class="portal-workflow-group-heading">'
+                   f'<h4>{_e(title)}</h4><p>{_e(description)}</p></div><div class="portal-workflow-grid">' +
+                   ''.join(task_card(url, label, help_text) for url, label, help_text in cards) + '</div></div>'
+                   for title, description, cards in groups)
 
 
 def course_summary(web, course):

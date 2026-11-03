@@ -7,6 +7,8 @@ export type PrivacyData = {
   policy: Record<"version" | "title" | "purpose" | "items" | "retention" | "choice" | "withdrawal" | "scope" | "contact", string>;
   history: {decision: "granted" | "declined"; policy_version: string; created_at: string}[];
 };
+export type PrivacyCourse = PrivacyData & {course_name: string; prompt_dismissed: boolean};
+export type PrivacyOverview = {student_key: string; csrf: string; policy: PrivacyData["policy"]; consents: PrivacyCourse[]};
 const obj = (value: unknown): Record<string, unknown> => {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new StudentContractError();
   return value as Record<string, unknown>;
@@ -31,4 +33,23 @@ export function parsePrivacy(value: unknown, course: string, student: string): P
   return {student_key: student, course_key: course, policy: parsedPolicy, decision: body.decision as PrivacyChoice,
     research_allowed: body.research_allowed, revision: body.revision as number,
     updated_at: body.updated_at === null ? null : date(body.updated_at), history};
+}
+
+export function parsePrivacyOverview(value: unknown, student: string): PrivacyOverview {
+  const body = obj(unwrap(value));
+  if (body.student_key !== student || typeof body.csrf !== "string" || !body.csrf || body.csrf.length > 512 ||
+      /[\u0000-\u0020\u007f]/.test(body.csrf) || !Array.isArray(body.consents) || body.consents.length > 200) throw new StudentContractError();
+  const policy = obj(body.policy);
+  const parsedPolicy = Object.fromEntries(["version", "title", "purpose", "items", "retention", "choice", "withdrawal", "scope", "contact"].map(key => [key, str(policy[key])])) as PrivacyData["policy"];
+  const seen = new Set<string>();
+  const consents = body.consents.map(value => {
+    const row = obj(value), course = courseKey(str(row.course_key));
+    if (seen.has(course)) throw new StudentContractError();
+    seen.add(course);
+    const parsed = parsePrivacy({ok: true, result: {...row, policy: row.policy ?? parsedPolicy}}, course, student);
+    if (Object.keys(parsedPolicy).some(key => parsed.policy[key as keyof typeof parsedPolicy] !== parsedPolicy[key as keyof typeof parsedPolicy])) throw new StudentContractError();
+    if (row.prompt_dismissed !== undefined && typeof row.prompt_dismissed !== "boolean") throw new StudentContractError();
+    return {...parsed, course_name: str(row.course_name), prompt_dismissed: row.prompt_dismissed === true};
+  });
+  return {student_key: student, csrf: body.csrf, policy: parsedPolicy, consents};
 }

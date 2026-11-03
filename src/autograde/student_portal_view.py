@@ -38,9 +38,10 @@ main.portal-wide{max-width:1080px}
 .student-nav a[aria-current=page]{color:var(--link);background:var(--soft);border-bottom:2px solid var(--accent);font-weight:650}
 .portal-intro{max-width:70ch;color:var(--muted)}
 .portal-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr));gap:16px;margin:24px 0}
-.portal-card{border:1px solid var(--border);padding:20px;background:var(--surface);min-width:0}
+.portal-card{border:1px solid var(--border);padding:20px;background:var(--surface);min-width:0;display:flex;flex-direction:column}
 .portal-card h2{margin:0 0 8px;font-size:1.15rem}.portal-card p{color:var(--muted)}
-.portal-card a,.portal-action{display:inline-flex;align-items:center;min-height:44px;font-weight:650}
+.portal-card a,.portal-action{display:inline-flex;align-items:center;justify-content:center;min-height:44px;font-weight:650;padding:10px 14px;border:1px solid var(--border);border-radius:4px;background:var(--soft);color:var(--link);text-decoration:none}
+.portal-card>a{align-self:flex-start;margin-top:auto}.portal-card a:hover,.portal-action:hover{border-color:var(--accent)}
 .portal-kpis{display:flex;flex-wrap:wrap;gap:12px;margin:20px 0}.portal-kpis div{flex:1 1 180px;padding:16px;border:1px solid var(--border)}
 .portal-kpis dt{color:var(--muted);font-size:.9rem}.portal-kpis dd{font-size:1.45rem;font-weight:700;margin:4px 0 0}
 .portal-section{margin:28px 0}.portal-section h2{font-size:1.2rem}
@@ -75,6 +76,9 @@ summary{display:list-item;min-height:44px;padding:8px 0}
 summary{cursor:pointer;font-weight:600}.secondary{border:1px solid var(--border)}
 @media(max-width:640px){main{margin:0;min-height:100vh;padding:20px 16px;border-radius:0}}
 @media(max-height:450px){.claim-action{position:static}}
+.privacy-dialog{width:min(680px,calc(100vw - 32px));max-height:calc(100dvh - 48px);overflow:auto;padding:28px;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:var(--text);box-shadow:0 16px 60px #0004}
+.privacy-dialog::backdrop{background:#0b142c99}.privacy-dialog h2{font-size:1.35rem;line-height:1.5;margin-top:0}.privacy-dialog h3{font-size:1rem;margin:16px 0 6px}.privacy-dialog p{line-height:1.7}.privacy-dialog .privacy-prompt-summary{padding:4px 18px;background:var(--soft);border:1px solid var(--border);border-radius:6px}.privacy-dialog details{margin:12px 0}.privacy-dialog summary{cursor:pointer;padding:10px 0}.privacy-choice-buttons{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:16px 0 10px}.privacy-dialog [data-privacy-later]{background:transparent;color:var(--muted);border-color:transparent}.privacy-dialog a{color:var(--link)}.privacy-dialog button:focus-visible,.privacy-dialog a:focus-visible{outline:3px solid var(--focus);outline-offset:3px}.privacy-dialog button:disabled{opacity:.65;cursor:default}
+@media(max-width:560px){.privacy-dialog{padding:20px;max-height:calc(100dvh - 24px);width:calc(100vw - 24px)}.privacy-choice-buttons{grid-template-columns:1fr}}
 """
 
 
@@ -83,7 +87,7 @@ def navigation(course, current, *, materials=False, exams=False):
     links = [('portal', '내 수업', base + '/portal'),
              ('assignments', '과제 받기', base + '/assignments'),
              ('results', '내 점수', base + '/results'),
-             ('privacy', '개인정보 활용', base + '/privacy')]
+             ('privacy', '정보 활용 설정', base + '/privacy')]
     if materials:
         links.append(('materials', '내 자료', base + '/materials'))
     if exams:

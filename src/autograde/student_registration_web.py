@@ -1,5 +1,5 @@
 """Student membership pages and instructor roster-matching controllers."""
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from html import escape
 import hmac
 import re
@@ -25,6 +25,7 @@ class MemberSession:
     password_hash: str
     csrf: str
     expires: float
+    privacy_prompt_dismissed: dict[str, str] = field(default_factory=dict, compare=False, repr=False)
 
 
 class StudentMembership:
@@ -160,6 +161,9 @@ class StudentMembership:
                 or session.credential.password_hash != credential.password_hash):
             session = WebSession(credential, member.csrf, member.expires, revision, member_session=True)
             self.portal.sessions[key] = session
+        # Claim-code issuance consumes the short course session, but not the
+        # member login. Keep its reminder choice across that reconstruction.
+        session.privacy_prompt_dismissed = member.privacy_prompt_dismissed.get(course)
         return key, session
 
     def _csrf(self, form, expected):
