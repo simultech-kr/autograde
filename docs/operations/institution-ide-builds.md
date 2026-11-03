@@ -26,7 +26,10 @@ Windows 네이티브는 관리자 설치 MSVC x64와 Windows SDK를 찾고 번�
 기존 `Install-Shortcut.ps1`이 재컴파일·사전 점검을 수행하므로 포함된 C#·PowerShell·버전 파일도 보존한다.
 
 `ide/code-oss/upstream.json`이 Code-OSS 저장소·tag·commit·Node 버전의 기준이다. 현재
-Code-OSS `1.143.0`, commit `2d0b7506a36c1d6db9a466440131a8e01eab2289`, Node `24.18.0`이다.
+Code-OSS `1.143.0`, commit `2d0b7506a36c1d6db9a466440131a8e01eab2289`, 빌드·번들 Node `26.13.0`이다.
+upstream 소스의 `.nvmrc`는 `24.18.0`이며 `sourceNode`로 별도 보존한다. 준비 도구가 검증된
+설치 전 검사에 Node 26 호환 변경을 적용한다. Electron과 확장 호스트의 Node는 upstream
+Electron에 포함된 별도 런타임이며 이 빌드 Node 버전을 따른다고 가정하지 않는다.
 확장과 EXE 버전은 `extensions/vscode/package.json`에서 읽는다. Assembly/FileVersion은 확장
 버전에 `.0`을 붙이고 InformationalVersion은 확장 버전과 같다. 서버 호환·기관 주소·운영 정책은
 별도의 기관 제품 프로필에서 승인한다.
@@ -36,15 +39,21 @@ GitHub의 [runner 표](https://docs.github.com/en/actions/reference/runners/gith
 
 ## 실행과 검사
 
-변경을 검토·커밋한 뒤 Actions의 **Institution IDE candidates**에서 ref를 수동 선택한다.
-기본은 세 가지 native OS이며 필요할 때만 `include_wsl`을 선택한다. 토큰은 `contents: read`만
-요청하고 checkout 자격증명을 보존하지 않는다. 로컬 candidate 빌드도 변경·미추적 파일이 없는
-깨끗한 commit에서만 시작한다. 수정된 작업 폴더를 같은 commit의 정식 산출물로 기록하지 않는다.
+담당자의 로컬 PC에서 아래 명령으로 빌드할 수 있으며 GitHub Actions는 필수가 아니다.
+각 대상 OS·CPU에서 Node 26.13.0과 해당 플랫폼의 빌드 도구를 준비한다. 로컬 candidate 빌드는
+변경·미추적 파일이 없는 깨끗한 commit에서만 시작한다. 수정된 작업 폴더를 같은 commit의
+정식 산출물로 기록하지 않는다.
+
+Actions를 사용할 때는 **Institution IDE candidates**에서 ref를 수동 선택한다. 기본은 세 가지
+native OS이며 필요할 때만 `include_wsl`을 선택한다. 토큰은 `contents: read`만 요청하고
+checkout 자격증명을 보존하지 않는다.
 
 1. 빌드 검증 시험과 예제 기관 제품 정의를 검사한다. 예제를 운영 승인본으로 변경하지 않는다.
-2. OS별 새 경로에 고정 Code-OSS tag를 clone하고 실제 commit·`.nvmrc`를 확인한다.
+2. OS별 새 경로에 고정 Code-OSS tag를 clone하고 실제 commit·원본 `.nvmrc`를 확인하고 관리된 Node 호환 변경을 적용한다.
 3. 각 OS에서 의존성을 새로 설치한다. `node_modules`를 OS 간 전달하거나 캐시하지 않는다.
-   Linux Electron native 모듈은 Ubuntu 22.04의 Clang 15로 빌드한다.
+   Linux에서 Node 26을 실행하기 전에 `libatomic1`을 설치한다. Electron native 모듈은
+   Ubuntu 22.04의 Clang 15와 upstream Electron 헤더로 빌드한다. Node 자체를 소스에서 빌드하는
+   도구 요구사항을 Electron addon 빌드 요구사항과 혼동하지 않는다.
 4. 교수자 배포 전용 설치 정책·제품 설정, client/extension 빌드, Electron 다운로드, overlay 검증과
    패키징을 수행한다. 패키징은 정책 런타임을 다시 컴파일하고 active native addon의 ELF/PE를 검사한다.
 5. Mac 정책 smoke와 대상별 단위 시험·패키지 내부 CLI 실행을 수행한다. Windows에서는 실제
@@ -67,7 +76,11 @@ compile→확장 media→Monaco typecheck를 순차 실행한다. 전체 검사�
 label을 지정할 수 있다. 기본 label은 위 표와 같으며 Linux 대체 runner도 Ubuntu 22.04 x64와
 동일한 빌드 전제를 충족해야 한다. 워크플로를 작성하는 것만으로 유료 runner를 예약하거나 실행하지 않는다.
 
-공식 Node 배포본과 LICENSE를 사용한다. 로컬 명령도 네트워크로 소스·의존성·Electron을 받는다.
+공식 Node 26.13.0 배포본과 LICENSE를 사용한다. Linux/WSL 학생 좌석에도 `libatomic1`
+(Ubuntu/Debian) 또는 `libatomic`이 필요하다. Mac 최소 버전은 계속 13.5다.
+[Node 26.13.0 플랫폼 요구사항](https://github.com/nodejs/node/blob/v26.13.0/BUILDING.md#platform-list)과
+[공식 LTS 릴리스 안내](https://nodejs.org/en/blog/release/v26.13.0)를 기준으로 한다.
+Node 버전 변경만으로 기존 Windows/Linux 인수 결과를 새 버전의 통과 결과로 기록하지 않는다. 로컬 명령도 네트워크로 소스·의존성·Electron을 받는다.
 source/output은 기존 파일이 없는 새 경로여야 한다.
 
 ```sh
@@ -77,10 +90,17 @@ node scripts/ide/build-runtime.mjs --target linux-x64 --source /tmp/code-oss-lin
 ```
 
 ```powershell
-node scripts/ide/build-runtime.mjs --target windows-x64 --source C:\Build\CodeOssNew --output C:\Build\NativeArtifactsNew
+# autograde 저장소 루트에서 실행한다. Node 출력은 v26.13.0이어야 한다.
+node --version
+Test-Path .\scripts\ide\build-runtime.mjs
+node .\scripts\ide\build-runtime.mjs --target windows-x64 --source .\.cache\code-oss-windows-01 --output .\dist\windows-native-01
 # 선택 WSL2 launcher만 빌드:
-./scripts/ide/build-windows.ps1 -OutputDirectory C:\Build\WslLauncherNew
+.\scripts\ide\build-windows.ps1 -OutputDirectory .\dist\wsl-launcher-01
 ```
+
+`--source`는 새로 clone할 Code-OSS 위치이고 `--output`은 배포 ZIP·해시·보고서의 출력 위치다.
+둘 다 현재 디렉터리 기준으로 해석한다. 이미 존재하면 `-02`처럼 새 경로를 사용하며 이전
+빌드 폴더를 자동 삭제하지 않는다. Windows 설정·요구사항은 아래의 전용 설치 안내를 따른다.
 
 ## 정리와 인수
 

@@ -7,8 +7,10 @@ Code-OSS와 Autograde 확장이 포함되므로 학생 PC에 Node.js·npm·Autog
 컴파일러·Python·Docker를 설치하지 않아도 Linux C17/C++17 프로그램과 Python 3 코드를 실행할 수 있다.
 담당자가 서버에 실행 관리자·승인 이미지를 준비해야 하며 앱 설치만으로 활성화되지 않는다.
 [원격 실습 설치·사용 안내](remote-learning-runtime.md)를 따른다. Java·디버거·추가 패키지 설치는 후속이다.
-현재 제작·실기기 확인한 패키지는 **Apple Silicon(M1 이상), macOS 13.5 이상**용이다.
-포함된 Node.js 24.18.0 실행 파일의 최소 macOS 버전을 앱 메타데이터에 반영한다.
+기본 제작 대상은 **Apple Silicon(M1 이상), macOS 13.5 이상**이다. 새 빌드는 Node.js 26.13.0을
+포함한다. 공식 Node 26의 최소 macOS 버전은 13.5로 기존 앱 메타데이터와 같으며,
+각 산출물의 실제 실행 확인은 해당 빌드의 검증 기록으로 확인한다.
+[공식 플랫폼 요구사항](https://github.com/nodejs/node/blob/v26.13.0/BUILDING.md#platform-list)
 
 앱은 공용 실습실 모드로 실행된다. 고정된 `current/workspace`를 매번 빈 상태로 만들고, IDE 전체 종료 뒤 코드·자료·
 IDE 프로필을 정리한다. 개인 PC에서 기존 폴더를 계속 사용하는 개발용 실행과 구분한다.
@@ -53,14 +55,14 @@ Mac의 빨간 창 닫기 버튼은 앱 프로세스를 남길 수 있으므로 �
 파일의 아키텍처가 같아야 하며, 다른 아키텍처의 빌드 파일을 섞지 않는다.
 
 저장소 루트에서 다음을 실행한다. `--node`에는 앱에 포함할 Node.js 실행 파일을 지정한다.
-다음은 준비된 Apple Silicon용 Node.js 24.18.0을 사용하는 예다.
+다음은 준비된 Apple Silicon용 Node.js 26.13.0을 사용하는 예다.
 
 ```sh
 node ide/code-oss/manage.mjs prepare --source .cache/code-oss
 node ide/code-oss/manage.mjs verify --source .cache/code-oss
 node ide/code-oss/package-macos.mjs \
   --source .cache/code-oss \
-  --node .cache/node-v24.18.0-darwin-arm64/bin/node \
+  --node .cache/node-v26.13.0-darwin-arm64/bin/node \
   --output 'dist/Autograde IDE.app'
 ```
 
@@ -171,8 +173,9 @@ node scripts/check_macos_shared_launch.mjs \
   'dist/remote-learning-0.5.18/Autograde IDE.app'
 ```
 
-이 스크립트는 설치된 사용자 앱이나 평소 실습 좌석을 사용하지 않는다. 시험용 앱 프로세스를
-SIGTERM으로 종료하고 실행기의 정리를 확인한다. 이 시험의 종료 코드 1은 의도한 종료 결과이며
+이 스크립트는 설치된 사용자 앱이나 평소 실습 좌석을 사용하지 않는다. 시험용 실행기에
+SIGTERM을 보내 실행기가 IDE 프로세스 종료와 임시 파일 정리를 완료하는지 확인한다.
+IDE가 즉시 종료되지 않으면 실행기의 기존 제한 시간과 강제 종료 절차가 적용된다.
 정리 완료 사건과 파일 상태를 별도로 검사한다. 결과는 `build/remote-learning-ui/mac-shared-launch-report.json`에
 남긴다. 상세 결과와 원격 실습의 별도 인수 범위는
 [검증 기록](../testing/remote-learning-runtime.md)을 따른다.

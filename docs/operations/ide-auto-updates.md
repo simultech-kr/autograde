@@ -147,7 +147,7 @@ node ide/code-oss/release-channel.mjs activate \
   --store /operator/releases --id 최초-릴리스-ID --context /operator/release-context.json
 node ide/code-oss/install-channel-launcher.mjs \
   --store /operator/releases --context /operator/release-context.json \
-  --node .cache/node-v24.18.0-darwin-arm64/bin/node \
+  --node .cache/node-v26.13.0-darwin-arm64/bin/node \
   --output 'dist/Autograde Channel.app'
 ```
 
@@ -168,6 +168,8 @@ chmod 600 /operator/release-context.json
 OS 수준의 격리는 이 경로 권한만으로 제공하지 않는다.
 
 채널 아이콘 자체의 Node·서명 검증 코드 업데이트는 별도 채널 앱 교체가 필요하다.
+기존 Node 24 채널 앱도 IDE payload 갱신만으로 Node 26으로 바뀌지 않는다. 위 명령으로
+Node 26.13.0을 포함한 새 채널 앱을 만들고 실습 종료 후 운영자가 교체한다.
 현재 자동 업데이트 대상은 그 채널이 실행하는 IDE 앱이다. Windows·Linux 자동 업데이트 적용을
 완료했다는 의미는 아니다.
 
@@ -238,7 +240,7 @@ OS 수준의 격리는 이 경로 권한만으로 제공하지 않는다.
 해당 x64 Node 경로로 바꾼다.
 
 ```sh
-.cache/node-v24.18.0-darwin-arm64/bin/node --test \
+.cache/node-v26.13.0-darwin-arm64/bin/node --test \
   ide/code-oss/release-channel.test.mjs \
   ide/code-oss/channel-launcher.test.mjs \
   ide/code-oss/update-transport.test.mjs \

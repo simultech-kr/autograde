@@ -10,9 +10,9 @@ function fixture(t) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'autograde-native-bootstrap-')));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const write = (name, data) => { const file = path.join(root, name); fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, typeof data === 'object' ? JSON.stringify(data) : data); };
-  write('windows-package.json', windowsManifest({ version: '1.143.0', extensionVersion: '0.5.14', nodeVersion: '24.18.0', upstreamCommit: 'a'.repeat(40), binaryName: 'Autograde IDE.exe', approvedBuiltins: ['autograde', 'autograde-ide-profile'] }));
+  write('windows-package.json', windowsManifest({ version: '1.143.0', extensionVersion: '0.5.14', nodeVersion: '26.13.0', upstreamCommit: 'a'.repeat(40), binaryName: 'Autograde IDE.exe', approvedBuiltins: ['autograde', 'autograde-ide-profile'] }));
   write('editor/app/out/main.js', ''); write('editor/electron/Autograde IDE.exe', ''); write('runtime/node.exe', ''); write('autograde/runtime-settings.json', { 'chat.disableAIFeatures': true });
-  const bundle = loadWindowsPackage(root, { platform: 'win32', arch: 'x64', versions: { node: '24.18.0' } });
+  const bundle = loadWindowsPackage(root, { platform: 'win32', arch: 'x64', versions: { node: '26.13.0' } });
   const id = 'a'.repeat(24), session = path.join(root, 'sessions/current'), pid = process.pid;
   const owner = { schema: 1, sid: 'S-1-5-21-example', sessionId: id, root: session, launcherPid: pid,
     launcherStarted: '123', rootIdentity: '12345678:0000000000000001', jobName: `Local\\AutogradeNative-S-1-5-21-example-${id}` };
@@ -22,7 +22,8 @@ function fixture(t) {
 }
 test('native bootstrap requires the matching bundled Windows runtime and contained package paths', t => {
   const { root } = fixture(t);
-  assert.throws(() => loadWindowsPackage(root, { platform: 'linux', arch: 'x64', versions: { node: '24.18.0' } }), /mismatch/);
+  assert.throws(() => loadWindowsPackage(root, { platform: 'linux', arch: 'x64', versions: { node: '26.13.0' } }), /mismatch/);
+  assert.throws(() => loadWindowsPackage(root, { platform: 'win32', arch: 'x64', versions: { node: '24.18.0' } }), /mismatch/);
   assert.throws(() => packagePath(root, '../outside'), /Invalid/);
   assert.throws(() => packagePath(root, 'runtime/node.exe:stream'), /Invalid/);
 });

@@ -6,7 +6,10 @@
 
 담당자가 미리 준비할 항목:
 
-- Windows x64, .NET Framework 4.8, 로컬 NTFS 사용자 프로필과 쓰기 권한.
+- 지원 중인 Windows 10/11 x64, .NET Framework 4.8, 로컬 NTFS 사용자 프로필과 쓰기 권한.
+  번들 Node.js 26.13.0의 공식 x64 하한은 Windows 10/Server 2016이며 실제 기관용
+  Windows 데스크톱에서 별도 인수가 필요하다.
+  [Node 플랫폼 요구사항](https://github.com/nodejs/node/blob/v26.13.0/BUILDING.md#platform-list)
 - Visual Studio 2022 이상 또는 Build Tools의 **C++ 데스크톱 개발**, MSVC x64 도구,
   Windows 10/11 SDK. 설치기는 포함하지 않으며 자동 설치하지 않는다.
 - Git 기반 수업에는 Git for Windows를 기본 Program Files 위치에 설치한다.
@@ -16,6 +19,8 @@
 실행기는 설치된 `vswhere`와 Microsoft `vcvarsall.bat`로 x64 개발 환경을 찾는다. `cl.exe`,
 Windows SDK 헤더와 라이브러리가 없으면 설명을 표시하고 시작을 멈춘다. IDE 터미널은
 해당 환경을 사용하며 사용자 범위의 C17·C++17 현재 파일 빌드 작업을 제공한다.
+MSVC·SDK는 학생 C/C++ 개발 도구다. 번들 Node를 26으로 바꾸어도 Electron 내장 Node와
+확장 호스트의 네이티브 ABI를 바꾸는 것은 아니다.
 빌드 결과는 과제 제출 폴더 밖의 세션 임시 빌드 폴더에 저장한다.
 
 작업 폴더는 `%LOCALAPPDATA%\AutogradeNative\sessions\current\workspace`로 고정한다.

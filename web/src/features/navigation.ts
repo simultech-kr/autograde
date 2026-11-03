@@ -30,6 +30,7 @@ export function courseNavigation(
     // Classroom may be enabled while Next results are disabled. The Python
     // results page remains the authorized fallback in that configuration.
     { id: "results", label: "제출·채점 현황", href: resultsEnabled ? `/app${query}` : `${base}/submissions`, current: section === "results" },
+    { id: "gradebook", label: "성적표 관리", href: `${base}/gradebook`, current: false },
     { id: "classroom", label: "실습 교실", href: `/app/classroom${query}`, current: section === "classroom" },
     { id: "settings", label: "수업 설정", href: `${base}/settings`, current: false },
   ];

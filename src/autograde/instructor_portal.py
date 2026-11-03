@@ -91,6 +91,8 @@ def navigation_groups(web, course):
                                    (base + '/registrations', '명단·본인 확인')]))
         assessment = ([(base + '/assignments', '과제 관리')] if web.assignments is not None else [])
         assessment.append((base + '/submissions', '제출·채점 현황'))
+        if getattr(web, 'gradebook', None) is not None:
+            assessment.append((base + '/gradebook', '성적표 관리'))
         if web.rubrics:
             assessment.append((base + '/rubrics', '루브릭 관리'))
         groups.append(('평가', assessment))
@@ -216,6 +218,8 @@ def course_workflows(web, course):
     if web.extension_distribution is not None:
         teaching.append((base + '/extensions', 'IDE 확장 업데이트', '수업에 필요한 확장을 승인하고 설치·업데이트를 전달합니다.'))
     review = [(base + '/submissions', '제출·점수 확인', '최신 제출과 이전 최고점을 비교하고, 미제출 학생·코드·제출 이력을 확인합니다.')]
+    if getattr(web, 'gradebook', None) is not None:
+        review.append((base + '/gradebook', '엑셀 성적표 공개', '중간·기말·출석 등 엑셀 항목을 학번으로 연결해 학생에게 본인 점수만 공개합니다.'))
     if web.rubrics:
         review.append((base + '/rubrics', '평가 기준 관리', '루브릭의 평가 항목을 준비하고 학생 제출본에 적용합니다.'))
     review.append((base + '/settings', '수업 설정', '수업명·학기·분반과 운영 상태를 변경하고 수업 종료 절차를 진행합니다.'))

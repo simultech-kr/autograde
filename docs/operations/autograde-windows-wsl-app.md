@@ -42,6 +42,9 @@ WSL 배포판과 바로가기는 **실제 실습에 사용할 Windows 계정**�
 - `Ubuntu-22.04` 또는 `Ubuntu-24.04` 등의 배포판과 일반 사용자 계정을 정한다. `root`로 실행하지 않는다.
 - 해당 Linux 아키텍처에 맞게 편집기를 빌드한다. Windows x64용과 ARM64용 Linux 바이너리를 섞지 않는다.
 - Git·C/C++ 컴파일러·편집기 시스템 라이브러리를 준비하고 실제 GUI 실행을 확인한다.
+- Node 26 공식 Linux 바이너리에 필요한 `libatomic1`을 Ubuntu 빌드 환경과 모든 학생 좌석에
+  설치한다. Debian/Ubuntu 밖에서는 배포판의 `libatomic` 패키지를 확인한다.
+  [Node 공식 릴리스 안내](https://nodejs.org/en/blog/release/v26.13.0)
 - Linux 사용자 네임스페이스 또는 관리자가 설치한 Chromium 실행 보호 구성을 준비한다.
 
 배포판 이름·버전 확인과 WSL 설치·갱신은 [Microsoft WSL 명령 안내](https://learn.microsoft.com/en-us/windows/wsl/basic-commands)를 따른다.
@@ -75,6 +78,13 @@ git clone https://github.com/simultech-kr/autograde.git
 cd autograde
 ```
 
+Ubuntu에서는 Node를 실행하기 전에 담당자가 다음을 수행한다.
+
+```sh
+sudo apt-get update
+sudo apt-get install -y libatomic1
+```
+
 Git이 없으면 먼저 배포판 패키지 관리자로 설치한다. 이후 학생 좌석에는 완성된 Linux 배포
 묶음만 복사할 수 있으며, 모든 좌석에서 Code-OSS를 다시 빌드할 필요는 없다.
 
@@ -82,7 +92,10 @@ Git이 없으면 먼저 배포판 패키지 관리자로 설치한다. 이후 �
 
 이 단계는 담당자가 Linux 또는 WSL2 빌드 환경에서 수행한다. Mac에서 만든 `.app`, Node,
 Electron 또는 `node_modules`를 복사해서 사용하지 않는다. [Code-OSS 소스 준비와 빌드](autograde-ide-poc.md)를
-해당 Linux 환경에서 완료하고, 고정 Node 버전 `24.18.0`을 사용한다.
+해당 Linux 환경에서 완료하고, 빌드·번들 Node 버전 `26.13.0`을 사용한다. 원본 Code-OSS
+소스의 Node pin `24.18.0`과 Electron 내장 런타임은 별도로 유지한다. Linux 시작 스크립트는
+Node 자체가 실행되는지 먼저 확인하고 실패하면 `libatomic` 등 런타임 설치 확인을 요청한다.
+Node가 시작되기 전 오류는 `--check`의 JSON 대신 표준 오류로 표시될 수 있다.
 
 현재 Git 저장소와 Windows 설치 도구 ZIP에는 완성된 Linux 편집기·Node 바이너리가 포함되어
 있지 않다. 처음 한 번은 위 빌드 안내의 **소스 준비 → 내장 확장 준비 → Code-OSS 빌드**를
@@ -96,7 +109,7 @@ Electron 또는 `node_modules`를 복사해서 사용하지 않는다. [Code-OSS
 node ide/code-oss/manage.mjs verify --source .cache/code-oss
 node ide/code-oss/package-wsl.mjs \
   --source .cache/code-oss \
-  --node /path/to/node-v24.18.0-linux-x64/bin/node \
+  --node /path/to/node-v26.13.0-linux-x64/bin/node \
   --output build/wsl/autograde-ide-linux-x64
 ```
 

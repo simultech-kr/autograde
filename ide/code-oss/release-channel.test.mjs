@@ -114,7 +114,7 @@ test('profile injection changes packaged defaults without secrets and inventory 
   fs.writeFileSync(path.join(f.payload, 'package.json'), JSON.stringify({name: 'fixture-editor', version: '1.0.0', license: 'MIT'}));
   const profile = {schema: 'autograde.ide-institution.v1', institutionId: 'school', apiUrl: 'https://school.invalid:20000', portalUrl: 'https://school.invalid:20010'};
   const profileFile = path.join(f.root, 'institution.json'); fs.writeFileSync(profileFile, JSON.stringify(profile));
-  const result = prepareDistribution(f.payload, runtime, {ideVersion: '1.143.0', extensionVersion: '0.5.20', nodeVersion: '24.18.0', upstreamCommit: 'a'.repeat(40)}, profileFile);
+  const result = prepareDistribution(f.payload, runtime, {ideVersion: '1.143.0', extensionVersion: '0.5.20', nodeVersion: '26.13.0', upstreamCommit: 'a'.repeat(40)}, profileFile);
   assert.equal(result.institutionProfileSha256, digest(canonical(profile)));
   assert.equal(JSON.parse(fs.readFileSync(path.join(runtime, 'runtime-settings.json')))['autograde.serviceBaseUrl'], profile.apiUrl);
   const runtimeSettings = JSON.parse(fs.readFileSync(path.join(runtime, 'runtime-settings.json')));
@@ -129,7 +129,7 @@ test('profile injection changes packaged defaults without secrets and inventory 
   assert.throws(() => institutionProfile({...profile, apiUrl: 'http://school.invalid'}), /HTTPS/);
   assert.throws(() => institutionProfile({...profile, apiUrl: 'https://user:secret@school.invalid'}), /credentials/);
   assert.throws(() => applyInstitutionProfile(runtime, profileFile), /EEXIST/);
-  assert.equal(distributionInventory(f.payload, {ideVersion:'1.0.0',extensionVersion:'1.0.0',nodeVersion:'24.18.0',upstreamCommit:'a'.repeat(40)}).specVersion, '1.6');
+  assert.equal(distributionInventory(f.payload, {ideVersion:'1.0.0',extensionVersion:'1.0.0',nodeVersion:'26.13.0',upstreamCommit:'a'.repeat(40)}).specVersion, '1.6');
 });
 test('all target package builders accept the same public institution profile option', () => {
   for (const parse of [parseOptions, parseWindowsOptions, parseLinuxOptions, parseWslOptions]) assert.equal(parse(['--institution-profile', '/operator/profile.json']).institutionProfile, '/operator/profile.json');

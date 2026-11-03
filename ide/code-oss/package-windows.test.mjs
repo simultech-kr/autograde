@@ -8,7 +8,7 @@ import { peArchitecture, windowsRelative, windowsElectronPlan, validateWindowsNa
 function fixture(t) { const root = fs.mkdtempSync(path.join(os.tmpdir(), 'autograde-win-package-')); t.after(() => fs.rmSync(root, { recursive: true, force: true })); return root; }
 function write(root, name, bytes) { const file = path.join(root, name); fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, bytes); return file; }
 function pe(machine = 0x8664) { const bytes = Buffer.alloc(128); bytes.write('MZ'); bytes.writeUInt32LE(64, 60); bytes.writeUInt32LE(0x4550, 64); bytes.writeUInt16LE(machine, 68); bytes.writeUInt16LE(0x20b, 88); return bytes; }
-const metadata = { version: '1.143.0', extensionVersion: '0.5.14', nodeVersion: '24.18.0', upstreamCommit: 'a'.repeat(40), binaryName: 'Autograde IDE.exe', approvedBuiltins: ['autograde', 'autograde-ide-profile'] };
+const metadata = { version: '1.143.0', extensionVersion: '0.5.14', nodeVersion: '26.13.0', upstreamCommit: 'a'.repeat(40), binaryName: 'Autograde IDE.exe', approvedBuiltins: ['autograde', 'autograde-ide-profile'] };
 
 test('Windows payload binaries are identified by PE machine and 64-bit image headers', t => {
   const root = fixture(t);

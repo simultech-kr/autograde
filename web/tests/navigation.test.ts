@@ -24,7 +24,7 @@ test("invalid course segments cannot construct portal links even if repeated in 
 test("every course link keeps the selected scope and current result page is identified once", () => {
   const scoped = { ...course, course_key: "come2201-2026_02" };
   const links = courseNavigation(scoped, "results", true);
-  assert.equal(links.length, 8);
+  assert.equal(links.length, 9);
   assert.deepEqual(links.filter(link => link.current).map(link => link.id), ["results"]);
   const base = `/courses/${scoped.course_key}/instructor`;
   assert.equal(links.find(link => link.id === "home")?.href, base);
@@ -33,6 +33,7 @@ test("every course link keeps the selected scope and current result page is iden
   assert.equal(links.find(link => link.id === "registrations")?.href, `${base}/registrations`);
   assert.equal(links.find(link => link.id === "environments")?.href, `${base}/environments`);
   assert.equal(links.find(link => link.id === "settings")?.href, `${base}/settings`);
+  assert.equal(links.find(link => link.id === "gradebook")?.href, `${base}/gradebook`);
   assert.equal(links.find(link => link.id === "results")?.href, `/app?course_key=${scoped.course_key}`);
   assert.equal(links.find(link => link.id === "classroom")?.href, `/app/classroom?course_key=${scoped.course_key}`);
   assert.ok(!links.some(link => ["content", "materials", "extensions", "rubrics"].includes(link.id)));

@@ -35,7 +35,7 @@ function fixture(t) {
   for (const file of ['wsl-launcher.mjs', 'shared-session.mjs', 'learning-profile.mjs', 'seat-reporter.mjs']) write(`launcher/${file}`, '// bundled launcher');
   write('launcher/runtime-settings.json', {});
   const editorPlan = { files: ['out/main.js', 'LICENSE.txt', 'node_modules/runtime/index.js'], links: {}, approvedBuiltins: ['autograde', 'autograde-ide-profile'] };
-  const manifest = wslManifest({ version: '1.143.0', arch: 'x64', nodeVersion: '24.18.0', extensionVersion: '0.5.12',
+  const manifest = wslManifest({ version: '1.143.0', arch: 'x64', nodeVersion: '26.13.0', extensionVersion: '0.5.12',
     binaryName: 'autograde-ide', approvedBuiltins: editorPlan.approvedBuiltins, upstreamCommit: 'a'.repeat(40) });
   const options = { source, node, nodeLicense, electronRoot, electronFiles: electronRuntimePlan(electronRoot, 'autograde-ide', 'x64'),
     editorPlan, launcherRoot, destination: path.join(root, '한글 runtime'), manifest };
@@ -181,7 +181,7 @@ test('actual bundled launcher reads generated manifest after relocation without 
   const target = assembleWslPackage(f.options);
   const moved = path.join(f.root, 'moved real 런처'); fs.renameSync(target, moved);
   const imported = await import(pathToFileURL(path.join(moved, 'autograde/wsl-launcher.mjs')));
-  const bundle = imported.loadWslBundle(moved, { platform: 'linux', arch: 'x64', nodeVersion: '24.18.0', statfs: () => ({ type: 0xef53 }) });
+  const bundle = imported.loadWslBundle(moved, { platform: 'linux', arch: 'x64', nodeVersion: '26.13.0', statfs: () => ({ type: 0xef53 }) });
   assert.equal(bundle.manifest.lifecycle, 'shared');
   assert.equal(bundle.manifest.platform, 'linux');
   assert.equal(bundle.source, path.join(moved, 'editor/app'));

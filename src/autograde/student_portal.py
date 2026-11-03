@@ -67,13 +67,15 @@ def _result_card(row, *, current):
     return body + '</article>'
 
 
-def _results(portal, course, session, overview):
+def _results(portal, course, session, overview, gradebook=None):
     body = (f'<p>{escape(portal._course_label(course))} · 학번 {escape(session.credential.student_key)}</p>'
             '<p class="portal-intro">서버가 공식 접수한 본인의 제출만 표시합니다. 작업 자동 저장은 공식 제출에 포함되지 않습니다. '
             '공개·운영 중인 과제의 기록만 표시하며, 상세 채점 피드백과 코드 복원은 IDE에서 확인하세요.</p>'
             '<p class="portal-help">이번 제출 점수와 이전 최고점은 서로 다른 값입니다. 새 제출의 채점이 끝나지 않았으면 이전 점수를 이번 점수로 표시하지 않습니다.</p>'
             f'<p><a class="portal-action" href="/courses/{escape(course, quote=True)}/results">내 점수 새로고침</a></p>')
     body += _password_link(course, session)
+    from .student_gradebook_view import render as render_gradebook
+    body += render_gradebook(gradebook)
     body += score_summary(overview, _score, _STATES)
     body += '<section class="portal-section"><h2>과제별 최신 제출</h2>'
     if not overview['latest']:
@@ -221,7 +223,15 @@ def request(portal, method, path, form, cookies, origin):
         # Each projection authenticates its credential and we check again after
         # the potentially slower worker read so logout/revocation still wins.
         overview = submission_overview(portal.services[course].state, session.credential)
-        body = (_home if section == 'portal' else _results)(portal, course, session, overview)
+        gradebook = None
+        if section == 'results' and portal.gradebook:
+            member_verifier = None
+            if session.member_session:
+                _, member, _account = portal.members.session(cookies)
+                member_verifier = (member.student_key, member.password_hash)
+            gradebook = portal.gradebook.student_view(course, session.credential, member_verifier=member_verifier)
+        body = (_home(portal, course, session, overview) if section == 'portal'
+                else _results(portal, course, session, overview, gradebook))
         with portal.lock:
             portal._session(course, cookies)
         from .student_privacy_web import prompt_html

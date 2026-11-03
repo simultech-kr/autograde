@@ -29,7 +29,7 @@ def navigation_icon(url):
     name = {'students': 'students', 'registrations': 'students', 'assignments': 'assignments',
             'submissions': 'results', 'rubrics': 'results', 'classroom': 'classroom',
             'environments': 'classroom', 'operations': 'classroom', 'settings': 'settings',
-            'content': 'folder', 'materials': 'folder', 'exam-papers': 'folder',
+            'content': 'folder', 'materials': 'folder', 'exam-papers': 'folder', 'gradebook': 'results',
             'extensions': 'folder', 'instructor': 'home', 'student': 'students'}.get(segment, 'grid')
     return icon(name)
 

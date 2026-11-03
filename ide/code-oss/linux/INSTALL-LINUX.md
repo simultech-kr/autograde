@@ -6,10 +6,13 @@
 
 - x64 또는 arm64 Linux와 동일 아키텍처로 만든 배포본을 사용합니다. 빌드한 배포판보다 오래된 glibc 환경은 지원한다고 가정하지 않습니다. 실제 배포 대상 배포판에서 수용 검증이 필요합니다.
 - 일반 사용자로 로그인한 로컬 X11 또는 Wayland 데스크톱이 필요합니다. SSH X11 전달, root 실행, WSL 환경은 이 실행기에서 거절합니다.
+- 번들 Node.js 26.13.0에는 `libatomic` 런타임이 필요합니다. Ubuntu/Debian에서는 운영자가
+  `sudo apt-get install libatomic1`을 실행하고 RPM 계열에서는 해당 `libatomic` 패키지를 준비합니다.
+  [Node 공식 요구사항](https://github.com/nodejs/node/blob/v26.13.0/BUILDING.md#official-binary-platforms-and-toolchains)을 참고합니다.
 - Electron용 시스템 라이브러리와 `/usr/bin/ldd`, `/usr/bin/unshare`가 필요합니다. Ubuntu 계열에서는 배포판에 맞는 GTK 3, NSS, ALSA, GBM, X11/ATK 라이브러리 등을 운영자가 준비합니다. 실행기는 라이브러리를 자동 설치하지 않습니다.
 - Chromium이 사용할 수 있는 사용자 네임스페이스 또는 관리자가 올바르게 설치한 root 소유 sandbox helper가 필요합니다. AppArmor 등 호스트 정책 때문에 추가 운영자 설정이 필요할 수 있습니다. 패키징은 setuid 권한을 추가하거나 보안 정책을 변경하지 않습니다. `--no-sandbox`는 지원하지 않습니다.
 - 앱과 임시 세션 경로는 로컬 Linux 파일 시스템이어야 합니다. 현재 ext 계열, btrfs, XFS, tmpfs, overlayfs, F2FS, ZFS를 확인합니다. NFS·SMB·Windows 공유 폴더는 거절합니다.
-- 시작 실패를 대화상자로 표시하려면 `zenity` 또는 `kdialog`를 설치합니다. 없으면 아래 `--check` 명령의 JSON 오류를 확인합니다.
+- 시작 실패를 대화상자로 표시하려면 `zenity` 또는 `kdialog`를 설치합니다. 없으면 아래 `--check` 명령의 오류를 확인합니다. Node 자체가 시작되지 않으면 JSON 이전에 표준 오류로 런타임 설치 안내가 나옵니다.
 
 ## 설치
 

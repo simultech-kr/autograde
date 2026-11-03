@@ -33,8 +33,13 @@ AI 강제 차단·시험 감독·학생용 서명 설치 파일·자동 업데�
 - 학생 작업 파일을 보관할 별도 수업 폴더. 실제 성적·운영 계정으로 초기 시험하지 않는다.
 
 Code-OSS의 native 의존성은 운영체제별로 다르다. [공식 빌드 안내](https://github.com/microsoft/vscode/wiki/How-to-Contribute)의
-해당 플랫폼 준비 사항을 확인하고, Node 버전은 아래 고정 소스의 `.nvmrc`를 따른다.
-upstream 최신 안내의 버전과 고정한 소스의 요구사항을 섞지 않는다.
+해당 플랫폼 준비 사항을 확인한다. 빌드·실행기 번들은 `upstream.json`의 Node `26.13.0`을 사용하고,
+원본 소스의 `.nvmrc` 값 `24.18.0`은 `sourceNode`로 별도 검증한다. 준비 도구가 설치 전에
+관리된 호환 변경을 적용하므로 아래 `node-compatibility.mjs prepare`를 upstream npm 설치보다
+먼저 실행한다. Electron에 내장된 Node와
+확장 호스트 ABI는 upstream Electron 버전을 따른다. Linux/WSL에서는 Node 26 실행 전에
+`libatomic1`(Ubuntu/Debian) 또는 `libatomic`을 준비한다.
+[공식 Node 26.13.0 안내](https://nodejs.org/en/blog/release/v26.13.0)를 참고한다.
 
 ## 소스 준비
 
@@ -53,17 +58,22 @@ git -C .cache/code-oss rev-parse HEAD
 | upstream | `https://github.com/microsoft/vscode.git` |
 | tag | `1.143.0` |
 | commit | `2d0b7506a36c1d6db9a466440131a8e01eab2289` |
-| 소스의 Node 버전 | `24.18.0` |
+| upstream 원본 소스의 Node 버전 (`sourceNode`) | `24.18.0` |
+| 빌드·번들 Node 버전 (`node`) | `26.13.0` |
 
 준비·검증 도구는 임의의 최신 소스를 자동으로 받거나 의존성을 자동 설치하지 않는다.
 소스 다운로드와 다음의 npm 설치는 별도의 네트워크 작업이며 개발자가 실행한다.
 
 ## 내장 확장과 제품 설정 준비
 
-확장의 개발 의존성을 설치한 뒤 준비 도구를 실행한다.
+먼저 `node --version`이 `v26.13.0`인지 확인한다. 확장의 개발 의존성과 upstream 의존성을
+설치한 뒤 내장 확장 준비 도구를 실행한다. upstream npm 설치에 앞서 호환 도구가 원본
+Node 검사 파일을 확인하고 지정된 Node 26만 허용하는 변경을 적용한다.
 
 ```sh
 npm --prefix extensions/vscode ci
+node ide/code-oss/node-compatibility.mjs prepare --source .cache/code-oss
+npm --prefix .cache/code-oss ci
 node ide/code-oss/manage.mjs prepare --source .cache/code-oss
 node ide/code-oss/manage.mjs verify --source .cache/code-oss
 ```
@@ -85,12 +95,35 @@ Code-OSS 소스 안의 `.autograde-ide-overlay.json`은 준비 도구의 소유�
 강제 덮어쓰기로 우회하지 말고 지정한 버전의 새 개발 소스 폴더에서 다시 진행한다.
 `verify` 성공은 제품 설정·내장 확장·설치 정책 소스 검사 통과이며 전체 편집기의 빌드·GUI 실행 성공을 뜻하지 않는다.
 
-## Code OSS 빌드와 실행
+### macOS C++ 표준 헤더를 찾지 못하는 경우
 
-고정 소스에 맞는 Node 버전을 사용하여 편집기 의존성·클라이언트·Electron을 준비한다.
+일부 로컬 Command Line Tools 26 환경에서 `npm ci`의 `@parcel/watcher` 빌드가
+`unordered_set` 또는 `condition_variable`을 찾지 못했고, `native-keymap`의 Objective-C++
+빌드에서도 `string` 헤더를 찾지 못했다. 이는 Node 버전 검사 통과와 별개인
+C++ 컴파일러·SDK 헤더 탐색 문제이므로 먼저 선택된 개발 도구와 SDK를 확인한다.
 
 ```sh
-npm --prefix .cache/code-oss ci
+xcode-select -p
+xcrun --sdk macosx --show-sdk-path
+printf '#include <unordered_set>\n#include <condition_variable>\n#include <string>\nint main() {}\n' | xcrun clang++ -x objective-c++ -std=c++17 -fsyntax-only -
+```
+
+위 검사도 같은 헤더 오류로 실패하고, 선택된 SDK의 `usr/include/c++/v1`에 해당 헤더가
+실제로 있을 때만 그 경로를 지정한 다음 명령으로 원인을 확인할 수 있다. 개발 도구 선택이나
+SDK 설치가 잘못되었다면 먼저 이를 복구한다. 아래 설정은 한 번의
+npm 실행에만 적용한다. 정상 환경의 기본 설정이나 전체 빌드 성공을 의미하지 않으며,
+이후의 의존성 설치·컴파일·실행 검사가 모두 통과해야 한다.
+
+```sh
+CPLUS_INCLUDE_PATH="$(xcrun --sdk macosx --show-sdk-path)/usr/include/c++/v1" npm --prefix .cache/code-oss ci
+```
+
+## Code OSS 빌드와 실행
+
+위 의존성 설치와 `prepare`를 마친 소스에서 Node 26.13.0으로 클라이언트·Electron을 준비한다.
+원본 `.nvmrc`를 26으로 바꾸거나 upstream 설치 검사를 임의로 생략하지 않는다.
+
+```sh
 npm --prefix .cache/code-oss run compile-client
 npm --prefix .cache/code-oss run electron
 node ide/code-oss/manage.mjs verify --source .cache/code-oss

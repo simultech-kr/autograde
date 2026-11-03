@@ -15,7 +15,7 @@ const targets = {
   'windows-launcher': { platform: 'win32', architecture: 'x64', artifacts: ['windows-wsl2-launcher'], checks: ['windows-launcher-compile', 'windows-launcher-self-tests', 'windows-launcher-version'] },
 };
 for (const target of ['macos-arm64', 'linux-x64', 'windows-x64']) targets[target].checks.push(
-  'code-oss-source-typecheck', 'code-oss-extension-compile', 'code-oss-extension-media', 'code-oss-monaco-typecheck');
+  'managed-node-build-compatibility', 'code-oss-source-typecheck', 'code-oss-extension-compile', 'code-oss-extension-media', 'code-oss-monaco-typecheck');
 
 function walk(directory) {
   return fs.readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
@@ -38,8 +38,9 @@ export function verifyReports(input, expected) {
     if (report.sourceDirty !== false) throw new Error('Candidate provenance requires a clean committed source checkout');
     seen.add(report.buildTarget);
     if (report.sourceRevision !== expected.sourceRevision || report.extensionVersion !== expected.extensionVersion) throw new Error('Builds must use the same Autograde revision and extension version');
-    for (const key of ['repository', 'tag', 'commit', 'node']) if (report.upstream?.[key] !== expected.upstream[key]) throw new Error(`Upstream ${key} mismatch`);
+    for (const key of ['repository', 'tag', 'commit', 'node', 'sourceNode']) if (report.upstream?.[key] !== expected.upstream[key]) throw new Error(`Upstream ${key} mismatch`);
     if (report.host?.platform !== definition.platform || report.host?.architecture !== definition.architecture) throw new Error('Build report platform/architecture mismatch');
+    if (report.buildTarget !== 'windows-launcher' && report.host?.node !== expected.upstream.node) throw new Error('Build report host Node does not match the build pin');
     if (report.acceptance?.productionReady !== false || report.acceptance?.institution !== 'not-tested' || report.acceptance?.windowsWsl2 !== 'not-tested') throw new Error('Build automation cannot certify institutional or WSL2 acceptance');
     for (const name of definition.checks) if (!report.checks?.some(check => check.name === name && check.result === 'passed')) throw new Error(`Missing required build check: ${name}`);
     if (!Array.isArray(report.artifacts) || report.artifacts.length !== definition.artifacts.length || new Set(report.artifacts.map(item => item.target)).size !== definition.artifacts.length) throw new Error('Missing or duplicate platform artifact');

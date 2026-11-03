@@ -843,6 +843,7 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
                     material_upload = re.fullmatch(r"/courses/[a-z0-9_-]{1,96}/instructor/materials/mat_[A-Za-z0-9_-]+/(upload|upload-batch)", path)
                     content_upload = re.fullmatch(r"/courses/[a-z0-9_-]{1,96}/instructor/content/cc_[0-9a-f]{32}/upload", path)
                     extension_upload = re.fullmatch(r"/courses/[a-z0-9_-]{1,96}/instructor/extensions", path)
+                    gradebook_upload = re.fullmatch(r"/courses/[a-z0-9_-]{1,96}/instructor/gradebook/import", path)
                     classroom_command = re.fullmatch(r'/instructor/api/v1/courses/[a-z0-9_-]{1,96}/classroom/students/[^/]{1,128}/commands', path)
                     if classroom_command:
                         # Narrow JSON mutation route; all other instructor API
@@ -852,7 +853,7 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
                         form = self._read_form(max_bytes=1024, max_fields=1)
                         if set(form) != {'csrf'}:
                             raise PlatformHTTPError(400, 'invalid_request', 'Unexpected readiness parameter')
-                    elif upload or csv_upload or membership_roster_upload or exam_upload or material_upload or content_upload or extension_upload:
+                    elif upload or csv_upload or membership_roster_upload or exam_upload or material_upload or content_upload or extension_upload or gradebook_upload:
                         if not facade.admin_upload_slots.acquire(blocking=False):
                             raise PlatformHTTPError(503, "upload_busy", "파일 처리 중입니다. 잠시 후 다시 시도하세요.")
                         try:
@@ -867,18 +868,21 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
                             if extension_upload:
                                 from .extension_distribution import MAX_VSIX_BYTES
                                 limit = MAX_VSIX_BYTES
+                            if gradebook_upload:
+                                limit = 5 * 1024 * 1024
                             body = self._read_body(expected_media_type="multipart/form-data", max_bytes=limit + 64 * 1024)
                             try:
                                 form = parse_instructor_upload(self.headers.get("Content-Type", ""), body, file_limit=limit,
-                                                               capture_filename=bool(material_upload or content_upload or extension_upload),
+                                                               capture_filename=bool(material_upload or content_upload or extension_upload or gradebook_upload),
                                                                allow_content_path=bool(content_upload),
-                                                               allow_roster_mode=bool(membership_roster_upload))
+                                                               allow_roster_mode=bool(membership_roster_upload),
+                                                               allow_gradebook=bool(gradebook_upload))
                             except InstructorUploadUnavailable as exc:
                                 emit_operator_event("instructor_upload_unavailable", component="http", exception=exc.__cause__ or exc)
                                 raise PlatformHTTPError(503, "upload_unavailable", str(exc)) from exc
                             except ValueError as exc:
                                 raise PlatformHTTPError(400, "invalid_upload", str(exc)) from exc
-                            if material_upload or content_upload or extension_upload:
+                            if material_upload or content_upload or extension_upload or gradebook_upload:
                                 # Keep admission bounded through ZIP validation and storage,
                                 # not just parsing: each batch may retain up to 100 MiB.
                                 return facade.portal_request(

@@ -1,5 +1,6 @@
 // Windows/Linux deployment templates. Generate on any host; accept on the target OS before use.
 import * as path from 'node:path';
+import { linuxNodePreflight } from './linux-node-preflight.mjs';
 const shell = value => `'${value.replaceAll("'", "'\\''")}'`;
 const ps = value => `'${value.replaceAll("'", "''")}'`;
 const desktop = value => `"${value.replaceAll('\\', '\\\\').replaceAll('"', '\\"').replaceAll('`', '\\`').replaceAll('$', '\\$').replaceAll('%', '%%')}"`;
@@ -7,7 +8,7 @@ export function channelDesktopTemplates(platform, root) {
   if (typeof root !== 'string' || /[\x00-\x1f\x7f]/.test(root)) throw new Error('Invalid channel install path');
   if (platform === 'linux') {
     if (!path.posix.isAbsolute(root)) throw new Error('Absolute Linux channel path required');
-    const script = `#!/bin/sh\nset -eu\nexec /usr/bin/env -i PATH=/usr/bin:/bin HOME="\${HOME-}" USER="\${USER-}" LOGNAME="\${LOGNAME-}" LANG="\${LANG-}" DISPLAY="\${DISPLAY-}" WAYLAND_DISPLAY="\${WAYLAND_DISPLAY-}" XDG_RUNTIME_DIR="\${XDG_RUNTIME_DIR-}" DBUS_SESSION_BUS_ADDRESS="\${DBUS_SESSION_BUS_ADDRESS-}" ${shell(path.posix.join(root, 'runtime/bin/node'))} ${shell(path.posix.join(root, 'autograde/channel-launcher.mjs'))}\n`;
+    const script = `#!/bin/sh\nset -eu\n${linuxNodePreflight(shell(path.posix.join(root, 'runtime/bin/node')))}exec /usr/bin/env -i PATH=/usr/bin:/bin HOME="\${HOME-}" USER="\${USER-}" LOGNAME="\${LOGNAME-}" LANG="\${LANG-}" DISPLAY="\${DISPLAY-}" WAYLAND_DISPLAY="\${WAYLAND_DISPLAY-}" XDG_RUNTIME_DIR="\${XDG_RUNTIME_DIR-}" DBUS_SESSION_BUS_ADDRESS="\${DBUS_SESSION_BUS_ADDRESS-}" ${shell(path.posix.join(root, 'runtime/bin/node'))} ${shell(path.posix.join(root, 'autograde/channel-launcher.mjs'))}\n`;
     return {'start-channel.sh': script, 'autograde-channel.desktop': `[Desktop Entry]\nType=Application\nName=Autograde Channel\nExec=${desktop(path.posix.join(root, 'start-channel.sh'))}\nTerminal=false\nCategories=Education;Development;\n`};
   }
   if (platform === 'win32') {

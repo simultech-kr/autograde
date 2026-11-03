@@ -6,6 +6,7 @@ import os from 'node:os';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { prepareNodeCompatibility } from '../../ide/code-oss/node-compatibility.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const read = file => JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -49,6 +50,22 @@ export function compileSteps(source, heap) {
   ];
 }
 
+export function nativeBuildEnvironment(node, heap, inherited = process.env, platform = process.platform) {
+  const env = { ...inherited };
+  const inheritedPath = Object.entries(env).find(([key]) => key.toUpperCase() === 'PATH')?.[1] ?? '';
+  // Nested upstream installs call npm by name, so they must resolve the same
+  // official distribution as the parent build even when invoked by absolute path.
+  for (const key of Object.keys(env)) {
+    if (key.toUpperCase() === 'PATH'
+        || /^(VSCODE_SKIP_NODE_VERSION_CHECK|VSCODE_SKIP_POSTINSTALL)$/i.test(key)
+        || /^npm_config_(arch|platform|target_arch|target_platform|target|runtime|disturl|dist_url|nodedir|node_gyp|ignore_scripts)$/i.test(key)) delete env[key];
+  }
+  return { ...env, PATH: `${path.dirname(node)}${platform === 'win32' ? ';' : ':'}${inheritedPath}`,
+    NODE_OPTIONS: `--max-old-space-size=${heap}`, npm_config_jobs: '2', npm_config_ignore_scripts: 'false', MAKEFLAGS: '-j2', VSCODE_FORCE_INSTALL: '1',
+    GOMEMLIMIT: '3GiB', GOGC: '50', GOMAXPROCS: '2',
+    ...(platform === 'linux' ? { CC: 'clang-15', CXX: 'clang++-15' } : {}) };
+}
+
 export function buildRuntime({ target, source, output, includeWsl = false }) {
   const pin = read(path.join(root, 'ide/code-oss/upstream.json'));
   assertBuildHost(target, pin);
@@ -67,11 +84,7 @@ export function buildRuntime({ target, source, output, includeWsl = false }) {
   if (free.bavail * free.bsize < 12 * 1024 ** 3) throw new Error('At least 12 GiB free disk space is needed for the source, dependencies and package staging');
   if (os.totalmem() < 6 * 1024 ** 3) throw new Error('Use a build machine with at least 6 GiB RAM');
   const heap = Math.min(5120, Math.floor(os.totalmem() / 1024 ** 2) - 2048);
-  const env = { ...process.env, NODE_OPTIONS: `--max-old-space-size=${heap}`, npm_config_jobs: '2', MAKEFLAGS: '-j2', VSCODE_FORCE_INSTALL: '1',
-    GOMEMLIMIT: '3GiB', GOGC: '50', GOMAXPROCS: '2',
-    ...(process.platform === 'linux' ? { CC: 'clang-15', CXX: 'clang++-15' } : {}) };
-  // A caller's cross-compilation overrides must not contaminate native modules.
-  for (const key of Object.keys(env)) if (/^npm_config_(arch|platform|target_arch|target_platform)$/i.test(key)) delete env[key];
+  const env = nativeBuildEnvironment(node, heap);
   const run = (command, args, cwd = root, extra = {}) => execFileSync(command, args, { cwd, env, stdio: 'inherit', ...extra });
   const capture = (command, args, cwd = root) => run(command, args, cwd, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] }).trim();
   const sourceRevision = capture('git', ['rev-parse', 'HEAD']);
@@ -83,7 +96,7 @@ export function buildRuntime({ target, source, output, includeWsl = false }) {
   const check = (name, command, args, cwd) => { run(command, args, cwd); report.checks.push({ name, result: 'passed' }); };
   const npmCli = [path.join(path.dirname(node), 'node_modules/npm/bin/npm-cli.js'), path.resolve(path.dirname(node), '../lib/node_modules/npm/bin/npm-cli.js')].find(file => fs.existsSync(file));
   if (!npmCli) throw new Error('Cannot find npm in the official Node distribution');
-  const npmCheck = (name, args, cwd) => check(name, node, [npmCli, ...args], cwd);
+  const npmCheck = (name, args, cwd) => check(name, node, [npmCli, '--ignore-scripts=false', ...args], cwd);
   npmCheck('extension-dependencies', ['ci'], path.join(root, 'extensions/vscode'));
   if (process.platform === 'win32') {
     npmCheck('extension-compile', ['run', 'compile'], path.join(root, 'extensions/vscode'));
@@ -96,8 +109,10 @@ export function buildRuntime({ target, source, output, includeWsl = false }) {
   check('launcher-and-policy-tests', node, ['--test', ...tests]);
   run('git', ['clone', '--depth', '1', '--branch', pin.tag, '--single-branch', pin.repository, source]);
   if (capture('git', ['rev-parse', 'HEAD'], source) !== pin.commit) throw new Error('Upstream tag no longer matches the pinned commit');
-  if (fs.readFileSync(path.join(source, '.nvmrc'), 'utf8').trim() !== pin.node) throw new Error('Upstream Node pin differs from the build definition');
+  if (fs.readFileSync(path.join(source, '.nvmrc'), 'utf8').trim() !== (pin.sourceNode ?? pin.node)) throw new Error('Upstream source Node pin differs from the build definition');
   report.checks.push({ name: 'upstream-commit-and-node', result: 'passed' });
+  prepareNodeCompatibility(source, pin);
+  report.checks.push({ name: 'managed-node-build-compatibility', result: 'passed' });
   // Install BEFORE adding the built-in extension; upstream postinstall sees only
   // upstream's own locked dependency directories and builds for this host.
   if (process.platform === 'win32') check('windows-electron-header-preinstall', node, ['build/npm/preinstall.ts'], source);

@@ -9,6 +9,7 @@ import { execFileSync } from 'node:child_process';
 import { elfArchitecture, electronRuntimePlan, archiveWslPackage } from './package-wsl.mjs';
 import { verify, readJson, repoRoot } from './manage.mjs';
 import { runtimePlan, isInside } from './package-macos.mjs';
+import { linuxNodePreflight } from './linux-node-preflight.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const runtimeFiles = ['linux-launcher.mjs', 'shared-session.mjs', 'learning-profile.mjs', 'seat-reporter.mjs', 'runtime-settings.json'];
@@ -36,7 +37,7 @@ export function linuxEntryScript(script = 'linux-launcher.mjs') {
 set -eu
 # Resolve this package independently of the current working directory.
 bundle_root=$(CDPATH= cd -- "$(/usr/bin/dirname -- "$0")/.." && pwd -P)
-# Construct a clean environment before Node starts: no interpreter injection,
+${linuxNodePreflight('"$bundle_root/runtime/bin/node"')}# Construct a clean environment before Node starts: no interpreter injection,
 # inherited credentials, external coverage/history destinations or linker hooks.
 exec /usr/bin/env -i ${inherited} \\
   "$bundle_root/runtime/bin/node" "$bundle_root/autograde/${script}" "$@"

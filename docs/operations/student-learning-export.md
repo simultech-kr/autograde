@@ -84,7 +84,9 @@ WSL2는 Linux 쪽에서 실행하는 구성이지만 실제 배포 인수 시험
 ### 다른 실습실 PC 갱신
 
 기존 Code-OSS 빌드가 있는 PC는 실행 중인 공용 실습을 종료하고, 저장소 루트에서 다음을 수행한다.
-고정 Code-OSS 소스가 요구하는 Node.js 24.18.0을 사용한다.
+빌드·실행기용 Node.js 26.13.0을 사용한다. 원본 Code-OSS 소스의 Node pin 24.18.0은
+별도로 유지하며 관리된 호환 변경을 적용한다. Node 버전을 처음 전환하는 PC는 기존 native
+의존성을 그대로 재사용하지 말고 [새 소스 준비·빌드 절차](autograde-ide-poc.md)를 먼저 완료한다.
 
 ```sh
 git pull --ff-only origin main

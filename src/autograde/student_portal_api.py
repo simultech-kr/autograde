@@ -33,7 +33,7 @@ def request(portal, method, path, form, cookies, origin):
     try:
         # Require the common account explicitly: a stale/absent member cookie
         # must never fall back to a previous person's legacy course grant.
-        portal.members.session(cookies)
+        _, member, _account = portal.members.session(cookies)
     except PlatformAccessDenied:
         return _json(401, code='login_required', message='로그인이 만료되었습니다. 다시 로그인하세요.')
     try:
@@ -57,6 +57,8 @@ def request(portal, method, path, form, cookies, origin):
             if form:
                 return _json(400, code='invalid_request', message='불필요한 조회 조건이 있습니다.')
             overview = submission_overview(service.state, session.credential)
+            gradebook = portal.gradebook.student_view(course, session.credential,
+                member_verifier=(member.student_key, member.password_hash)) if portal.gradebook else None
             details = portal.courses.get_course(course) if portal.courses else {}
             base = '/courses/' + course
             links = {'assignments': base + '/assignments'}
@@ -68,7 +70,7 @@ def request(portal, method, path, form, cookies, origin):
                 'schema_version': 1,
                 'student_key': session.credential.student_key,
                 'course': {key: details.get(key, '') for key in ('name', 'code', 'section', 'year', 'semester')} | {'course_key': course},
-                'overview': overview, 'links': links, 'csrf': session.csrf,
+                'overview': overview, 'gradebook': gradebook, 'links': links, 'csrf': session.csrf,
                 'server_time': utc_iso(), 'api_base_url': portal.api_url,
             })
     except PlatformAPIError as exc:

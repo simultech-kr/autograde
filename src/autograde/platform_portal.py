@@ -165,6 +165,8 @@ class CoursePortal:
         self.members = StudentMembership(self) if services or courses is not None else None
         from .student_privacy import StudentPrivacy
         self.privacy = StudentPrivacy(self.members.store.state) if self.members else None
+        from .course_gradebook import CourseGradebook
+        self.gradebook = CourseGradebook(self.members.store.state) if self.members else None
 
     def _cookie(self, course, value, *, clear=False):
         secure = "; Secure" if self.web_url.startswith("https://") else ""

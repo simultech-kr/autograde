@@ -1,10 +1,11 @@
 import {scoreText, timeText, type CourseData} from "./model";
 import {scoreRows, scoreRowState} from "./scoreboard";
 import s from "./student.module.css";
+import {StudentGradebook} from "./StudentGradebook.tsx";
 
 export function StudentScores({data}: {data: CourseData}) {
   const rows = scoreRows(data.overview), published = rows.filter(row => scoreRowState(row).scored).length;
-  return <section aria-labelledby="student-score-heading">
+  return <><StudentGradebook publication={data.gradebook} /><section aria-labelledby="student-score-heading">
     <div className={s.sectionHeading}><h2 id="student-score-heading">과제별 내 점수</h2><p className={s.muted}>조회 중인 과제 {rows.length}개 · 이번 제출 점수 공개 {published}개</p></div>
     <p className={s.guide}>이번 제출의 점수와 이전 최고점을 함께 확인하세요. 채점 중인 과제는 결과가 공개되면 자동으로 갱신됩니다. 자세한 수정 안내는 IDE의 채점 결과에서 볼 수 있어요.</p>
     {!rows.length && <p className={s.empty}>점수를 확인할 공개 과제가 없습니다.</p>}
@@ -18,5 +19,5 @@ export function StudentScores({data}: {data: CourseData}) {
       </article>;
     })}</div>
     {(data.overview.assignments_truncated || data.overview.latest_truncated) && <p className={s.muted}>일부 과제만 표시합니다. 과제별 전체 제출 이력은 IDE에서 확인하세요.</p>}
-  </section>;
+  </section></>;
 }

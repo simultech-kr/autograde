@@ -15,9 +15,14 @@ export type Receipt = {
 };
 export type CourseData = {
   student_key: string;
+  gradebook?: Gradebook | null;
   course: Pick<Course, "course_key" | "name" | "code" | "section" | "year" | "semester" | "term">;
   overview: { assignments: Assignment[]; latest: Receipt[]; history: Receipt[]; history_truncated: boolean; latest_truncated: boolean; assignments_truncated: boolean; limit: number };
   links: { assignments: string; materials?: string; exam_papers?: string }; csrf: string; server_time: string; api_base_url: string;
+};
+export type Gradebook = {
+  publication_id: string; title: string; published_at: string; version: number;
+  items: {key: string; label: string; value: number | string | null}[];
 };
 export type Claim = { code: string; expires_at: string; api_url: string; assignment_id: string; title: string };
 export class StudentContractError extends Error {
@@ -102,11 +107,24 @@ export function parseCourse(value: unknown, expected: string, expectedStudent: s
   const body = object(unwrap(value)), raw = object(body.course), key = courseKey(raw.course_key);
   if (key !== courseKey(expected) || body.student_key !== expectedStudent) throw new StudentContractError();
   const overview = object(body.overview), links = object(body.links);
-  return { student_key: str(body.student_key, 20), course: { course_key: key, name: str(raw.name ?? ""), code: str(raw.code ?? key), section: str(raw.section ?? ""), year: scalar(raw.year), semester: scalar(raw.semester), term: str(raw.term ?? "") },
+  return { student_key: str(body.student_key, 20), gradebook: parseGradebook(body.gradebook), course: { course_key: key, name: str(raw.name ?? ""), code: str(raw.code ?? key), section: str(raw.section ?? ""), year: scalar(raw.year), semester: scalar(raw.semester), term: str(raw.term ?? "") },
     overview: { assignments: list(overview.assignments).map(value => { const item = object(value); return { assignment_id: identifier(item.assignment_id), assignment_key: str(item.assignment_key), title: str(item.title), opens_at: dateOrNull(item.opens_at), due_at: dateOrNull(item.due_at), accepted_at: dateOrNull(item.accepted_at) }; }),
       latest: list(overview.latest).map(receipt), history: list(overview.history).map(receipt), history_truncated: bool(overview.history_truncated), latest_truncated: bool(overview.latest_truncated), assignments_truncated: bool(overview.assignments_truncated), limit: numeric(overview.limit) ?? 100 },
     links: { assignments: courseLink(key, links.assignments, "assignments"), ...(links.materials ? { materials: courseLink(key, links.materials, "materials") } : {}), ...(links.exam_papers ? { exam_papers: courseLink(key, links.exam_papers, "exam-papers") } : {}) },
     csrf: str(body.csrf, 256), server_time: date(body.server_time), api_base_url: apiAddress(body.api_base_url) };
+}
+export function parseGradebook(value: unknown): Gradebook | null {
+  if (value === undefined || value === null) return null;
+  const item = object(value), seen = new Set<string>();
+  if (!Number.isSafeInteger(item.version) || Number(item.version) < 1 || !Array.isArray(item.items) || !item.items.length || item.items.length > 100) throw new StudentContractError();
+  return {publication_id: identifier(item.publication_id), title: str(item.title, 200), published_at: date(item.published_at), version: Number(item.version), items: item.items.map(raw => {
+    const cell = object(raw), key = identifier(cell.key), label = str(cell.label, 200);
+    if (!label.trim() || seen.has(key)) throw new StudentContractError();
+    seen.add(key);
+    const value = cell.value;
+    if (value !== null && typeof value !== "string" && (typeof value !== "number" || !Number.isFinite(value))) throw new StudentContractError();
+    return {key, label, value: typeof value === "string" ? str(value, 4000) : value as number | null};
+  })};
 }
 export function parseClaim(value: unknown, expectedAssignment: string, expectedStudent: string): Claim {
   const body = object(unwrap(value)), item = object(body.claim), assignment_id = identifier(item.assignment_id);

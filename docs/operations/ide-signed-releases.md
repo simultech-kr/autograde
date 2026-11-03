@@ -20,7 +20,7 @@ Mac·Windows native·Linux·WSL 패키지 빌더에서 공통으로 지원한다
 ```sh
 node ide/code-oss/package-macos.mjs \
   --source .cache/code-oss \
-  --node .cache/node-v24.18.0-darwin-arm64/bin/node \
+  --node .cache/node-v26.13.0-darwin-arm64/bin/node \
   --institution-profile config/ide/institution.example.json \
   --output 'dist/Autograde IDE.app'
 ```
@@ -176,7 +176,7 @@ rollback도 이전 릴리스 파일·승인·호환성·서명을 다시 검증�
 node ide/code-oss/install-channel-launcher.mjs \
   --store /operator/releases \
   --context /operator/release-context.json \
-  --node .cache/node-v24.18.0-darwin-arm64/bin/node \
+  --node .cache/node-v26.13.0-darwin-arm64/bin/node \
   --output 'dist/Autograde Channel.app'
 ```
 

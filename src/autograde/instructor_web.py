@@ -160,6 +160,9 @@ class InstructorWeb:
         self.bundle_store = bundle_store
         self.learning_runtime_overview = learning_runtime_overview
         self.operations = operations
+        from .course_gradebook import CourseGradebook
+        state = getattr(course_admin, 'state', None)
+        self.gradebook = CourseGradebook(state) if state is not None else None
         self.principal = None
         self.next_ui_policy = next_ui_policy if next_ui_policy is not None else lambda: frozenset()
         self.catalog = InstructorAssignmentCatalog(assignment_admin.state) if assignment_admin else None
@@ -374,6 +377,7 @@ class InstructorWeb:
         guarded = guarded or bool(re.search(r'/instructor/exam-papers(?:/[A-Za-z0-9_-]+(?:/upload)?)?$', action))
         guarded = guarded or bool(re.search(r'/instructor/materials(?:/mat_[A-Za-z0-9_-]+(?:/(?:upload(?:-batch)?|revise))?)?$', action))
         guarded = guarded or bool(re.search(r'/instructor/content(?:/cc_[0-9a-f]{32}/(?:upload|metadata))?$', action))
+        guarded = guarded or action.endswith('/instructor/gradebook/import')
         guard = 'data-dirty-guard' if guarded else ''
         notice = '<p data-save-status role="status" aria-live="polite">각 영역의 저장 버튼을 눌러야 보존됩니다.</p>' if guarded else ''
         identity = f'data-form-kind="{_e(form_kind)}"' if form_kind else ''
@@ -561,6 +565,9 @@ class InstructorWeb:
     def _course_request(self, method, course, route, form, session, authorization):
         base = self._base(course)
         key = course['course_key']
+        if route == 'gradebook' or route.startswith('gradebook/'):
+            from .instructor_gradebook import request
+            return request(self, method, course, route, form, session)
         if route == 'privacy-archive':
             from .instructor_course_privacy import request
             def authorize_archive():

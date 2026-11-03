@@ -3,11 +3,11 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { parseOptions, assertBuildHost, compileSteps, sha256 } from './build-runtime.mjs';
+import { parseOptions, assertBuildHost, compileSteps, nativeBuildEnvironment, sha256 } from './build-runtime.mjs';
 import { verifyReports, buildTargets } from './finalize-artifacts.mjs';
 
 const expected = { sourceRevision: 'a'.repeat(40), extensionVersion: '0.5.14',
-  upstream: { repository: 'https://github.com/microsoft/vscode.git', tag: '1.143.0', commit: 'b'.repeat(40), node: '24.18.0' } };
+  upstream: { repository: 'https://github.com/microsoft/vscode.git', tag: '1.143.0', commit: 'b'.repeat(40), node: '26.13.0', sourceNode: '24.18.0' } };
 
 function fixture(t, includeWsl = true) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'autograde-build-inventory-'));
@@ -16,7 +16,7 @@ function fixture(t, includeWsl = true) {
     if (target === 'windows-launcher' && !includeWsl) continue;
     const folder = path.join(directory, target); fs.mkdirSync(folder);
     const report = { schema: 1, status: 'release-candidate', sourceDirty: false, buildTarget: target, ...expected,
-      host: { platform: definition.platform, architecture: definition.architecture },
+      host: { platform: definition.platform, architecture: definition.architecture, node: expected.upstream.node },
       includeWsl: target === 'linux-x64' && includeWsl,
       checks: [...definition.checks, ...(target === 'linux-x64' && includeWsl ? ['package-wsl', 'wsl-packaged-cli-version'] : [])].map(name => ({ name, result: 'passed' })),
       acceptance: { productionReady: false, institution: 'not-tested', windowsWsl2: 'not-tested' }, artifacts: [] };
@@ -38,11 +38,33 @@ function editReport(input, target, change) {
 }
 
 test('native host checks reject wrong architecture, OS or Node', () => {
-  assert.doesNotThrow(() => assertBuildHost('macos-arm64', expected.upstream, { platform: 'darwin', arch: 'arm64', versions: { node: '24.18.0' } }));
+  assert.doesNotThrow(() => assertBuildHost('macos-arm64', expected.upstream, { platform: 'darwin', arch: 'arm64', versions: { node: '26.13.0' } }));
   assert.throws(() => assertBuildHost('linux-x64', expected.upstream, { platform: 'darwin', arch: 'x64', versions: { node: '24.18.0' } }), /native operating system/);
   assert.throws(() => assertBuildHost('linux-x64', expected.upstream, { platform: 'linux', arch: 'arm64', versions: { node: '24.18.0' } }), /native operating system/);
   assert.throws(() => assertBuildHost('linux-x64', expected.upstream, { platform: 'linux', arch: 'x64', versions: { node: '22.0.0' } }), /pinned Node/);
   assert.throws(() => parseOptions(['--target', 'linux-x64']), /Specify/);
+});
+test('native build children use the pinned distribution and retain version checks and lifecycle scripts', () => {
+  const inherited = { Path: '/wrong/node/bin:/usr/bin', VSCODE_SKIP_NODE_VERSION_CHECK: '1', VSCODE_SKIP_POSTINSTALL: '1',
+    NPM_CONFIG_TARGET: '1.0.0', npm_config_arch: 'arm64', npm_config_runtime: 'node', npm_config_disturl: 'https://invalid.example',
+    npm_config_nodedir: '/wrong/headers', npm_config_ignore_scripts: 'true', NODE_OPTIONS: '--require /wrong/preload.js', SAFE: 'retained' };
+  const env = nativeBuildEnvironment('/official/node/bin/node', 4096, inherited, 'linux');
+  assert.equal(env.PATH, '/official/node/bin:/wrong/node/bin:/usr/bin');
+  assert.equal(env.Path, undefined);
+  for (const name of ['VSCODE_SKIP_NODE_VERSION_CHECK', 'VSCODE_SKIP_POSTINSTALL', 'NPM_CONFIG_TARGET', 'npm_config_arch', 'npm_config_runtime', 'npm_config_disturl', 'npm_config_nodedir']) assert.equal(env[name], undefined, name);
+  assert.equal(env.npm_config_ignore_scripts, 'false');
+  assert.equal(env.NODE_OPTIONS, '--max-old-space-size=4096');
+  assert.equal(env.SAFE, 'retained');
+  assert.equal(inherited.npm_config_ignore_scripts, 'true');
+});
+test('candidate inventory verifies distinct source and build Node pins and the compatibility check', t => {
+  const input = fixture(t);
+  editReport(input, 'linux-x64', report => { report.upstream.sourceNode = '26.13.0'; });
+  assert.throws(() => verifyReports(input, expected), /sourceNode mismatch/);
+  editReport(input, 'linux-x64', report => { report.upstream.sourceNode = expected.upstream.sourceNode; report.host.node = '24.18.0'; });
+  assert.throws(() => verifyReports(input, expected), /host Node/);
+  editReport(input, 'linux-x64', report => { report.host.node = expected.upstream.node; report.checks = report.checks.filter(check => check.name !== 'managed-node-build-compatibility'); });
+  assert.throws(() => verifyReports(input, expected), /Missing required build check/);
 });
 test('source checking precedes emit, preserves cache reuse and includes Monaco checking', () => {
   const steps = compileSteps('/source', 4096), names = steps.map(([name]) => name);

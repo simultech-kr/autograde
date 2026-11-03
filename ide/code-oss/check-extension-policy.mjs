@@ -37,11 +37,14 @@ async function denied(action) {
   throw new Error('Ordinary user extension unexpectedly installed a VSIX');
 }
 exports.activate = () => ({
-  async probe(file, hash) {
+  async probe(file, hash, progress) {
     const uri = vscode.Uri.file(file);
+    progress('ordinary-public-install');
+    const publicInstall = await denied(() => vscode.commands.executeCommand('workbench.extensions.installExtension', uri));
+    progress('ordinary-private-install');
+    const privateInstall = await denied(() => vscode.commands.executeCommand('_autograde.installCourseExtension', uri, hash));
     return {
-      publicInstall: await denied(() => vscode.commands.executeCommand('workbench.extensions.installExtension', uri)),
-      privateInstall: await denied(() => vscode.commands.executeCommand('_autograde.installCourseExtension', uri, hash)),
+      publicInstall, privateInstall,
     };
   }
 });
@@ -54,25 +57,38 @@ const path = require('node:path');
 const assert = require('node:assert/strict');
 const config = ${JSON.stringify(config)};
 const report = value => fs.writeFileSync(config.result, JSON.stringify(value, null, 2));
+let phase = 'activation';
+const progress = value => { phase = value; fs.writeFileSync(config.progress, JSON.stringify({phase, at: new Date().toISOString()})); };
+async function bounded(action) {
+  let timer;
+  try {
+    return await Promise.race([action(), new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error('Policy smoke action timed out: ' + phase)), 60000);
+    })]);
+  } finally { clearTimeout(timer); }
+}
 async function run() {
   const result = {ok: false, checks: {}, editorVersion: vscode.version};
   try {
     const caller = vscode.extensions.getExtension('autograde-test.policy-caller');
     assert.ok(caller, 'synthetic ordinary user extension is scanned');
-    const user = await caller.activate();
-    Object.assign(result.checks, await user.probe(config.file, config.hash));
+    progress('activate-ordinary-extension');
+    const user = await bounded(() => caller.activate());
+    Object.assign(result.checks, await bounded(() => user.probe(config.file, config.hash, progress)));
     assert.equal(vscode.extensions.getExtension('autograde-test.policy-probe'), undefined, 'denied commands did not install');
     const commands = await vscode.commands.getCommands(false);
     assert.equal(commands.includes('_autograde.installCourseExtension'), false, 'private bridge is not publicly registered');
     result.checks.privateCommandHidden = true;
     try {
-      await vscode.commands.executeCommand('_autograde.installCourseExtension', vscode.Uri.file(config.file), '0'.repeat(64));
+      progress('builtin-wrong-hash');
+      await bounded(() => vscode.commands.executeCommand('_autograde.installCourseExtension', vscode.Uri.file(config.file), '0'.repeat(64)));
       throw new Error('Wrong package hash unexpectedly installed');
     } catch (error) {
       assert.match(String(error.message), /교수자가 관리|instructor/);
       result.checks.wrongHash = {denied: true, message: error.message};
     }
-    await vscode.commands.executeCommand('_autograde.installCourseExtension', vscode.Uri.file(config.file), config.hash);
+    progress('builtin-approved-install');
+    await bounded(() => vscode.commands.executeCommand('_autograde.installCourseExtension', vscode.Uri.file(config.file), config.hash));
     const directories = fs.readdirSync(config.extensions).filter(name => name.startsWith('autograde-test.policy-probe-'));
     assert.equal(directories.length, 1, 'one instructor-approved extension was installed');
     const installed = JSON.parse(fs.readFileSync(path.join(config.extensions, directories[0], 'package.json'), 'utf8'));
@@ -82,7 +98,7 @@ async function run() {
     assert.equal(fs.readdirSync(config.runtime).some(name => name.startsWith('course-extension-verified-')), false, 'verified snapshot was removed');
     result.checks.privateSnapshotCleaned = true;
     result.ok = true;
-  } catch (error) { result.error = error.stack || String(error); }
+  } catch (error) { result.phase = phase; result.error = error.stack || String(error); }
   report(result);
   void vscode.commands.executeCommand('workbench.action.quit');
 }
@@ -107,7 +123,7 @@ export async function checkExtensionPolicy(app, {timeoutMs = 90_000, shutdownTim
   const staging = fs.mkdtempSync(path.join(layout.runtime, 'extension-install-'));
   const bytes = probeVsix(root), file = path.join(staging, 'policy-probe.vsix');
   fs.writeFileSync(file, bytes, {mode: 0o600, flag: 'wx'});
-  const config = {file, hash: createHash('sha256').update(bytes).digest('hex'), result: resultFile,
+  const config = {file, hash: createHash('sha256').update(bytes).digest('hex'), result: resultFile, progress: path.join(root, 'progress.json'),
     extensions: path.join(layout.runtime, 'extensions'), runtime: layout.runtime};
   const commonManifest = {version: '1.0.0', engines: {vscode: '^1.92.0'}, main: './policy-smoke.cjs',
     activationEvents: ['*'], extensionKind: ['workspace']};
@@ -166,6 +182,15 @@ export async function checkExtensionPolicy(app, {timeoutMs = 90_000, shutdownTim
     assert.equal(result.ok, true, result.error);
     return result;
   } finally {
+    // Preserve only synthetic smoke logs before the disposable seat is cleaned.
+    // A cold-start or IPC timeout otherwise loses its renderer/extension trace.
+    if (!result?.ok) {
+      const logs = path.join(layout.runtime, 'user-data', 'logs');
+      if (fs.existsSync(logs)) {
+        try { fs.cpSync(logs, path.join(root, 'failure-logs'), {recursive: true}); }
+        catch (error) { process.stderr.write(`Could not preserve smoke logs: ${error.message}\n`); }
+      }
+    }
     shutdown.abort();
     let shutdownError;
     try {

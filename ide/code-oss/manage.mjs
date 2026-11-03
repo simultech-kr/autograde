@@ -7,6 +7,7 @@ import { createHash } from 'node:crypto';
 import { execFileSync, spawn } from 'node:child_process';
 import { policySources } from './extension-install-policy.mjs';
 import { compilePolicyRuntime } from './policy-runtime.mjs';
+import { nodeCompatibilityPath, prepareNodeCompatibility, verifyNodeCompatibility } from './node-compatibility.mjs';
 import { learnerEnvironment, learnerLayout, prepareLearner, validateLearningOptions, verifyRestrictedLaunch } from './learning-profile.mjs';
 import { sharedSessionLayout, prepareSharedSession, markSessionLaunching, recordSessionProcess,
   cleanupSharedSession, superviseSharedChild } from './shared-session.mjs';
@@ -169,10 +170,11 @@ export function checkSource(source, upstream) {
   requireRegular(path.join(source, 'LICENSE.txt'));
   requireDirectory(path.join(source, 'extensions'));
   if (readJson(path.join(source, 'package.json')).version !== upstream.tag
-      || fs.readFileSync(path.join(source, '.nvmrc'), 'utf8').trim() !== upstream.node) {
+      || fs.readFileSync(path.join(source, '.nvmrc'), 'utf8').trim() !== (upstream.sourceNode ?? upstream.node)) {
     throw new Error('Upstream version or Node requirement differs from the pinned version');
   }
   const dirty = git(source, 'diff', '--name-only', 'HEAD').split('\n').filter(Boolean);
+  const managedNode = verifyNodeCompatibility(source, upstream);
   const markerPath = path.join(source, markerName);
   const previousPolicy = fs.existsSync(markerPath) ? readJson(markerPath).policySources ?? {} : {};
   for (const file of Object.keys(previousPolicy)) {
@@ -180,9 +182,10 @@ export function checkSource(source, upstream) {
     requireRegular(path.join(source, file));
     if (digest(fs.readFileSync(path.join(source, file))) !== previousPolicy[file]) throw new Error(`Managed IDE policy was modified: ${file}; preserve edits and use a clean checkout`);
   }
-  if (dirty.some(file => file !== 'product.json' && !(file in previousPolicy))) throw new Error(`Refusing modified upstream source: ${dirty.join(', ')}`);
+  const unmanagedDirty = dirty.filter(file => !(managedNode && file === nodeCompatibilityPath));
+  if (unmanagedDirty.some(file => file !== 'product.json' && !(file in previousPolicy))) throw new Error(`Refusing modified upstream source: ${dirty.join(', ')}`);
   if (!fs.existsSync(markerPath)) {
-    if (dirty.length) throw new Error('Refusing an unowned modified product.json');
+    if (unmanagedDirty.length) throw new Error('Refusing an unowned modified product.json');
     for (const name of extensionNames) {
       if (fs.existsSync(path.join(source, 'extensions', name))) throw new Error(`Refusing existing extension directory: ${name}`);
     }
@@ -259,6 +262,9 @@ export function prepare(source, options = {}) {
   writeTree(path.join(staging, 'policy-source'), policy);
   fs.writeFileSync(path.join(staging, 'product.json'), product);
   fs.writeFileSync(path.join(staging, markerName), jsonBytes(marker));
+  // Keep compiler and input-validation failures from changing the checkout.
+  // The Node overlay has its own recoverable transaction and ownership marker.
+  prepareNodeCompatibility(source, upstream);
   const moved = [];
   const installed = [];
   try {
@@ -290,6 +296,7 @@ export function prepare(source, options = {}) {
 export function verify(source, options = {}) {
   const upstream = options.upstream ?? readJson(path.join(here, 'upstream.json'));
   source = checkSource(path.resolve(source), upstream);
+  verifyNodeCompatibility(source, upstream, { required: true });
   if (!fs.existsSync(path.join(source, markerName))) throw new Error('Run prepare first');
   const expectedProduct = productOverlay(JSON.parse(git(source, 'show', 'HEAD:product.json')));
   if (!equal(readJson(path.join(source, 'product.json')), expectedProduct)) throw new Error('Product overlay is out of date; run prepare');

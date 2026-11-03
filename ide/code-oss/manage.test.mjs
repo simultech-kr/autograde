@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { createRequire, syncBuiltinESMExports } from 'node:module';
 import test from 'node:test';
 import { checkSource, extensionBundle, launchSpec, main, prepare, prepareRuntime, productOverlay, readJson, repoRoot, validateRuntimePath, verify, walk } from './manage.mjs';
+import { nodeCompatibilityPath } from './node-compatibility.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 function write(file, content) {
@@ -76,6 +77,25 @@ test('prepare, verify and reprepare preserve existing extensions and recoverable
   assert.equal(readJson(path.join(second.backup, 'previous-autograde/package.json')).version, '0.5.7');
   assert.equal(readJson(path.join(second.backup, 'previous-product.json')).nameLong, 'Autograde IDE');
   assert.deepEqual(verify(f.source, f.options), verified);
+});
+
+test('existing prepared checkout migrates to the managed Node build pin without changing upstream .nvmrc', t => {
+  const f = fixture(t);
+  write(path.join(f.source, '.nvmrc'), '24.18.0\n');
+  write(path.join(f.source, nodeCompatibilityPath), '\tif (majorNodeVersion !== requiredMajor ||\n\t\tminorNodeVersion < requiredMinor ||\n\t\t(minorNodeVersion === requiredMinor && patchNodeVersion < requiredPatch)) {\nthrow new Error();\n}\n');
+  f.git('add', '.');
+  f.git('-c', 'user.name=Autograde Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '--amend', '--no-edit', '--quiet');
+  f.options.upstream = { ...f.options.upstream, node: '24.18.0', commit: f.git('rev-parse', 'HEAD') };
+  prepare(f.source, f.options);
+  f.options.upstream = { ...f.options.upstream, node: '26.13.0', sourceNode: '24.18.0' };
+  assert.throws(() => verify(f.source, f.options), /compatibility is missing/);
+  prepare(f.source, f.options);
+  verify(f.source, f.options);
+  prepare(f.source, f.options);
+  assert.equal(fs.readFileSync(path.join(f.source, '.nvmrc'), 'utf8'), '24.18.0\n');
+  fs.appendFileSync(path.join(f.source, nodeCompatibilityPath), '// local edit\n');
+  assert.throws(() => verify(f.source, f.options), /preinstall was modified/);
+  assert.throws(() => prepare(f.source, f.options), /preinstall was modified/);
 });
 
 test('production closure contains nested and hoisted dependencies but not extension tests, maps, dev tools or secrets', t => {

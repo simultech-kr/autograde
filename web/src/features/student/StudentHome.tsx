@@ -22,7 +22,7 @@ export function StudentHome({courses, verified, busy, navigate, refresh, withdra
       {course.can_withdraw && <button className={s.quiet} disabled={busy} onClick={() => withdraw(course.course_key)}>신청 취소</button>}</div>
     </article>)}</div>
     <section aria-labelledby="student-tools-heading"><div className={s.sectionHeading}><h2 id="student-tools-heading">내 학습 관리</h2><p className={s.muted}>필요한 작업을 바로 선택하세요.</p></div><div className={s.taskGrid}>
-      <button className={s.taskTile} onClick={() => navigate("scores", learning[0]?.course_key || "")}><span className={s.taskMark} aria-hidden="true">01</span><span><strong>제출 결과 살펴보기</strong><small>이번 점수와 이전 최고점을 비교해 보세요.</small></span><span aria-hidden="true">→</span></button>
+      <button className={s.taskTile} onClick={() => navigate("scores", learning[0]?.course_key || "")}><span className={s.taskMark} aria-hidden="true">01</span><span><strong>내 성적 살펴보기</strong><small>시험·출석 성적과 실습 제출 결과를 확인하세요.</small></span><span aria-hidden="true">→</span></button>
       <button className={s.taskTile} onClick={() => navigate("account")}><span className={s.taskMark} aria-hidden="true">02</span><span><strong>계정 관리하기</strong><small>본인 확인과 비밀번호 변경을 진행하세요.</small></span><span aria-hidden="true">→</span></button>
       <button className={s.taskTile} onClick={() => navigate("privacy")}><span className={s.taskMark} aria-hidden="true">03</span><span><strong>정보 활용 설정</strong><small>연구·수업 개선 참여 여부를 직접 선택하세요.</small></span><span aria-hidden="true">→</span></button>
     </div></section>

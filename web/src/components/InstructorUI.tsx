@@ -19,7 +19,7 @@ export function AppShell({ children, testId, course, section, resultsEnabled = f
   }, [Boolean(links.length)]);
   const groups = [
     { label: "수업 운영", ids: ["home", "classroom", "students", "registrations", "environments"] },
-    { label: "평가", ids: ["assignments", "results"] },
+    { label: "평가", ids: ["assignments", "results", "gradebook"] },
     { label: "설정", ids: ["settings"] },
   ];
   const current = links.find(link => link.current);
@@ -68,6 +68,7 @@ function NavigationIcon({name}: {name: string}) {
     registrations: "M12 3 3 7v5c0 5 9 9 9 9s9-4 9-9V7zM8 12l3 3 5-6",
     environments: "M3 4h18v14H3zM8 22h8M12 18v4M6 8l3 3-3 3M12 14h5",
     assignments: "M14 2H5v20h14V7zM14 2v6h5M8 12h8M8 16h8",
+    gradebook: "M4 3h16v18H4zM4 9h16M10 3v18M4 15h16",
     results: "M4 3v18h18M8 17v-5M13 17V7M18 17v-8",
     settings: "M4 7h16M4 17h16M8 4v6M16 14v6",
   };

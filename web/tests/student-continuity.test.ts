@@ -376,3 +376,23 @@ test("React: enrollment refresh during POST waits for completion and never leave
     assert.equal(app.requests.filter(r => r.url.endsWith("/bootstrap")).length, 2);
   } finally {await app.dispose();}
 });
+
+test("React: teacher gradebook shows own values, escapes text, and removes withdrawn publication", async () => {
+  let published = true;
+  const result = () => ({...courseResult(), result:{...courseResult().result, gradebook:published ? {
+    publication_id:"gbook_term",title:"학기 성적",published_at:stamp(0),version:1,
+    items:[{key:"mid",label:"중간고사",value:0},{key:"final",label:"기말고사",value:null},{key:"attendance",label:"출석",value:9.5},{key:"note",label:"평가 의견",value:"<img src=x onerror=alert(1)>"}]
+  } : null}});
+  const app = await mount(async url => Response.json(url.endsWith("/bootstrap") ? bootstrap() : url.endsWith("/privacy") ? privacyOverview("declined", 1) : result()), `?course_key=${courseKey}&view=scores`);
+  try {
+    assert.equal(app.document.querySelector('[data-gradebook-item="mid"] dd')?.textContent, "0");
+    assert.equal(app.document.querySelector('[data-gradebook-item="final"] dd')?.textContent, "미입력");
+    assert.equal(app.document.querySelector('[data-gradebook-item="attendance"] dd')?.textContent, "9.5");
+    assert.equal(app.document.querySelector('[data-gradebook-item="note"] img'), null);
+    await app.leave(); assert.equal(app.surface().hidden, true);
+    published = false; await app.return();
+    assert.equal(app.surface().hidden, false);
+    assert.equal(app.document.querySelector('[data-gradebook-item]'), null);
+    assert.match(app.document.body.textContent!, /아직 공개된 성적표가 없습니다/);
+  } finally {await app.dispose();}
+});

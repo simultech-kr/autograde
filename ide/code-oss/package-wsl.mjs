@@ -9,6 +9,7 @@ import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { verify, readJson, repoRoot } from './manage.mjs';
 import { runtimePlan, isInside } from './package-macos.mjs';
+import { linuxNodePreflight } from './linux-node-preflight.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const runtimeFiles = ['wsl-launcher.mjs', 'shared-session.mjs', 'learning-profile.mjs', 'seat-reporter.mjs', 'runtime-settings.json'];
@@ -74,7 +75,7 @@ export function wslEntryScript() {
 set -eu
 # Resolve this package, not the current Windows/WSL working directory.
 bundle_root=$(CDPATH= cd -- "$(/usr/bin/dirname -- "$0")/.." && pwd -P)
-# Strip interpreter injection before Node starts; the JS launcher also sanitizes
+${linuxNodePreflight('"$bundle_root/runtime/bin/node"')}# Strip interpreter injection before Node starts; the JS launcher also sanitizes
 # inherited IDE state. Preserve WSLg display/audio and normal user environment.
 exec /usr/bin/env -u NODE_OPTIONS -u NODE_PATH -u NODE_EXTRA_CA_CERTS -u NODE_ICU_DATA \\
   -u NODE_COMPILE_CACHE -u ELECTRON_RUN_AS_NODE -u LD_PRELOAD -u LD_LIBRARY_PATH \\
@@ -140,6 +141,7 @@ export function assembleWslPackage({ source, node, nodeLicense, electronRoot, el
     'Install the complete package in the configured non-root WSL2 user’s Linux filesystem.\n' +
     'The Windows shortcut runs bin/autograde-ide and waits until session cleanup finishes.\n' +
     'Never add --no-sandbox. A working Chromium user namespace or administrator-provisioned sandbox helper is required.\n' +
+    'Node.js 26 requires the Linux libatomic runtime: install libatomic1 on Ubuntu/Debian, or libatomic on RPM-based distributions.\n' +
     'Packaging does not install WSL, compilers, Linux libraries, or modify the distribution.\n', { flag: 'wx', mode: 0o644 });
   return destination;
 }
