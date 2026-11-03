@@ -18,15 +18,27 @@ export function sha256(file) {
 }
 
 export function parseOptions(args) {
-  const result = { includeWsl: false };
+  const result = { includeWsl: false, local: false };
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--include-wsl' && !result.includeWsl) { result.includeWsl = true; continue; }
+    if (args[i] === '--local' && !result.local) { result.local = true; continue; }
     const key = { '--target': 'target', '--source': 'source', '--output': 'output' }[args[i]];
-    if (!key || result[key] || !args[i + 1] || args[i + 1].startsWith('--')) throw new Error('Usage: build-runtime.mjs --target macos-arm64|linux-x64|windows-x64 --source NEW_PATH --output NEW_PATH [--include-wsl]');
+    if (!key || result[key] || !args[i + 1] || args[i + 1].startsWith('--')) throw new Error('Usage: build-runtime.mjs --target macos-arm64|linux-x64|windows-x64 --source NEW_PATH --output NEW_PATH [--include-wsl] [--local]');
     result[key] = args[++i];
   }
   if (!['macos-arm64', 'linux-x64', 'windows-x64'].includes(result.target) || !result.source || !result.output) throw new Error('Specify a native target, a new source directory and a new output directory');
   return result;
+}
+
+export function readBuildSource(repository, { local = false } = {}) {
+  if (typeof local !== 'boolean') throw new Error('Local build mode must be a boolean');
+  const git = args => execFileSync('git', args, { cwd: repository, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  const sourceDirty = git(['status', '--porcelain=v1', '-z', '--untracked-files=all']).length > 0;
+  if (sourceDirty && !local) {
+    throw new Error('Candidate builds require a clean committed checkout. For a local test build that preserves your changes, add --local; local outputs cannot be finalized as release candidates.');
+  }
+  const sourceRevision = git(['rev-parse', '--verify', 'HEAD']).trim();
+  return { sourceRevision, sourceDirty, status: local ? 'local-build' : 'release-candidate', buildMode: local ? 'local' : 'candidate' };
 }
 
 export function assertBuildHost(target, pin, host = process) {
@@ -66,10 +78,10 @@ export function nativeBuildEnvironment(node, heap, inherited = process.env, plat
     ...(platform === 'linux' ? { CC: 'clang-15', CXX: 'clang++-15' } : {}) };
 }
 
-export function buildRuntime({ target, source, output, includeWsl = false }) {
+export function buildRuntime({ target, source, output, includeWsl = false, local = false }) {
   const pin = read(path.join(root, 'ide/code-oss/upstream.json'));
   assertBuildHost(target, pin);
-  if (execFileSync('git', ['status', '--porcelain', '--untracked-files=all'], { cwd: root, encoding: 'utf8' }).trim()) throw new Error('Candidate builds require a clean committed checkout; preserve local changes and use a separate clean checkout');
+  const provenance = readBuildSource(root, { local });
   if (pin.repository !== 'https://github.com/microsoft/vscode.git' || !/^[a-f0-9]{40}$/.test(pin.commit) || !/^\d+\.\d+\.\d+$/.test(pin.tag)) throw new Error('Invalid upstream pin');
   source = path.resolve(source); output = path.resolve(output);
   for (const directory of [source, output]) {
@@ -87,9 +99,8 @@ export function buildRuntime({ target, source, output, includeWsl = false }) {
   const env = nativeBuildEnvironment(node, heap);
   const run = (command, args, cwd = root, extra = {}) => execFileSync(command, args, { cwd, env, stdio: 'inherit', ...extra });
   const capture = (command, args, cwd = root) => run(command, args, cwd, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] }).trim();
-  const sourceRevision = capture('git', ['rev-parse', 'HEAD']);
   fs.mkdirSync(output);
-  const report = { schema: 1, status: 'release-candidate', sourceDirty: false, buildTarget: target, includeWsl: target === 'linux-x64' && includeWsl, sourceRevision, upstream: pin,
+  const report = { schema: 1, ...provenance, buildTarget: target, includeWsl: target === 'linux-x64' && includeWsl, upstream: pin,
     extensionVersion: read(path.join(root, 'extensions/vscode/package.json')).version,
     host: { platform: process.platform, architecture: process.arch, node: process.versions.node, heapMiB: heap },
     checks: [], artifacts: [], acceptance: { institution: 'not-tested', windowsWsl2: 'not-tested', productionReady: false } };
@@ -147,7 +158,7 @@ export function buildRuntime({ target, source, output, includeWsl = false }) {
     // output folder; archives are retained. Avoid doubling CI disk use.
     fs.rmSync(directory, { recursive: true });
   };
-  const version = report.extensionVersion;
+  const version = `${report.extensionVersion}${local ? '-local' : ''}`;
   if (target === 'macos-arm64') packageTarget('macos', `Autograde-IDE-${version}-macos-arm64.app`, '.zip');
   else if (target === 'windows-x64') packageTarget('windows', `Autograde-IDE-${version}-windows-native-x64`, '.zip');
   else {

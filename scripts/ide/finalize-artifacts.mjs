@@ -30,6 +30,7 @@ export function verifyReports(input, expected) {
   const seen = new Set(), filenames = new Set(), result = [];
   for (const file of reports) {
     const report = read(file), original = targets[report.buildTarget];
+    if (report.status === 'local-build' || report.buildMode === 'local') throw new Error('Local build outputs cannot be finalized as release candidates; rebuild from a clean committed checkout without --local');
     const definition = original && { ...original, artifacts: [...original.artifacts], checks: [...original.checks] };
     if (report.buildTarget === 'linux-x64' && report.includeWsl === true) {
       definition.artifacts.push('windows-wsl2-payload'); definition.checks.push('package-wsl', 'wsl-packaged-cli-version');

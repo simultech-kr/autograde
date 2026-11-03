@@ -40,9 +40,11 @@ GitHub의 [runner 표](https://docs.github.com/en/actions/reference/runners/gith
 ## 실행과 검사
 
 담당자의 로컬 PC에서 아래 명령으로 빌드할 수 있으며 GitHub Actions는 필수가 아니다.
-각 대상 OS·CPU에서 Node 26.13.0과 해당 플랫폼의 빌드 도구를 준비한다. 로컬 candidate 빌드는
-변경·미추적 파일이 없는 깨끗한 commit에서만 시작한다. 수정된 작업 폴더를 같은 commit의
-정식 산출물로 기록하지 않는다.
+각 대상 OS·CPU에서 Node 26.13.0과 해당 플랫폼의 빌드 도구를 준비한다. 기본 candidate 빌드는
+로컬 PC에서도 변경·미추적 파일이 없는 깨끗한 commit에서만 시작한다. 작업 중인 변경 내용을
+포함해 빌드하려면 명시적으로 `--local`을 사용한다. 이 경우 현재 작업 트리의 소스를 사용하고
+보고서에 `status: local-build`, `buildMode: local`과 실제 `sourceDirty`를 기록한다.
+시험·고정 버전/commit 검증·해시 검증·플랫폼별 서명 검사는 그대로 수행한다.
 
 Actions를 사용할 때는 **Institution IDE candidates**에서 ref를 수동 선택한다. 기본은 세 가지
 native OS이며 필요할 때만 `include_wsl`을 선택한다. 토큰은 `contents: read`만 요청하고
@@ -102,6 +104,20 @@ node .\scripts\ide\build-runtime.mjs --target windows-x64 --source .\.cache\code
 둘 다 현재 디렉터리 기준으로 해석한다. 이미 존재하면 `-02`처럼 새 경로를 사용하며 이전
 빌드 폴더를 자동 삭제하지 않는다. Windows 설정·요구사항은 아래의 전용 설치 안내를 따른다.
 
+`Candidate builds require a clean committed checkout` 오류가 나고 현재 변경 내용을 직접
+시험하려는 경우, 저장소 루트에서 다음과 같이 실행한다. `git status --short`는 변경 내용을
+확인하기 위한 명령이다. 빌드를 위해 변경 내용을 stash·삭제하거나 모두 한꺼번에 commit할 필요는 없다.
+
+```powershell
+git status --short
+node .\scripts\ide\build-runtime.mjs --target windows-x64 --source .\.cache\code-oss-windows-26-local-01 --output .\dist\windows-node26-local-01 --local
+```
+
+`--local`에서도 source/output은 새 경로여야 하며, 이미 존재하면 두 경로 모두 새 이름으로 바꾼다.
+로컬 빌드의 압축 파일 이름은 `Autograde-IDE-<version>-local-<target>.zip` 또는 `.tar.gz`다.
+작업 트리가 깨끗해도 `--local`로 만든 보고서는 `local-build`이고, 후보 묶음 생성기는 이를
+거절한다. 기관 배포 후보가 필요하면 별도의 깨끗한 checkout에서 `--local` 없이 빌드한다.
+
 ## 정리와 인수
 
 Windows native는 POSIX 정리 코드를 재사용하지 않는다. SID에 제한한 NTFS ACL, exclusive file
@@ -122,8 +138,9 @@ sha256sum -c SHA256SUMS
 ```
 
 해시는 파일 혼합·전송 오류를 감지하며 서명/공증을 대신하지 않는다. Mac은 ad-hoc 서명이고
-Developer ID/공증 및 Windows Authenticode는 수행하지 않는다. 모든 산출물은 release-candidate,
-`productionReady: false`다. 실제 Windows에서 실행하지 않았다면 Windows 자체 시험은 미실행이다.
+Developer ID/공증 및 Windows Authenticode는 수행하지 않는다. 기본 산출물은 `release-candidate`,
+`--local` 산출물은 `local-build`이며 모두 `productionReady: false`다.
+실제 Windows에서 실행하지 않았다면 Windows 자체 시험은 미실행이다.
 기관 PC의 아이콘 실행·교수자 확장·인증·과제·제출·결과·C/C++ 작업·내보내기·정상/비정상 종료
 정리와 서버 호환을 검증하고 그 증거를 기관 프로필에 연결한다.
 

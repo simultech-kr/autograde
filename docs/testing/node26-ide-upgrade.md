@@ -61,7 +61,9 @@ Mac 시험 패키지는 `dist/node26-0.5.22/Autograde IDE.app.zip`이며 같은 
 무결성을 확인한다. ad-hoc 서명 후보이고 Developer ID 서명·공증을 받은 상용 배포본은 아니다.
 
 로컬 검증 보고서는 변경 중인 작업 트리에서 실행했음을 `sourceDirty: true`로 기록한다.
-커밋이 확정된 정식 후보 빌드와 구분하며, 전체 후보 생성기는 계속 깨끗한 checkout만 허용한다.
+이 기록은 위 Mac 검증 결과이며, 커밋이 확정된 정식 후보 빌드와 구분한다.
+기본 후보 빌드는 계속 깨끗한 checkout만 허용한다. 현재 전체 빌드 도구의 `--local` 옵션은
+작업 중인 소스를 별도의 `local-build`로 빌드할 때 사용한다.
 
 ## 재현
 
@@ -73,6 +75,20 @@ node --version
 npm --prefix extensions/vscode test
 node --test ide/code-oss/*.test.mjs scripts/ide/*.test.mjs
 ```
+
+Windows에서 현재 작업 중인 변경 내용을 포함한 전체 빌드는 저장소 루트에서 다음과 같이 실행한다.
+`git status --short`로 변경 내용을 확인할 수 있으며, 이를 위해 stash·삭제하거나 일괄 commit할
+필요는 없다. source/output은 모두 새 경로여야 하므로 기존 경로라면 이름의 `01`을 바꾼다.
+
+```powershell
+git status --short
+node .\scripts\ide\build-runtime.mjs --target windows-x64 --source .\.cache\code-oss-windows-26-local-01 --output .\dist\windows-node26-local-01 --local
+```
+
+`--local`은 시험·고정 버전/commit·해시·서명 검사를 유지하고 실제 `sourceDirty`를 기록한다.
+압축 파일 이름은 `Autograde-IDE-<version>-local-<target>.zip` 또는 `.tar.gz`이며,
+깨끗한 작업 트리에서 실행해도 `local-build`를 후보 묶음에 포함할 수 없다.
+실제 Windows 빌드·GUI 인수 결과는 위 Mac 검증과 별도로 기록한다.
 
 소스를 직접 준비할 때는 upstream `npm ci` 이전에 다음을 실행한다. 자동 전체 빌드 도구는
 이 단계를 수행한다. 기존 소스의 변경 내용은 덮어쓰지 않으며 충돌 시 새 checkout을 사용한다.
