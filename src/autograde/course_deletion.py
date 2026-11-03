@@ -129,6 +129,12 @@ def _digest(rows, files):
 def _review(service, db, key):
     from .course_admin import _course
     course = _course(db, key)
+    # A privacy staging manifest uses its journal as commit authority. Removing
+    # that journal before cleanup completes would make restart recovery mistake
+    # committed erasure for rollback and restore the private originals.
+    if 'admin_course_privacy_archives' in _tables(db) and db.execute(
+            "SELECT 1 FROM admin_course_privacy_archives WHERE course_key=? AND cleanup_status='pending'", (key,)).fetchone():
+        raise PlatformConflict('수업 보관의 개인정보 정리가 남아 있습니다. 정리를 완료한 뒤 교과목을 삭제하세요.')
     _idle(db, key)
     rows = _targets(db, key)
     files = service.file_planner(db, key, rows) if service.file_planner else None

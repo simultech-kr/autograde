@@ -1,5 +1,5 @@
 """Separate local-only SQLite ledger for approved rubrics and imported assessments."""
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from datetime import datetime, timezone
 import json
 import os
@@ -89,6 +89,39 @@ class RubricStore:
         db.execute('INSERT INTO rubric_audit(action,course_key,actor,object_ref,occurred_at) VALUES(?,?,?,?,?)',
                    (action, course, actor, ref, now()))
 
+    @contextmanager
+    def privacy_guard(self, course, *, root=None):
+        """Fence the evidence snapshot through commit against course erasure.
+
+        Check both journals: the platform may have erased the course before
+        this optional catalog existed. Standalone catalogs never create a
+        platform database. Cleanup also installs catalog SQL guards so stale
+        callers cannot restore personal evidence after the erasure.
+        """
+        from .privacy_file_guard import privacy_file_guard
+        scope_root = Path(root).absolute() if root is not None else self.path.parent
+        with privacy_file_guard(scope_root):
+            platform = scope_root / 'state.sqlite3'
+            if platform.is_symlink():
+                raise RubricConflict('수업 개인정보 파기 기록의 저장 경로를 확인할 수 없습니다.')
+            if platform.exists():
+                try:
+                    with closing(sqlite3.connect(platform.as_uri() + '?mode=ro', uri=True, timeout=5)) as state:
+                        journal = state.execute("SELECT 1 FROM sqlite_master WHERE type='table' "
+                                                "AND name='admin_course_privacy_archives'").fetchone()
+                        if journal and state.execute('SELECT 1 FROM admin_course_privacy_archives WHERE course_key=?',
+                                                     (course,)).fetchone():
+                            raise RubricConflict('개인정보를 파기한 수업에는 평가 기록을 다시 저장할 수 없습니다.')
+                except sqlite3.Error as exc:
+                    raise RubricConflict('수업 개인정보 파기 기록을 확인하지 못해 평가 저장을 중단했습니다.') from exc
+            with self._connect(read_only=True) as db:
+                closed = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' "
+                                    "AND name='rubric_course_privacy_archives'").fetchone()
+                if closed and db.execute('SELECT 1 FROM rubric_course_privacy_archives WHERE course_key=?',
+                                         (course,)).fetchone():
+                    raise RubricConflict('개인정보를 파기한 수업에는 평가 기록을 다시 저장할 수 없습니다.')
+            yield
+
     @staticmethod
     def _read(db, course, rubric_id, version):
         identifier(course)
@@ -159,6 +192,11 @@ class RubricStore:
             return self._read(db, course, rubric_id, version)
 
     def assess(self, course, rubric_id, version, *, profile, evidence, request_key, actor):
+        with self.privacy_guard(course):
+            return self._assess_guarded(course, rubric_id, version, profile=profile, evidence=evidence,
+                                        request_key=request_key, actor=actor)
+
+    def _assess_guarded(self, course, rubric_id, version, *, profile, evidence, request_key, actor):
         actor, request_key = identifier(actor), identifier(request_key)
         plan = compile_profile(profile)
         # Pure calculation happens without holding a database write lock.

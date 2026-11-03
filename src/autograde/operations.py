@@ -171,10 +171,12 @@ class SeatRegistry:
 
 
 class OperationsService:
-    def __init__(self, paths, *, workers=(), runtime_configured=False, cache_seconds=15):
+    def __init__(self, paths, *, workers=(), runtime_configured=False, cache_seconds=15, readiness=None):
+        from .operations_readiness import ClassroomReadiness
         self.paths = paths
         self.workers = workers
         self.runtime_configured = runtime_configured
+        self.readiness = readiness if readiness is not None else ClassroomReadiness()
         try:
             self.seats = SeatRegistry(paths.root)
         except (OSError, sqlite3.Error, ValueError):
@@ -187,11 +189,19 @@ class OperationsService:
     def snapshot(self, *, force=False):
         with self._lock:
             if not force and self._cached is not None and time.monotonic() - self._cached_at < self.cache_seconds:
-                return json.loads(json.dumps(self._cached))
-            result = self._read()
-            self._cached = result
-            self._cached_at = time.monotonic()
-            return json.loads(json.dumps(result))
+                result = json.loads(json.dumps(self._cached))
+            else:
+                result = self._read()
+                self._cached = result
+                self._cached_at = time.monotonic()
+                result = json.loads(json.dumps(result))
+        # Read cached network observations outside the operations lock; page
+        # views and diagnostic downloads never initiate outbound requests.
+        result['readiness'] = self.readiness.snapshot(result)
+        return result
+
+    def check_readiness(self):
+        return self.readiness.start()
 
     def _read(self):
         now = datetime.now(timezone.utc)

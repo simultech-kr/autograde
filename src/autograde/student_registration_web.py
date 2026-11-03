@@ -8,7 +8,7 @@ import threading
 from .platform_auth import InvalidSignedValue, new_api_token, secret_digest, sign_browser_value, verify_browser_value
 from .platform_service import PlatformAPIError, PlatformResponse
 from .platform_state import PlatformAccessDenied, PlatformNotFound
-from .student_registration import RegistrationError, StudentRegistration
+from .student_registration import RegistrationError, StudentRegistration, confirm_password
 from .student_portal_view import deadline
 
 COOKIE = 'autograde_member'
@@ -16,6 +16,7 @@ ENTRY_COOKIE = 'autograde_member_entry'
 _PATHS = {'/student/register', '/student/login', '/student/account', '/student/enroll', '/student/logout',
           '/student/activate', '/student/password', '/student/reset', '/student/withdraw'}
 _ACTIVATE = re.compile(r'/courses/([a-z0-9_-]{1,96})/activate-account')
+_COURSE_PASSWORD = re.compile(r'/courses/([a-z0-9_-]{1,96})/password')
 
 
 @dataclass(frozen=True)
@@ -165,18 +166,65 @@ class StudentMembership:
         if not isinstance(form.get('csrf'), str) or not hmac.compare_digest(form['csrf'].encode(), expected.encode()):
             raise RegistrationError('화면을 새로 열고 다시 시도하세요.', 403)
 
+    def password_form(self, cookies, message='', *, status=200):
+        _key, session, _account = self.session(cookies)
+        body = '<p>개인 비밀번호는 수강 중인 교과목에서 함께 사용합니다. 8~128자로 설정하세요.</p>'
+        if message:
+            body += '<p class="error" role="alert">' + escape(message) + '</p>'
+        body += (f'<form method="post" action="/student/password"><input type="hidden" name="csrf" value="{session.csrf}">'
+            '<label>현재 비밀번호<input type="password" name="current_password" maxlength="128" autocomplete="off" required></label>'
+            '<label>새 비밀번호<input type="password" name="new_password" minlength="8" maxlength="128" autocomplete="new-password" required></label>'
+            '<label>새 비밀번호 확인<input type="password" name="confirm_password" minlength="8" maxlength="128" autocomplete="new-password" required></label>'
+            '<p>변경하면 기존 웹 로그인·수령 코드·IDE 인증이 종료됩니다. 새 비밀번호로 로그인하고 새 수령 코드로 IDE를 연결하세요. 제출한 코드와 점수는 유지됩니다.</p>'
+            '<p>공용 PC의 브라우저에 비밀번호를 저장하지 마세요.</p><button>비밀번호 변경</button></form>'
+            '<a href="/student/account">내 수업으로 돌아가기</a>')
+        return self.portal._page('내 비밀번호 변경', body, status=status)
+
+    def course_password(self, method, course, form, cookies):
+        if course not in self.portal.services or self.portal.courses and not self.portal.courses.is_active(course):
+            raise PlatformNotFound()
+        with self.portal.lock:
+            _key, session = self.portal._session(course, cookies)
+        try:
+            account = self.store.account(session.credential.student_key)
+        except PlatformAccessDenied:
+            account = None
+        if session.member_session:
+            return PlatformResponse(303, None, {'Location': '/student/password'})
+        if account and account['student_id'] is not None:
+            return self.portal._page('개인 비밀번호 변경',
+                '<p>이미 개인 비밀번호가 설정된 계정입니다. 본인의 개인 비밀번호로 회원 로그인한 뒤 변경하세요. 초기 수업 비밀번호로 개인 비밀번호를 바꿀 수 없습니다.</p>'
+                '<a class="portal-action" href="/student/login">개인 비밀번호로 로그인</a>'
+                '<p><a href="/student/reset">비밀번호를 잊은 경우</a></p>', status=409 if method == 'POST' else 200)
+        if method == 'GET':
+            body = (f'<p>로그인한 학번 <strong>{escape(session.credential.student_key)}</strong>의 개인 비밀번호를 처음 설정합니다.</p>'
+                '<p>교수자에게 받은 초기 비밀번호 대신 본인만 아는 8~128자 비밀번호를 사용하세요. 수강 중인 교과목에서 함께 사용합니다.</p>'
+                f'<form method="post" action="/courses/{course}/password"><input type="hidden" name="csrf" value="{session.csrf}">'
+                '<label>새 비밀번호<input type="password" name="new_password" minlength="8" maxlength="128" autocomplete="new-password" required></label>'
+                '<label>새 비밀번호 확인<input type="password" name="confirm_password" minlength="8" maxlength="128" autocomplete="new-password" required></label>'
+                '<p>설정하면 기존 초기 비밀번호·수령 코드·IDE 인증은 사용할 수 없습니다. 새 수령 코드로 IDE를 다시 연결하세요. 코드와 점수는 유지됩니다.</p>'
+                '<p>공용 PC에는 비밀번호를 저장하지 마세요.</p><button>개인 비밀번호 설정</button></form>'
+                f'<a href="/courses/{course}/portal">내 수업으로 돌아가기</a>')
+            return self.portal._page('첫 로그인 · 개인 비밀번호 설정', body)
+        if set(form) != {'csrf', 'new_password', 'confirm_password'} or not all(isinstance(v, str) for v in form.values()):
+            raise RegistrationError('입력 형식을 확인하세요.')
+        self._csrf(form, session.csrf)
+        account = self.store.setup_password(session.credential, form['new_password'], form['confirm_password'])
+        return self.open(account, cookies)
+
     def request(self, method, path, form, cookies, origin):
         from .student_membership_api import request as api_request
         response = api_request(self, method, path, form, cookies, origin)
         if response is not None:
             return response
         activation = _ACTIVATE.fullmatch(path)
+        course_password = _COURSE_PASSWORD.fullmatch(path)
         if path == '/student' and method == 'GET':
             try:
                 return self.account_page(cookies)
             except PlatformAccessDenied:
                 return None
-        if path not in _PATHS and not activation:
+        if path not in _PATHS and not activation and not course_password:
             return None
         if method not in {'GET', 'POST'}:
             raise PlatformAPIError(405, 'method_not_allowed', '지원하지 않는 요청입니다.')
@@ -185,6 +233,8 @@ class StudentMembership:
                 raise RegistrationError('학생 포털 주소에서 다시 시도하세요.', 403)
             if activation:
                 return self.activate(method, activation[1], form, cookies)
+            if course_password:
+                return self.course_password(method, course_password[1], form, cookies)
             if path in {'/student/login', '/student/register'}:
                 action = path.rsplit('/', 1)[1]
                 if method == 'GET':
@@ -202,15 +252,11 @@ class StudentMembership:
             if path == '/student/account' and method == 'GET':
                 return self.account_page(cookies)
             if path == '/student/password' and method == 'GET':
-                _key, session, _account = self.session(cookies)
-                return self.portal._page('회원 비밀번호 변경', f'<form method="post" action="/student/password"><input type="hidden" name="csrf" value="{session.csrf}">'
-                    '<label>현재 회원 비밀번호<input type="password" name="current_password" autocomplete="off" required></label>'
-                    '<label>새 회원 비밀번호<input type="password" name="new_password" minlength="8" maxlength="128" autocomplete="off" required></label>'
-                    '<p>변경 후 다시 로그인합니다. 기존 6자리 수업 비밀번호와 IDE 인증은 별도로 관리됩니다.</p><button>비밀번호 변경</button></form><a href="/student/account">내 수업으로 돌아가기</a>')
+                return self.password_form(cookies)
             if method != 'POST':
                 raise PlatformAPIError(405, 'method_not_allowed', '요청 버튼을 사용하세요.')
             key, session, account = self.session(cookies)
-            expected = {'csrf', 'course_key'} if path in {'/student/enroll', '/student/withdraw'} else {'csrf', 'token'} if path == '/student/activate' else {'csrf', 'current_password', 'new_password'} if path == '/student/password' else {'csrf'}
+            expected = {'csrf', 'course_key'} if path in {'/student/enroll', '/student/withdraw'} else {'csrf', 'token'} if path == '/student/activate' else {'csrf', 'current_password', 'new_password', 'confirm_password'} if path == '/student/password' else {'csrf'}
             if set(form) != expected:
                 raise RegistrationError('입력 형식을 확인하세요.')
             self._csrf(form, session.csrf)
@@ -221,6 +267,7 @@ class StudentMembership:
                 self.store.withdraw_course(account, form['course_key'])
                 return self.account_page(cookies, '확인 대기 중인 수강 신청을 취소했습니다.')
             if path == '/student/password':
+                confirm_password(form['new_password'], form['confirm_password'])
                 self.store.change_password(account, form['current_password'], form['new_password'])
                 from .student_membership_api import _clear
                 cleared = _clear(self, cookies, key=account['student_key'])
@@ -243,6 +290,11 @@ class StudentMembership:
             message = str(exc) if isinstance(exc, RegistrationError) else '로그인 또는 수강 상태를 확인하고 다시 시도하세요.'
             if path in {'/student/login', '/student/register'}:
                 return self.form(path.rsplit('/', 1)[1], message, status=status)
+            if path == '/student/password' and isinstance(exc, RegistrationError):
+                try:
+                    return self.password_form(cookies, message, status=status)
+                except PlatformAccessDenied:
+                    pass
             return self.portal._page('학생 이용 안내', f'<p class="error" role="alert">{escape(message)}</p>'
                 '<p><a href="/student/login">회원 로그인</a> · <a href="/student/account">내 수강 교과목</a> · '
                 '<a href="/courses">기존 학생 수업 로그인</a></p>', status=status)
@@ -256,13 +308,16 @@ class StudentMembership:
                 '<label>학번<input name="student_key" inputmode="numeric" pattern="[0-9]{4,20}" required></label>'
                 '<label>재설정 코드<input name="token" maxlength="128" autocomplete="off" required></label>'
                 '<label>새 회원 비밀번호<input type="password" name="new_password" minlength="8" maxlength="128" autocomplete="off" required></label>'
+                '<label>새 비밀번호 확인<input type="password" name="confirm_password" minlength="8" maxlength="128" autocomplete="new-password" required></label>'
+                '<p>재설정하면 기존 웹 로그인·수령 코드·IDE 인증이 종료됩니다. 공용 PC에는 비밀번호를 저장하지 마세요.</p>'
                 '<button>비밀번호 재설정</button></form><a href="/student/login">로그인으로 돌아가기</a>', cookie=self.cookie(entry, name=ENTRY_COOKIE))
-        if set(form) != {'csrf', 'student_key', 'token', 'new_password'}:
+        if set(form) != {'csrf', 'student_key', 'token', 'new_password', 'confirm_password'}:
             raise RegistrationError('입력 형식을 확인하세요.')
         entry = verify_browser_value(self.portal.secret, 'member-entry', cookies.get(ENTRY_COOKIE, ''))
         if entry.get('action') != 'reset':
             raise RegistrationError('화면을 새로 열고 다시 시도하세요.', 403)
         self._csrf(form, entry.get('csrf', ''))
+        confirm_password(form['new_password'], form['confirm_password'])
         self.store.reset_password(form['student_key'], form['token'].strip(), form['new_password'])
         from .student_membership_api import _clear
         cleared = _clear(self, cookies, key=form['student_key'].strip())

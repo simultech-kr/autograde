@@ -100,6 +100,12 @@ def checkpoint_files(service, owner, checkpoint_id):
 
 
 def request(service, access_token, assignment_id, operation, payload=None, session_id=None):
+    from .privacy_file_guard import privacy_file_guard
+    with privacy_file_guard(service.state.database.parent):
+        return _request_guarded(service, access_token, assignment_id, operation, payload, session_id)
+
+
+def _request_guarded(service, access_token, assignment_id, operation, payload=None, session_id=None):
     from .platform_service import PlatformAPIError, _strict_object
     owner = service._checkpoint_owner(access_token, assignment_id)
     base = {"enabled": bool(service.learning_runtime_socket), "provider": "remote_linux", "languages": ["c", "cpp", "python"]}

@@ -144,4 +144,25 @@ STYLE = """
 }
 @media(prefers-reduced-motion:reduce){.responsive-instructor *{scroll-behavior:auto!important}}
 @media(forced-colors:active){.ui-action,.ui-badge,.instructor-brand-mark,.portal-menu nav a[aria-current=page]{border:1px solid CanvasText}}
+.classroom-readiness .readiness-heading{display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:16px}
+.classroom-readiness .readiness-heading h2{font-size:21px;letter-spacing:-.025em;margin:0 0 4px}
+.classroom-readiness .readiness-heading p{margin:0}.classroom-readiness .readiness-check-form{margin:0;flex:none}
+.classroom-readiness .readiness-check-form button{margin:0;min-width:136px}
+.classroom-readiness .readiness-status-line{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin:16px 0 4px}
+.classroom-readiness .readiness-overall{margin:0;font-size:14px;font-weight:600}
+.classroom-readiness .readiness-observed,.classroom-readiness .readiness-retry{margin:4px 0;font-size:12px}
+.classroom-readiness .readiness-cards{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin:20px 0}
+.classroom-readiness .readiness-card{padding:18px;border:1px solid var(--border);border-radius:4px;background:var(--surface);min-width:0;overflow-wrap:anywhere}
+.classroom-readiness .readiness-card-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.classroom-readiness .readiness-card h3{font-size:15px;line-height:1.5;margin:0}
+.classroom-readiness .readiness-card-summary{font-size:14px;line-height:1.65;margin:12px 0 6px}
+.classroom-readiness .readiness-card-time{font-size:12px;margin:0}
+.classroom-readiness .readiness-explanation{border-top:1px solid var(--border);margin:14px 0 0;padding:0}
+.classroom-readiness .readiness-explanation summary{font-size:13px;font-weight:600;color:var(--link);padding:10px 0;min-height:44px}
+.classroom-readiness .readiness-details,.classroom-readiness .readiness-actions{font-size:13px;line-height:1.75;padding-left:20px;margin:4px 0 12px}
+.classroom-readiness .readiness-details li,.classroom-readiness .readiness-actions li{margin:5px 0;white-space:pre-wrap}
+.classroom-readiness .readiness-details:empty,.classroom-readiness .readiness-actions:empty{display:none}
+.classroom-readiness .readiness-boundary{margin:0;padding-top:14px;border-top:1px solid var(--border);font-size:12px;line-height:1.7}
+@media(max-width:900px){.classroom-readiness .readiness-cards{grid-template-columns:1fr}}
+@media(max-width:600px){.classroom-readiness .readiness-heading h2{font-size:19px}.classroom-readiness .readiness-check-form{width:100%}.classroom-readiness .readiness-check-form button{width:100%}.classroom-readiness .readiness-card{padding:16px}.classroom-readiness .readiness-status-line{align-items:flex-start}.classroom-readiness .readiness-status-line .ui-action{padding-left:0;justify-content:flex-start}}
 """

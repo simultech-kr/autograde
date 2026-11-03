@@ -50,6 +50,14 @@ def course_file_guard(root, course_key, *, exclusive=False):
     deletion marker must only be written after the database commit, while this
     exclusive lock remains held. Lock files are never removed or replaced.
     """
+    from .privacy_file_guard import privacy_file_guard
+    with privacy_file_guard(root):
+        with _course_file_guard(root, course_key, exclusive=exclusive):
+            yield
+
+
+@contextmanager
+def _course_file_guard(root, course_key, *, exclusive=False):
     folder, key = _directory(root, course_key)
     descriptor = os.open(folder / (key + '.lock'), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
     try:

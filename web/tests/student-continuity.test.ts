@@ -17,6 +17,9 @@ const course = {course_key: courseKey, code: "COME2201", name: "소프트웨어 
 const bootstrap = () => ({ok: true, result: {authenticated: true, csrf: "synthetic_csrf", expires_at: stamp(600000), server_time: stamp(0), student: {student_key: studentKey, verified: true}, api_base_url: "https://example.test:20000", courses: [{...course}]}});
 const courseResult = () => ({ok: true, result: {student_key: studentKey, course, csrf: "synthetic_csrf", server_time: stamp(0), api_base_url: "https://example.test:20000", links: {assignments: `/courses/${courseKey}/assignments`}, overview: {assignments: [{assignment_id: "assignment_01", assignment_key: "week09", title: "Iterator 실습", opens_at: null, due_at: stamp(86400000), accepted_at: stamp(-86400000)}], latest: [], history: [], history_truncated: false, latest_truncated: false, assignments_truncated: false, limit: 100}}});
 const claimResult = (expiry = stamp(180000)) => ({ok: true, result: {student_key: studentKey, claim: {assignment_id: "assignment_01", title: "Iterator 실습", code, expires_at: expiry, api_url: "https://example.test:20000"}}});
+const privacyResult = (decision = "unanswered", revision = 0) => ({ok: true, result: {student_key: studentKey, course_key: courseKey, decision, revision,
+  updated_at: revision ? stamp(0) : null, research_allowed: decision === "granted", history: [],
+  policy: Object.fromEntries(["version", "title", "purpose", "items", "retention", "choice", "withdrawal", "scope", "contact"].map(key => [key, `synthetic ${key}`]))}});
 
 test("only the same unexpired identity and active enrollment can resume private context", () => {
   const value = bootstrap().result as Bootstrap;
@@ -100,6 +103,84 @@ test("React: IDE switch masks data, preserves the same valid code, and never aut
     await app.click("발급한 코드 보기"); assert.equal(app.requests.filter(r => r.url.endsWith("/claims")).length, 1);
     await app.click("수령 코드 복사"); assert.match(app.document.body.textContent!, /자동 복사가 허용되지 않았습니다/);
     assert.equal(app.document.defaultView!.localStorage.length, 0); assert.equal(app.document.defaultView!.sessionStorage.length, 0);
+  } finally {await app.dispose();}
+});
+
+test("React: my scores separates the current submission from earlier best and refreshes safely", async () => {
+  let state = "queued", switched = false;
+  const receipt = {assignment_id: "assignment_01", assignment_key: "week09", title: "Iterator 실습", submission_id: "submission_02", received_at: stamp(-60000), code_version: "a".repeat(64), score: 3, max_score: 10, published_at: null, version: 2, previous_best_id: "submission_01", previous_best_score: 9, previous_best_max_score: 10, previous_best_at: stamp(-86400000)};
+  const app = await mount(async url => {
+    if (url.endsWith("/bootstrap")) {const body = bootstrap(); if (switched) body.result.student.student_key = "20260002"; return Response.json(body);}
+    const body = courseResult(); if (switched) body.result.student_key = "20260002";
+    const current = {...receipt, state, published_at: state === "published" ? stamp(0) : null};
+    return Response.json({...body, result: {...body.result, overview: {...body.result.overview, latest: switched ? [] : [current], history: switched ? [] : [current]}}});
+  });
+  try {
+    await app.click("내 점수");
+    const summary = () => app.document.querySelector('[data-score-assignment="assignment_01"]')!;
+    assert.match(app.document.defaultView!.location.search, /view=scores/);
+    assert.match(summary().textContent!, /점수 미확정/); assert.match(summary().textContent!, /9 \/ 10점/);
+    assert.doesNotMatch(summary().textContent!, /3 \/ 10점/);
+    state = "graded"; await app.tick(); assert.doesNotMatch(summary().textContent!, /3 \/ 10점/);
+    state = "published"; await app.tick(); assert.match(summary().textContent!, /3 \/ 10점/);
+    assert.match(summary().textContent!, /9 \/ 10점/);
+    assert.ok(app.document.getElementById("history-submission_02"));
+    assert.equal(app.requests.filter(item => item.options?.method === "POST").length, 0);
+    switched = true; await app.leave(); assert.equal(app.surface().hidden, true); await app.return();
+    assert.doesNotMatch(app.document.body.textContent!, /9 \/ 10점/);
+    assert.equal(app.document.defaultView!.localStorage.length, 0); assert.equal(app.document.defaultView!.sessionStorage.length, 0);
+  } finally {await app.dispose();}
+});
+
+test("React: optional consent is explicit, recorded, withdrawable and stale tabs cannot re-grant", async () => {
+  let decision = "unanswered", revision = 0, conflict = false;
+  const posts: URLSearchParams[] = [];
+  const app = await mount(async (url, options) => {
+    if (url.endsWith("/privacy")) {
+      if (options?.method === "POST") {
+        const values = new URLSearchParams(String(options.body)); posts.push(values);
+        if (conflict) {decision = "declined"; revision++; return Response.json({ok: false, error: {code: "consent_conflict", message: "다른 화면에서 동의 상태가 변경되었습니다."}}, {status: 409});}
+        assert.equal(values.get("csrf"), "synthetic_csrf"); assert.equal(values.has("student_key"), false);
+        decision = values.get("decision")!; revision++;
+      }
+      return Response.json(privacyResult(decision, revision));
+    }
+    return Response.json(url.endsWith("/bootstrap") ? bootstrap() : courseResult());
+  });
+  try {
+    assert.equal(posts.length, 0); assert.match(app.document.body.textContent!, /아직 선택하지 않음 · 연구 활용 제외/);
+    assert.ok(app.button("이 실습 연결 코드 발급"));
+    await app.click("동의하고 저장"); assert.equal(posts.length, 1); assert.match(app.document.body.textContent!, /동의함/);
+    await app.click("동의하지 않음 · 철회"); assert.equal(posts.length, 2); assert.equal(posts[1].get("revision"), "1");
+    assert.match(app.document.body.textContent!, /동의하지 않음 · 연구 활용 제외/);
+    conflict = true; await app.click("동의하고 저장"); assert.equal(posts.length, 3);
+    assert.match(app.document.body.textContent!, /다른 화면에서 동의 상태가 변경/);
+    assert.equal(Array.from(app.document.querySelectorAll("button")).some(node => node.textContent === "동의하고 저장"), false);
+    await app.click("동의 상태 새로고침"); assert.match(app.document.body.textContent!, /동의하지 않음 · 연구 활용 제외/);
+    assert.equal(posts.length, 3); assert.equal(app.document.defaultView!.localStorage.length, 0);
+  } finally {await app.dispose();}
+});
+
+test("React: lost consent response clears stale choice and refresh never repeats the mutation", async () => {
+  let decision = "unanswered", revision = 0, fail = false, posts = 0;
+  const app = await mount(async (url, options) => {
+    if (url.endsWith("/privacy")) {
+      if (options?.method === "POST") {
+        decision = new URLSearchParams(String(options.body)).get("decision")!; revision++; posts++;
+        if (fail) return Response.json({ok: false, error: {code: "internal_error", message: "저장 결과를 확인하세요."}}, {status: 500});
+      }
+      return Response.json(privacyResult(decision, revision));
+    }
+    return Response.json(url.endsWith("/bootstrap") ? bootstrap() : courseResult());
+  });
+  try {
+    await app.click("동의하고 저장"); assert.match(app.document.body.textContent!, /선택이 저장되었습니다/);
+    await app.click("동의 상태 새로고침"); assert.doesNotMatch(app.document.body.textContent!, /선택이 저장되었습니다/);
+    fail = true; await app.click("동의하지 않음 · 철회");
+    assert.equal(Array.from(app.document.querySelectorAll("button")).some(node => node.textContent === "동의하고 저장"), false);
+    await app.click("동의 상태 새로고침");
+    assert.match(app.document.body.textContent!, /동의하지 않음 · 연구 활용 제외/);
+    assert.equal(posts, 2);
   } finally {await app.dispose();}
 });
 

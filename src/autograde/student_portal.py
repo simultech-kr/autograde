@@ -8,6 +8,7 @@ from .platform_service import PlatformAPIError, PlatformResponse
 from .platform_state import PlatformAccessDenied, utc_iso
 from .student_portal_data import submission_overview
 from .student_portal_view import deadline
+from .student_scores_view import render as score_summary
 from .portal_runtime_view import STATES as RUNTIME_STATES, overview as runtime_overview, time_label
 
 _PATH = re.compile(r'/courses/([A-Za-z0-9][A-Za-z0-9._~-]{0,127})/(portal|results)(/login)?')
@@ -37,12 +38,20 @@ def _logout(course, session):
             '<button class="secondary">로그아웃</button></form>')
 
 
+def _password_link(course, session):
+    member = getattr(session, 'member_session', False)
+    href = '/student/password' if member else f'/courses/{escape(course, quote=True)}/password'
+    guidance = ('' if member else '<p class="portal-help">초기 비밀번호를 사용하는 경우 본인만 아는 개인 비밀번호를 설정하세요. 공용 PC에 비밀번호를 저장하지 마세요.</p>')
+    return guidance + f'<p><a class="portal-action" href="{href}">비밀번호 설정·변경</a></p>'
+
+
 def _result_card(row, *, current):
     state = _STATES.get(row['state'], '처리 상태 확인 필요')
     # A published state without a public result is not evidence of a score.
     if row['state'] == 'published' and row['score'] is None:
         state = '결과 확인 대기'
-    body = (f'<article class="portal-result" data-submission-id="{escape(row["submission_id"], quote=True)}">'
+    anchor = ('current-' if current else 'history-') + row['submission_id']
+    body = (f'<article id="{escape(anchor, quote=True)}" class="portal-result" data-submission-id="{escape(row["submission_id"], quote=True)}">'
             f'<h3>{escape(row["title"])}</h3><p>{"최신 공식 제출" if current else "공식 제출"} · 버전 {int(row["version"])} · {state}</p>'
             f'<dl><div><dt>제출 접수 시각</dt><dd>{escape(deadline(row["received_at"]))}</dd></div>'
             f'<div><dt>{"이번 제출 점수" if current else "공개 점수"}</dt><dd class="portal-score">{_score(row["score"], row["max_score"])}</dd></div>')
@@ -63,8 +72,10 @@ def _results(portal, course, session, overview):
             '<p class="portal-intro">서버가 공식 접수한 본인의 제출만 표시합니다. 작업 자동 저장은 공식 제출에 포함되지 않습니다. '
             '공개·운영 중인 과제의 기록만 표시하며, 상세 채점 피드백과 코드 복원은 IDE에서 확인하세요.</p>'
             '<p class="portal-help">이번 제출 점수와 이전 최고점은 서로 다른 값입니다. 새 제출의 채점이 끝나지 않았으면 이전 점수를 이번 점수로 표시하지 않습니다.</p>'
-            f'<p><a class="portal-action" href="/courses/{escape(course, quote=True)}/results">제출 현황 새로고침</a></p>'
-            '<section class="portal-section"><h2>과제별 최신 제출</h2>')
+            f'<p><a class="portal-action" href="/courses/{escape(course, quote=True)}/results">내 점수 새로고침</a></p>')
+    body += _password_link(course, session)
+    body += score_summary(overview, _score, _STATES)
+    body += '<section class="portal-section"><h2>과제별 최신 제출</h2>'
     if not overview['latest']:
         body += '<p class="portal-empty" role="status">표시할 공식 제출이 없습니다. 과제를 수령하고 IDE에서 제출한 뒤 이 화면을 새로고침하세요.</p>'
     body += ''.join(_result_card(row, current=True) for row in overview['latest']) + '</section>'
@@ -93,13 +104,18 @@ def _home(portal, course, session, overview):
             f'<div><dt>표시 중인 제출 과제</dt><dd>{len(overview["latest"])}개</dd></div>'
             '</dl><div class="portal-grid">'
             f'<section class="portal-card"><h2>과제 받기</h2><p>마감순으로 실습을 선택하고 IDE 수령 코드를 발급합니다.</p><a href="{course_path}/assignments">과제 선택</a></section>'
-            f'<section class="portal-card"><h2>제출 현황</h2><p>최신 제출 상태와 공개 점수, 이전 최고점 및 제출 시각을 확인합니다.</p><a href="{course_path}/results">내 제출 현황 보기</a></section>')
+            f'<section class="portal-card"><h2>내 점수</h2><p>과제별 이번 제출 점수와 이전 최고점, 채점 진행 상태를 확인합니다.</p><a href="{course_path}/results">내 점수·제출 이력 보기</a></section>')
     if portal.student_materials is not None:
         body += f'<section class="portal-card"><h2>내 자료</h2><p>학번별로 배정된 PDF·ZIP과 수정 배포본을 받습니다.</p><a href="{course_path}/materials">내 자료 받기</a></section>'
     if portal.exam_papers is not None:
         body += f'<section class="portal-card"><h2>시험지</h2><p>수업에 공개된 시험지를 배포 기간에 받습니다.</p><a href="{course_path}/exam-papers">시험지 받기</a></section>'
     body += ('<section class="portal-card"><h2>실습 공간</h2><p>원격 환경 연결과 서버 작업 저장 상태를 확인하고 IDE에서 이어서 실습합니다.</p>'
              '<a href="#learning-space">내 실습 공간 확인</a></section></div>')
+    body += _password_link(course, session)
+    body += ('<section class="portal-help"><h2>개인정보 활용 · 내 선택</h2>'
+             '<p>연구·수업 개선을 위한 개인정보 활용 여부를 직접 선택할 수 있습니다. '
+             '동의하지 않아도 수업과 점수 확인을 이용할 수 있습니다.</p>'
+             f'<a class="portal-action" href="{course_path}/privacy">동의 내용과 내 선택 확인</a></section>')
     body += _accepted_assignments(course_path, overview, now)
     body += _learning_space(portal.services[course], session, overview)
     if overview['latest']:
@@ -212,7 +228,7 @@ def request(portal, method, path, form, cookies, origin):
         body = (_home if section == 'portal' else _results)(portal, course, session, overview)
         with portal.lock:
             portal._session(course, cookies)
-        return portal._page('내 수업' if section == 'portal' else '내 제출 현황', body, wide=True,
+        return portal._page('내 수업' if section == 'portal' else '내 점수 · 제출 현황', body, wide=True,
                             navigation=portal._student_nav(course, section))
     except (ValueError, InvalidSignedValue, PlatformAPIError, PlatformAccessDenied) as exc:
         status = exc.status if isinstance(exc, PlatformAPIError) else 403

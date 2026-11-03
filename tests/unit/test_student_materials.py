@@ -366,7 +366,10 @@ def test_active_authorization_rechecked_receipts_retained(setup, inactive):
         with state._write() as db:
             db.execute("DELETE FROM platform_enrollments WHERE student_id=? AND course_key=?", (sid, COURSE))
     else:
-        CourseAdminService(state).set_status(COURSE, "archived")
+        # Historical read-only archives must also deny access. The new
+        # irreversible privacy workflow erases recipients and is tested apart.
+        with state._write() as db:
+            db.execute("UPDATE admin_courses SET status='archived' WHERE course_key=?", (COURSE,))
     with pytest.raises(PlatformAccessDenied):
         service.list_for_student(COURSE, sid)
     with pytest.raises(PlatformAccessDenied):

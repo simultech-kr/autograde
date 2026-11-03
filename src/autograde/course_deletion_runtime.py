@@ -4,10 +4,15 @@ import hashlib
 
 from .course_deletion_files import plan_course_files, recover_course_files
 from .platform_state import PlatformConflict
+from .privacy_file_guard import privacy_file_guard
 
 
 def configure_course_deletion(paths, courses, registry, socket_path=None):
     courses.file_planner = lambda db, key, rows: plan_course_files(paths, db, key, rows)
+    from .course_privacy_files import plan_privacy_files, cleanup_extra
+    courses.privacy_file_planner = lambda db, key, rows: plan_privacy_files(paths, db, key, rows)
+    courses.privacy_recover = lambda: recover_course_files(paths, courses.state)
+    courses.privacy_after_archive = lambda key: cleanup_extra(paths, courses.state, key)
     courses.remote_cleanup_required = bool(socket_path)
 
     def after_delete(course_key):
@@ -40,7 +45,14 @@ def configure_course_deletion(paths, courses, registry, socket_path=None):
     courses.after_delete = after_delete
     courses.cleanup_context = cleanup_context
     courses.after_delete_context = cleanup_remote
-    recover_course_files(paths, courses.state)
+    with privacy_file_guard(paths.root, exclusive=True):
+        recover_course_files(paths, courses.state)
+    from .course_privacy_archive import finish_cleanup
+    with courses.state._connection() as db:
+        privacy_pending = [row[0] for row in db.execute(
+            "SELECT course_key FROM admin_course_privacy_archives WHERE cleanup_status='pending'")]
+    for key in privacy_pending:
+        finish_cleanup(courses, key)
     with courses.state._connection() as db:
         pending = [dict(row) for row in db.execute(
             "SELECT job_id,course_key,counts_json FROM admin_course_deletions WHERE cleanup_status='pending'")]

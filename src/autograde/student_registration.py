@@ -1,7 +1,8 @@
 """SQLite student accounts and course-scoped enrollment roster matching.
 
-The common account never overwrites an imported student's credential. Existing
-students may activate an account only after presenting a current course session.
+Existing students may activate an account only after presenting a current
+course session. Explicit personal-password setup and password changes replace
+active course credentials and revoke earlier web/IDE authentication grants.
 """
 from __future__ import annotations
 
@@ -86,6 +87,14 @@ def student_key(value):
     return value.strip()
 
 
+def confirm_password(password, confirmation):
+    """Check the second entry without putting either secret into an error."""
+    if (not isinstance(password, str) or not isinstance(confirmation, str)
+            or len(password) > 128 or len(confirmation) > 128
+            or not hmac.compare_digest(password.encode('utf-8'), confirmation.encode('utf-8'))):
+        raise RegistrationError('새 비밀번호와 확인 입력이 일치하지 않습니다.')
+
+
 class StudentRegistration:
     def __init__(self, state):
         self.state = state
@@ -101,7 +110,9 @@ class StudentRegistration:
             db.execute('INSERT INTO student_account_attempts VALUES(?,?,1,?) '
                        'ON CONFLICT(scope,identity) DO UPDATE SET count=count+1', (scope, identity, now + seconds))
 
-    def register(self, key, password, *, course=None, credential=None):
+    def register(self, key, password, *, course=None, credential=None, replace_course_passwords=False):
+        if replace_course_passwords and credential is None:
+            raise PlatformAccessDenied('수업 로그인 후 개인 비밀번호를 설정하세요.')
         key = student_key(key)
         self._attempt('signup-global', '*', limit=60, seconds=60)
         self._attempt('signup', key)
@@ -125,7 +136,8 @@ class StudentRegistration:
             if existing:
                 current = db.execute('''SELECT pw.*,e.student_id,e.course_key,e.active AS enrolled
                     FROM platform_student_passwords pw JOIN platform_enrollments e ON e.id=pw.enrollment_id
-                    WHERE e.student_id=? AND e.course_key=?''',
+                    JOIN admin_courses c ON c.course_key=e.course_key
+                    WHERE e.student_id=? AND e.course_key=? AND c.status='active' ''',
                     (existing['id'], credential.course_key if credential else '')).fetchone()
                 eligible_without_credential = bool(course and existing['active'] and existing['identity_kind'] == 'local'
                     and db.execute('SELECT 1 FROM student_course_eligibility WHERE course_key=? AND student_key=?', (course, key)).fetchone()
@@ -152,7 +164,30 @@ class StudentRegistration:
             elif credential:
                 for row in db.execute("SELECT DISTINCT course_key FROM student_course_registrations WHERE student_key=? AND status='pending'", (key,)).fetchall():
                     self._match_course(db, row['course_key'])
+            if replace_course_passwords:
+                self._sync_course_passwords(db, existing['id'], verifier, now)
+                self._event(db, credential.course_key, key, 'student', 'password-setup',
+                            '개인 비밀번호 최초 설정 · 기존 웹·IDE 인증 만료')
         return self.account(key)
+
+    def setup_password(self, credential, password, confirmation):
+        confirm_password(password, confirmation)
+        return self.register(credential.student_key, password, credential=credential,
+                             replace_course_passwords=True)
+
+    def _sync_course_passwords(self, db, student_id, verifier, now):
+        if student_id is None:
+            return
+        courses = db.execute('SELECT e.course_key FROM platform_enrollments e JOIN admin_courses c ON c.course_key=e.course_key '
+                             "WHERE e.student_id=? AND e.active=1 AND c.status='active'",
+                             (student_id,)).fetchall()
+        for row in courses:
+            self.state._set_student_password_hash_in_connection(db, student_id=student_id,
+                course_key=row['course_key'], password_hash=verifier, now=now)
+            # Also invalidate outstanding claims if an imported credential was
+            # missing or happened to equal this verifier.
+            self.state._revoke_course_credentials(db, student_id=student_id,
+                course_key=row['course_key'], now=now, delete_password=False)
 
     def account(self, key):
         with self.state._connection() as db:
@@ -289,6 +324,8 @@ class StudentRegistration:
         authenticated = self.authenticate(account['student_key'], current_password)
         if not hmac.compare_digest(authenticated['password_hash'], account['password_hash']):
             raise PlatformAccessDenied()
+        if isinstance(new_password, str) and hmac.compare_digest(current_password.encode('utf-8'), new_password.encode('utf-8')):
+            raise RegistrationError('현재 비밀번호와 다른 새 비밀번호를 입력하세요.')
         return self._replace_password(account['student_key'], new_password, account=account)
 
     def reset_password(self, key, token, new_password):
@@ -316,11 +353,11 @@ class StudentRegistration:
             else:
                 row = self._token(db, key, token, 'reset')
                 db.execute('UPDATE student_membership_tokens SET used_at=? WHERE token_hash=?', (utc_iso(), row['token_hash']))
-            # Password-hash checks invalidate every old common session. Course
-            # passwords and IDE tokens remain separate credentials.
-            db.execute('UPDATE student_accounts SET password_hash=?,updated_at=? WHERE student_key=?', (verifier, utc_iso(), key))
-            db.execute('UPDATE student_membership_tokens SET used_at=? WHERE student_key=? AND used_at IS NULL', (utc_iso(), key))
-            self._event(db, None, key, 'student', 'password-change', '회원 비밀번호 변경 · 공통 웹 세션 만료')
+            now = utc_iso()
+            db.execute('UPDATE student_accounts SET password_hash=?,updated_at=? WHERE student_key=?', (verifier, now, key))
+            self._sync_course_passwords(db, current['student_id'], verifier, now)
+            db.execute('UPDATE student_membership_tokens SET used_at=? WHERE student_key=? AND used_at IS NULL', (now, key))
+            self._event(db, None, key, 'student', 'password-change', '회원 비밀번호 변경 · 기존 웹·IDE 인증 만료')
         return self.account(key)
 
     def _current(self, db, account):

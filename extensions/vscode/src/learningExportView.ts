@@ -9,6 +9,7 @@ import { collectLearningCode, learningExportDirectory, MAX_LEARNING_EXPORT_BYTES
 import { studentMaterialFilename, verifyStudentMaterial, type StudentMaterial } from "./studentMaterials";
 import type { SubmissionVersion } from "./submissionHistory";
 import type { Assignment } from "./types";
+import { confirmExportPrivacy } from "./exportPrivacy";
 
 export const LEARNING_EXPORT_COMMAND = "autograde.exportLearning";
 export interface ExportWorkspace { readonly rootPath: string; readonly assignmentId?: string; readonly title?: string }
@@ -113,6 +114,8 @@ export class LearningExportView implements vscode.Disposable {
       if (!destination?.[0]) return;
       if (!hostFile(destination[0])) throw new Error("현재 IDE가 접근할 수 있는 같은 실행 환경의 개인 폴더나 USB를 선택하세요.");
       const outputDirectory = await learningExportDirectory(destination[0].fsPath, excluded()); guard();
+      if (!await confirmExportPrivacy(vscode.window)) return;
+      guard();
       let skippedEditors = 0, mustRemainSaved = chosen.has("current");
       const scopedDirty = () => workspace ? vscode.workspace.textDocuments.filter(document => document.isDirty && hostFile(document.uri) && contains(workspace.rootPath, document.uri.fsPath)) : [];
       const assertSavedCode = () => {

@@ -32,7 +32,7 @@ _REQUIRED_KEYS = frozenset(
 _OPTIONAL_KEYS = frozenset(
     {"grading_runtime", "bundle_worker_count", "external_access_mode", "web_public_base_url", "web_port",
      "instructor_assignment_web_enabled", "instructor_rubric_web_enabled", "instructor_auth_mode", "roster_bootstrap_mode",
-     "instructor_next_results_enabled", "instructor_next_course_keys", "learning_runtime_socket", "instructor_runner_image"}
+     "instructor_next_results_enabled", "instructor_next_course_keys", "next_web_port", "learning_runtime_socket", "instructor_runner_image"}
 )
 _ALLOWED_KEYS = _REQUIRED_KEYS | _OPTIONAL_KEYS
 _SECRET_KEY_PARTS = frozenset(
@@ -174,6 +174,12 @@ def load_pilot_config(path: str | Path) -> PilotConfig:
         if urlsplit(values["web_public_base_url"]).scheme != urlsplit(values["public_base_url"]).scheme:
             raise PilotConfigError("web and API must use the same transport scheme")
     _validate_local_http_binding(values)
+    if 'next_web_port' in raw_values:
+        if 'web_port' not in values:
+            raise PilotConfigError('next_web_port requires web_port and web_public_base_url')
+        values['next_web_port'] = _bounded_integer(raw_values['next_web_port'], key='next_web_port', minimum=1, maximum=65535)
+        if values['next_web_port'] in {values['port'], values['web_port']}:
+            raise PilotConfigError('next_web_port must differ from Python web and API ports')
     return PilotConfig(source=source, values=MappingProxyType(values))
 
 

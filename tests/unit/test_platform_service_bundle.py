@@ -152,6 +152,37 @@ def test_bundle_upload_rejects_invalid_archive(bundle_platform) -> None:
     assert caught.value.code == "invalid_bundle"
 
 
+def test_archive_between_initial_authorization_and_publication_fence_cannot_recreate_source(bundle_platform, monkeypatch):
+    from autograde.course_admin import CourseAdminService
+    from autograde.course_deletion_runtime import configure_course_deletion
+    from autograde.settings import AppPaths
+    state, store, service, token, _, _, payload = bundle_platform
+    paths = AppPaths.from_value(state.database.parent).ensure()
+    courses = CourseAdminService(state)
+    with state._write() as db:
+        db.execute("INSERT INTO admin_courses(course_key,code,status,legacy,created_at,updated_at) VALUES(?,?,'active',1,'now','now')", (COURSE, COURSE))
+    class Registry:
+        def invalidate(self, key):
+            pass
+    configure_course_deletion(paths, courses, Registry())
+    original = service._owned_bundle_assignment
+    checked = []
+    def authorize(access_token, assignment_id):
+        assignment = original(access_token, assignment_id)
+        checked.append(True)
+        if len(checked) == 1:
+            courses.set_status(COURSE, 'archived')
+        return assignment
+    monkeypatch.setattr(service, '_owned_bundle_assignment', authorize)
+    def must_not_ingest(*args, **kwargs):
+        pytest.fail('archived request attempted to recreate source bytes')
+    monkeypatch.setattr(store, 'ingest', must_not_ingest)
+    with pytest.raises(PlatformAPIError):
+        service.submit_bundle(token,'race-key','basn_lab01',BytesIO(payload),len(payload))
+    assert courses.archive_status(COURSE)['cleanup_status'] == 'complete'
+    assert not state.list_bundle_dashboard_rows(course_key=COURSE)
+
+
 def test_dashboard_requires_basic_auth_and_escapes_content(bundle_platform) -> None:
     _state, _store, service, _token, _notifications, _starter, _payload = bundle_platform
 

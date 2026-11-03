@@ -132,8 +132,11 @@ def run(config, *, isolated=False):
         extension_distribution = None
         web_module_checks = {}
         from .operations import OperationsService
+        from .operations_readiness import ClassroomReadiness
         operations = OperationsService(paths, workers=workers,
-            runtime_configured=bool(values.get('learning_runtime_socket')))
+            runtime_configured=bool(values.get('learning_runtime_socket')),
+            readiness=ClassroomReadiness(public_api_url=values['public_base_url'],
+                public_web_url=values['web_public_base_url'], next_port=values.get('next_web_port', 18082)))
         if identities is not None:
             web_module_checks['instructor_identity'] = identities.check_ready
         if admin_enabled:

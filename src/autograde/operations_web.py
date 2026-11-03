@@ -3,9 +3,10 @@ from html import escape
 import json
 from datetime import datetime, timedelta, timezone
 
-from .platform_service import PlatformResponse
+from .platform_service import PlatformAPIError, PlatformResponse
 from .platform_state import PlatformAccessDenied
 from .instructor_responsive import result_table
+from .operations_readiness_view import render as render_readiness
 
 ALERTS = {'workers_unavailable': '채점 작업자 확인 필요', 'storage_low': '저장 공간 부족',
     'storage_unknown': '저장 공간 미확인', 'queue_wait_high': '5분 이상 채점 대기',
@@ -29,7 +30,8 @@ ALERT_ACTIONS = {
 
 
 def matches(path):
-    return path in {'/instructor/operations', '/instructor/operations/diagnostics.json'}
+    return path in {'/instructor/operations', '/instructor/operations/diagnostics.json',
+                   '/instructor/operations/readiness', '/instructor/operations/readiness/status'}
 
 
 def _e(value):
@@ -63,17 +65,28 @@ def _badge(state):
 def request(web, method, path, form, session):
     if web.principal and web.principal.role != 'admin':
         raise PlatformAccessDenied('administrator required')
+    if path == '/instructor/operations/readiness':
+        if method != 'POST':
+            raise PlatformAPIError(405, 'method_not_allowed', '준비 점검 버튼으로 점검을 시작하세요.')
+        if set(form) - {'csrf'}:
+            raise PlatformAPIError(400, 'invalid_readiness_request', '준비 점검 요청을 다시 확인하세요.')
+        web.operations.check_readiness()
+        return PlatformResponse(303, None, {'Location': '/instructor/operations#classroom-readiness'})
     if method != 'GET':
-        from .platform_service import PlatformAPIError
         raise PlatformAPIError(405, 'method_not_allowed', '운영 현황은 조회만 가능합니다.')
+    if path == '/instructor/operations/readiness/status':
+        return PlatformResponse(200, json.dumps(web.operations.snapshot()['readiness'], ensure_ascii=False),
+            {'Content-Type': 'application/json; charset=utf-8'})  # HTTP boundary always sets no-store.
     if path.endswith('/diagnostics.json'):
         return PlatformResponse(200, json.dumps(web.operations.diagnostics(), ensure_ascii=False),
             {'Content-Type': 'application/json; charset=utf-8',
              'Content-Disposition': 'attachment; filename="autograde-diagnostics.json"'})
     report = web.operations.snapshot()
     body = '<p class="portal-intro">채점 지연·저장 공간·백업·실습실 기기를 확인합니다. 접속 보고가 없으면 정상으로 간주하지 않습니다.</p>'
-    body += '<div class="ui-toolbar"><a class="ui-action primary" href="/instructor/operations">현황 새로고침</a><a class="ui-action secondary" href="/instructor/operations/diagnostics.json">지원용 진단 다운로드</a></div>'
+    body += '<div class="ui-toolbar"><a class="ui-action secondary" href="/instructor/operations">현황 새로고침</a><a class="ui-action secondary" href="/instructor/operations/diagnostics.json">지원용 진단 다운로드</a></div>'
     body += '<p class="hint">관측 시각: ' + _time(report['observed_at']) + ' KST · 최대 15초 간격으로 집계합니다. 진단에는 학생 정보·코드·계정 비밀이 포함되지 않습니다.</p>'
+    if 'readiness' in report:
+        body += render_readiness(report['readiness'], session.get('csrf'))
     if report['alerts']:
         body += '<section class="ui-panel" aria-labelledby="operations-attention"><h2 id="operations-attention">확인할 항목 <span class="ui-badge" data-tone="warning">' + str(len(report['alerts'])) + '건</span></h2><ul class="operations-alerts">'
         for item in report['alerts']:

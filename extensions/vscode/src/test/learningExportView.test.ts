@@ -7,11 +7,14 @@ import { AutogradeClient } from "../api";
 import { createSubmissionBundle } from "../bundle";
 import { contentCanonicalJson, contentSha256, type ContentManifest, type ContentContext } from "../contentSync";
 import type { StudentMaterial } from "../studentMaterials";
+import { EXPORT_PRIVACY_TITLE, EXPORT_PRIVACY_CONTINUE } from "../exportPrivacy";
 
 interface Loader { _load(name: string, parent: unknown, main: boolean): unknown }
 const loader = require("node:module") as Loader, original = loader._load;
 interface Pick {category?: string; format?: string}
 const messages: string[] = [];
+const privacyNotices: {modal?: boolean; detail?: string}[] = [];
+let privacyDecision: string | undefined = EXPORT_PRIVACY_CONTINUE, afterPrivacy = () => {};
 let trusted = true, directory = "", format = "folder", selectedCategories = ["current"], picks = 0, dialogCount = 0;
 let afterPick = () => {}, afterDirectory = () => {}, decision: string | undefined = "저장하고 내보내기";
 let documents: {isDirty: boolean; uri: {scheme: string; fsPath: string; authority?: string}; save(): Promise<boolean>}[] = [];
@@ -24,7 +27,10 @@ const stub = {
   ProgressLocation: {Notification: 1},
   window: {
     showInformationMessage: async (message: string) => {messages.push(message);},
-    showWarningMessage: async (message: string, options?: {modal?: boolean}) => {messages.push(message); return options?.modal ? decision : undefined;},
+    showWarningMessage: async (message: string, options?: {modal?: boolean; detail?: string}) => {
+      if (message === EXPORT_PRIVACY_TITLE) {privacyNotices.push(options ?? {}); afterPrivacy(); return privacyDecision;}
+      messages.push(message); return options?.modal ? decision : undefined;
+    },
     showQuickPick: async (items: Pick[], options: {canPickMany: boolean}) => {
       picks++; afterPick();
       if (!options.canPickMany) return items.find(item => item.format === format);
@@ -54,6 +60,7 @@ const material: StudentMaterial = {id: "mat_test", courseKey: "come2201", title:
 async function fixture() {
   messages.length = 0; trusted = true; selectedCategories = ["current"]; format = "folder"; picks = 0; dialogCount = 0;
   afterPick = () => {}; afterDirectory = () => {}; documents = []; decision = "저장하고 내보내기";
+  privacyNotices.length = 0; privacyDecision = EXPORT_PRIVACY_CONTINUE; afterPrivacy = () => {};
   remoteName = undefined; directoryScheme = "file"; directoryAuthority = ""; folders = [];
   const root = await mkdtemp(path.join(tmpdir(), "autograde-export-view-")), session = path.join(root, "session"), currentCode = path.join(session, "workspace"), cache = path.join(session, "materials"), output = path.join(root, "personal");
   await mkdir(currentCode, {recursive: true}); await mkdir(output); directory = output;
@@ -90,6 +97,34 @@ test("offline current-code export requires no server login and never submits or 
     assert.equal(await readFile(path.join(f.output, outputs[0]!, "current-code/main.cpp"), "utf8"), "current code");
     assert.equal(f.state.reads, 0); assert.equal(f.state.histories, 0); assert.equal(f.state.workspace, f.currentCode);
     assert.match(messages.join(" "), /내보내기 완료/); assert.match(messages.join(" "), /공식 제출은 별도/);
+    assert.equal(privacyNotices.length, 1); assert.equal(privacyNotices[0]!.modal, true);
+    assert.match(privacyNotices[0]!.detail!, /학번.*이름.*점수/);
+    assert.match(privacyNotices[0]!.detail!, /삭제되지 않으며.*다른 사람이/);
+  } finally {await f.close();}
+});
+
+test("export privacy cancellation or an unrelated answer creates no copies or downloads", async () => {
+  for (const choice of [undefined, "취소", "저장하고 내보내기", "yes"]) {
+    const f = await fixture(); let saves = 0;
+    try {
+      privacyDecision = choice; selectedCategories = ["current", "submissions", "content", "personal"];
+      documents = [{isDirty: true, uri: {scheme: "file", fsPath: path.join(f.currentCode, "main.cpp")}, save: async () => {saves++; return true;}}];
+      await f.view.show();
+      assert.equal(privacyNotices.length, 1); assert.deepEqual(await readdir(f.output), []);
+      assert.equal(f.state.reads, 0); assert.equal(saves, 0);
+      assert.equal((await readdir(f.session)).includes("materials"), false);
+    } finally {await f.close();}
+  }
+});
+
+test("privacy confirmation is not remembered and cannot authorize a changed student", async () => {
+  const f = await fixture();
+  try {
+    await f.view.show(); assert.equal((await readdir(f.output)).length, 1);
+    privacyDecision = undefined; await f.view.show();
+    assert.equal(privacyNotices.length, 2); assert.equal((await readdir(f.output)).length, 1);
+    privacyDecision = EXPORT_PRIVACY_CONTINUE; afterPrivacy = () => {f.state.generation++;};
+    await f.view.show(); assert.equal((await readdir(f.output)).length, 1);
   } finally {await f.close();}
 });
 

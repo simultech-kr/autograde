@@ -48,6 +48,8 @@ main.portal-wide{max-width:1080px}
 .portal-result h3{margin:0;font-size:1.05rem}.portal-result dl{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,180px),1fr));gap:12px}
 .portal-result dt{font-size:.85rem;color:var(--muted)}.portal-result dd{margin:4px 0 0;font-weight:600}
 .portal-result code{font-size:.85rem}.portal-result .portal-score{font-size:1.25rem}
+.student-score-values{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;padding-block:12px;border-block:1px solid var(--border)}
+.student-score-values dt{color:var(--muted);font-size:.85rem}.student-score-values dd{margin:5px 0;font-size:1.2rem;font-weight:700}
 .portal-help{padding:16px;border-left:3px solid var(--accent);background:var(--soft)}
 .portal-empty{padding:16px;border:1px solid var(--border)}
 .portal-footer{padding-top:20px;border-top:1px solid var(--border);margin-top:24px;color:var(--muted);font-size:.85rem}
@@ -80,7 +82,8 @@ def navigation(course, current, *, materials=False, exams=False):
     base = '/courses/' + escape(course, quote=True)
     links = [('portal', '내 수업', base + '/portal'),
              ('assignments', '과제 받기', base + '/assignments'),
-             ('results', '제출 현황', base + '/results')]
+             ('results', '내 점수', base + '/results'),
+             ('privacy', '개인정보 활용', base + '/privacy')]
     if materials:
         links.append(('materials', '내 자료', base + '/materials'))
     if exams:

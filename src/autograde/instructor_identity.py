@@ -378,11 +378,19 @@ class ScopedCourses:
             raise PlatformAccessDenied()
         return self.service.update_course(key, **fields)
 
-    def set_status(self, key, status):
+    def set_status(self, key, status, **options):
         self.get_course(key)
         if self.principal.read_only:
             raise PlatformAccessDenied()
-        return self.service.set_status(key, status)
+        return self.service.set_status(key, status, **options)
+
+    def privacy_archive_preview(self, key):
+        self.get_course(key)
+        return self.service.privacy_archive_preview(key)
+
+    def archive_status(self, key):
+        self.get_course(key)
+        return self.service.archive_status(key)
 
     def deletion_preview(self, key):
         self.get_course(key)

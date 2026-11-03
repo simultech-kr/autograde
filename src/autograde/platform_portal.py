@@ -162,6 +162,8 @@ class CoursePortal:
         self.lock = threading.RLock()
         from .student_registration_web import StudentMembership
         self.members = StudentMembership(self) if services or courses is not None else None
+        from .student_privacy import StudentPrivacy
+        self.privacy = StudentPrivacy(self.members.store.state) if self.members else None
 
     def _cookie(self, course, value, *, clear=False):
         secure = "; Secure" if self.web_url.startswith("https://") else ""
@@ -239,7 +241,7 @@ class CoursePortal:
         return PlatformResponse(status, document, headers)
 
     def _entry(self, course, message="", status=200, *, destination=None):
-        if destination not in {None, 'exam-papers', 'materials', 'portal', 'results'}:
+        if destination not in {None, 'exam-papers', 'materials', 'portal', 'results', 'privacy'}:
             raise ValueError('invalid portal destination')
         csrf = new_api_token()
         entry = {"course": course, "csrf": csrf}
@@ -248,8 +250,8 @@ class CoursePortal:
         signed = sign_browser_value(self.secret, "portal-entry", entry,
                                     lifetime_seconds=600)
         login_path = f'/courses/{course}/' + (destination + '/login' if destination else 'login')
-        title = {'exam-papers': '시험지 받기', 'materials': '내 자료 받기', 'portal': '학생 포털 로그인', 'results': '제출 현황 로그인', None: '과제 받기'}[destination]
-        button = {'exam-papers': '시험지 확인', 'materials': '내 자료 확인', 'portal': '내 수업으로 이동', 'results': '내 제출 현황 확인', None: '과제 확인'}[destination]
+        title = {'exam-papers': '시험지 받기', 'materials': '내 자료 받기', 'portal': '학생 포털 로그인', 'results': '내 점수 로그인', 'privacy': '개인정보 활용 동의 확인', None: '과제 받기'}[destination]
+        button = {'exam-papers': '시험지 확인', 'materials': '내 자료 확인', 'portal': '내 수업으로 이동', 'results': '내 점수 확인', 'privacy': '내 선택 확인', None: '과제 확인'}[destination]
         body = (f'<p>{html.escape(self._course_label(course))}</p>'
                 + (f'<p class="error" role="alert">{html.escape(message)}</p>' if message else '') +
                 f'<form method="post" action="{login_path}">'
@@ -404,8 +406,8 @@ class CoursePortal:
                  f'<input type="hidden" name="csrf" value="{session.csrf}"><button class="secondary">로그아웃</button></form>')
         body += '<p>'
         if not session.member_session:
-            body += f'<a href="/courses/{course}/activate-account">기존 학생 · 회원 계정 만들기</a> · '
-        body += '<a href="/student/account">내 수강 교과목</a></p>'
+            body += f'<a href="/courses/{course}/password">처음 로그인한 학생 · 개인 비밀번호 설정·변경</a> · '
+        body += f'<a href="/courses/{course}/privacy">개인정보 활용 동의 · 내 선택</a> · <a href="/student/account">내 수강 교과목</a></p>'
         return self._page("과제 선택", body, status=status, enhanced=bool(available), navigation=self._student_nav(course, 'assignments'))
 
     def portal_request(self, method, path, form, cookies, origin=None, authorization=None):
@@ -413,6 +415,10 @@ class CoursePortal:
             response = self.instructor.request(method, path, form, cookies, origin, authorization)
             if response is not None:
                 return response
+        from .student_privacy_web import request as privacy_request
+        response = privacy_request(self, method, path, form, cookies, origin)
+        if response is not None:
+            return response
         if self.members:
             response = self.members.request(method, path, form, cookies, origin)
             if response is not None:

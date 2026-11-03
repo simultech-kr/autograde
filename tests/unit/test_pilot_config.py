@@ -83,6 +83,26 @@ def test_portal_accepts_distinct_loopback_listeners(tmp_path):
     assert config.values["web_port"] == 18081
 
 
+def test_next_health_port_is_an_optional_typed_monitoring_setting(tmp_path):
+    base = 'web_public_base_url,http://127.0.0.1:18081\nweb_port,18081\n'
+    config = load_pilot_config(write_config(tmp_path / 'pilot.csv', extra=base + 'next_web_port,18282\n'))
+    assert config.values['next_web_port'] == 18282
+    default = load_pilot_config(write_config(tmp_path / 'default.csv', extra=base))
+    assert default.values.get('next_web_port', 18082) == 18082
+
+
+@pytest.mark.parametrize('port', ['0', '-1', '65536', '3.5', 'true', '18080', '18081', '127.0.0.1:18082'])
+def test_next_health_port_rejects_invalid_or_python_listener_ports(tmp_path, port):
+    extra = 'web_public_base_url,http://127.0.0.1:18081\nweb_port,18081\nnext_web_port,' + port + '\n'
+    with pytest.raises(PilotConfigError, match='next_web_port'):
+        load_pilot_config(write_config(tmp_path / 'pilot.csv', extra=extra))
+
+
+def test_next_health_port_requires_a_configured_portal(tmp_path):
+    with pytest.raises(PilotConfigError, match='next_web_port requires'):
+        load_pilot_config(write_config(tmp_path / 'pilot.csv', extra='next_web_port,18082\n'))
+
+
 @pytest.mark.parametrize('extra', [
     'instructor_rubric_web_enabled,yes\n',
     'instructor_rubric_web_enabled,true\n',

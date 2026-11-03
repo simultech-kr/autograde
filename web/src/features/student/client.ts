@@ -6,7 +6,7 @@ export class StudentApiError extends Error {
 }
 export function allowedStudentPath(path: string): boolean {
   if (/^\/student\/api\/(bootstrap|register|login|logout|enroll|withdraw|password|reset|activate)$/.test(path)) return true;
-  const match = /^\/student\/api\/course\/([a-z0-9][a-z0-9_-]{0,95})(\/claims)?$/.exec(path);
+  const match = /^\/student\/api\/course\/([a-z0-9][a-z0-9_-]{0,95})(\/(?:claims|privacy))?$/.exec(path);
   return Boolean(match && courseKey(match[1]));
 }
 export async function studentRequest(path: string, fields?: Record<string, string>, signal?: AbortSignal, fetcher: typeof fetch = fetch): Promise<unknown> {

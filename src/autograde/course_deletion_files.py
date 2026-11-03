@@ -49,18 +49,24 @@ def _allowed(relative, database_name='state.sqlite3'):
     parts = p.parts
     if len(parts) == 4 and parts[:2] == ('bundles', 'sha256'):
         return bool(HEX.fullmatch(parts[3]) and parts[2] == parts[3][:2])
+    if len(parts) == 2 and parts[0] == 'bundles':
+        return bool(re.fullmatch(r'\.(incoming|create)-[A-Za-z0-9_-]{1,100}', parts[1]))
     if len(parts) == 3 and parts[0] == 'instructor-inputs':
         return parts[1] in {'assessment', 'data'} and bool(HEX.fullmatch(parts[2]))
     if len(parts) == 2 and parts[0] in {'workspaces', 'snapshots', 'reports'}:
         return bool(re.fullmatch(r'[A-Za-z0-9_-]+(?:\.json)?', parts[1]))
     if len(parts) == 2 and parts[0] == 'student-materials':
-        return bool(re.fullmatch(r'mat_[0-9a-f]+-[0-9]+-[0-9a-f]{64}\.(pdf|zip)', parts[1]))
+        return bool(re.fullmatch(r'(mat_[0-9a-f]+-[0-9]+-[0-9a-f]{64}\.(pdf|zip)|\.upload-[0-9a-f]{32})', parts[1]))
     if len(parts) == 2 and parts[0] == 'exam-papers':
         return bool(re.fullmatch(r'ep_[0-9a-f]+-[0-9a-f]{64}\.pdf', parts[1]))
     if len(parts) == 2 and parts[0] == 'ide-extensions':
         return bool(re.fullmatch(r'[0-9a-f]{64}\.vsix', parts[1]))
     if len(parts) == 3 and parts[:2] == ('content', 'objects'):
         return bool(HEX.fullmatch(parts[2]))
+    if len(parts) == 4 and parts[:2] == ('content', 'objects'):
+        return bool(HEX.fullmatch(parts[2]) and (HEX.fullmatch(parts[3]) or re.fullmatch(r'\.pending-[0-9a-f]{32}', parts[3])))
+    if len(parts) == 3 and parts[:2] == ('cache', 'instructor-submission-downloads'):
+        return bool(re.fullmatch(r'([0-9a-f]{64}|\.building-[A-Za-z0-9_-]{1,100})\.(zip|bin)', parts[2]))
     if len(parts) == 3 and parts[:2] == ('content', 'git'):
         return bool(re.fullmatch(r'[0-9a-f]{64}\.git', parts[2]))
     return len(parts) == 2 and parts[0] == database_name + '.learning-checkpoints' and bool(HEX.fullmatch(parts[1]))
@@ -133,10 +139,13 @@ def _write_manifest(folder, manifest):
 
 
 class CourseFilePlan:
-    def __init__(self, paths, course_key, candidates, *, shared=0, external=0):
+    def __init__(self, paths, course_key, candidates, *, shared=0, external=0, purpose='deletion'):
         self.root = paths.root
         self.database_name = paths.database.name
         self.course_key = course_key
+        if purpose not in {'deletion', 'privacy_archive'}:
+            raise ValueError('invalid file plan purpose')
+        self.purpose = purpose
         self.entries = []
         self.folder = None
         self._locks = []
@@ -191,7 +200,7 @@ class CourseFilePlan:
         self.folder = folder
         (self.folder / 'files').mkdir(mode=0o700)
         manifest = {'schema': 1, 'job_id': deletion_id, 'course_key': self.course_key,
-                    'database_name': self.database_name, 'entries': self.entries}
+                    'database_name': self.database_name, 'entries': self.entries, 'purpose': self.purpose}
         # Persist the full intent before the first move. Recovery checks which
         # source/destination exists, so a crash between any two moves is safe.
         _write_manifest(self.folder, manifest)
@@ -345,7 +354,9 @@ def _finish(root, folder, *, committed):
     manifest = json.loads(manifest_path.read_text())
     if manifest['schema'] != 1 or manifest['job_id'] != folder.name or not ID.fullmatch(folder.name):
         raise PlatformConflict('삭제 복구 기록이 올바르지 않습니다.')
-    if committed:
+    if manifest.get('purpose', 'deletion') not in {'deletion', 'privacy_archive'}:
+        raise PlatformConflict('삭제 복구 목적을 확인할 수 없습니다.')
+    if committed and manifest.get('purpose', 'deletion') == 'deletion':
         from .course_file_guard import mark_course_files_deleted
         mark_course_files_deleted(root, manifest['course_key'])
     if (folder / 'files').is_symlink():
@@ -401,11 +412,13 @@ def recover_course_files(paths, state):
     for folder in parent.iterdir():
         if folder.is_symlink() or not folder.is_dir() or not ID.fullmatch(folder.name):
             raise PlatformConflict('삭제 복구 항목을 확인할 수 없습니다.')
-        with state._connection() as db:
-            committed = db.execute('SELECT 1 FROM admin_course_deletions WHERE job_id=?', (folder.name,)).fetchone() is not None
         if (folder / 'manifest.json').is_symlink():
             raise PlatformConflict('삭제 복구 기록이 링크입니다.')
         manifest = json.loads((folder / 'manifest.json').read_text()) if (folder / 'manifest.json').is_file() else None
+        with state._connection() as db:
+            table = 'admin_course_privacy_archives' if manifest and manifest.get('purpose') == 'privacy_archive' else 'admin_course_deletions'
+            exists = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone()
+            committed = bool(exists and db.execute(f'SELECT 1 FROM {table} WHERE job_id=?', (folder.name,)).fetchone())
         if manifest:
             from .course_file_guard import course_file_guard
             with course_file_guard(paths.root, manifest['course_key'], exclusive=True):

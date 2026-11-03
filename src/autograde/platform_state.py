@@ -1751,6 +1751,8 @@ class PlatformStateStore:
                 yield connection
             except sqlite3.IntegrityError as exc:
                 connection.rollback()
+                if str(exc) == "course_privacy_closed":
+                    raise PlatformConflict("개인정보를 파기한 수업에는 학생 기록을 다시 저장할 수 없습니다.") from exc
                 if str(exc) == "admin_course_not_active":
                     raise PlatformConflict("course is not active") from exc
                 if str(exc) == "assignment_deleted":

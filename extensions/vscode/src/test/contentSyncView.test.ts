@@ -5,18 +5,23 @@ import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { ApiError, AutogradeClient, HttpTransport, type SessionTokenStore } from "../api";
 import { contentCanonicalJson, contentSha256 } from "../contentSync";
+import { EXPORT_PRIVACY_TITLE, EXPORT_PRIVACY_CONTINUE } from "../exportPrivacy";
 
 interface Loader { _load(name: string, parent: unknown, main: boolean): unknown }
 const loader = require("node:module") as Loader, original = loader._load;
 const messages: string[] = [];
 let trusted = true, pickCount = 0, action = "sync", directory = "", dialogCount = 0;
 let afterPick = () => {};
+let privacyDecision: string | undefined = EXPORT_PRIVACY_CONTINUE, privacyNotices = 0;
 const stub = {
   CancellationTokenSource: class { public token = {isCancellationRequested: false}; public cancel() {this.token.isCancellationRequested = true;} public dispose() {} },
   workspace: {get isTrusted() {return trusted;}, workspaceFolders: []}, ProgressLocation: {Notification: 1},
   window: {
     showInformationMessage: async (message: string) => {messages.push(message);},
-    showWarningMessage: async (message: string) => {messages.push(message);},
+    showWarningMessage: async (message: string) => {
+      if (message === EXPORT_PRIVACY_TITLE) {privacyNotices++; return privacyDecision;}
+      messages.push(message); return undefined;
+    },
     showQuickPick: async (items: {action?: string}[]) => {pickCount++; afterPick(); return items.find(item => item.action === action) ?? items[0];},
     showOpenDialog: async () => {dialogCount++; return [{scheme: "file", fsPath: directory}];},
     withProgress: async (_options: unknown, task: (progress: unknown, cancellation: unknown) => Promise<unknown>) => task({report() {}},
@@ -47,6 +52,7 @@ class Tokens implements SessionTokenStore {
 }
 async function fixture() {
   messages.length = 0; trusted = true; pickCount = 0; action = "sync"; directory = ""; dialogCount = 0; afterPick = () => {};
+  privacyDecision = EXPORT_PRIVACY_CONTINUE; privacyNotices = 0;
   const root = await mkdtemp(path.join(tmpdir(), "autograde-content-view-"));
   const tokens = new Tokens();
   const state = {reads: 0, requests: 0, empty: false, unsupported: false, verifyConflict: false, afterObject: () => {},
@@ -93,10 +99,24 @@ test("content UI stages once, repeats with cache reuse, then exports without new
     assert.equal(await f.view.show(), "synced"); assert.equal(f.state.reads, 1); assert.equal(dialogCount, 0);
     assert.match(messages.join(" "), /캐시에 보관/);
     await f.view.show(); assert.equal(f.state.reads, 1); assert.match(messages.join(" "), /변경 파일 0개 수신, 1개 재사용/);
+    assert.equal(privacyNotices, 0);
     action = "export"; directory = path.join(f.root, "exports"); await mkdir(directory);
     await f.view.show(); assert.equal(f.state.reads, 1); assert.equal(dialogCount, 1);
     assert.equal((await readdir(directory)).length, 1); assert.match(messages.join(" "), /자동으로 열거나 실행하지 않습니다/);
+    assert.equal(privacyNotices, 1);
   } finally {await f.close();}
+});
+
+test("cancelling the external content export never writes a cache or independent copy", async () => {
+  for (const answer of [undefined, "취소", "다른 선택"]) {
+    const f = await fixture();
+    try {
+      action = "export"; directory = path.join(f.root, "personal"); await mkdir(directory); privacyDecision = answer;
+      assert.equal(await f.view.show(), "cancelled");
+      assert.equal(privacyNotices, 1); assert.equal(f.state.reads, 0);
+      assert.deepEqual(await readdir(f.root), ["personal"]); assert.deepEqual(await readdir(directory), []);
+    } finally {await f.close();}
+  }
 });
 
 test("instructor-request guard can expire during a picker without staging or falsely completing", async () => {

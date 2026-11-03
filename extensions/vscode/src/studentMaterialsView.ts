@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { ApiError, AutogradeClient, RequestCancelledError } from "./api";
 import { shouldDiscardTokensAfterRefreshError } from "./authPolicy";
 import { materialDirectory, materialErrorMessage, saveStudentMaterial, type StudentMaterial } from "./studentMaterials";
+import { confirmExportPrivacy } from "./exportPrivacy";
 
 export interface StudentMaterialsViewOptions {
   /** Optional per-student material directory; it is a suggestion, never selected or opened automatically. */
@@ -122,6 +123,10 @@ export class StudentMaterialsView implements vscode.Disposable {
         ...(vscode.workspace.workspaceFolders ?? []).filter(item => item.uri.scheme === "file").map(item => item.uri.fsPath)];
       const directory = await materialDirectory(requestedDirectory, assignments());
       assertCurrent();
+      if (!isManaged) {
+        if (!await confirmExportPrivacy(vscode.window)) return "cancelled";
+        assertCurrent();
+      }
       const saved = await vscode.window.withProgress({location: vscode.ProgressLocation.Notification,
         title: "개인 배포 자료 다운로드 및 무결성 확인", cancellable: true}, async (_progress, cancellation) => {
         const subscription = cancellation.onCancellationRequested(() => controller.abort());

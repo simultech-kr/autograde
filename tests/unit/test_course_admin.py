@@ -127,16 +127,17 @@ def test_global_name_edit_requires_matching_previous_name_and_preserves_credenti
     assert students.get_student('come3105', '001')['name'] == ''
 
 
-def test_archive_blocks_writes_and_preserves_records(services):
+def test_archive_erases_personal_records_and_cannot_reactivate(services):
     _, courses, students = services
     students.add_student('come2201', student_key='001', password='123456')
     courses.set_status('come2201', 'archived')
     assert not courses.is_active('come2201')
-    assert len(students.list_students('come2201')) == 1
+    assert students.list_students('come2201') == []
     with pytest.raises(PlatformConflict):
         students.add_student('come2201', student_key='002')
-    courses.set_status('come2201', 'active')
-    assert courses.is_active('come2201')
+    with pytest.raises(PlatformConflict):
+        courses.set_status('come2201', 'active')
+    assert courses.archive_status('come2201')['cleanup_status'] == 'complete'
 
 
 def test_csv_atomic_preview_privacy_and_retry(services):
@@ -251,11 +252,13 @@ def test_course_only_extension_credential_revocation(services, operation):
         courses.set_status('come2201', 'archived')
     with state._connection() as db:
         sessions = {r['course_key']: r['revoked_at'] for r in db.execute('SELECT * FROM platform_sessions')}
-        assert sessions['come2201'] is not None and sessions['come3105'] is None
+        assert sessions['come3105'] is None
+        assert 'come2201' not in sessions if operation == 'archive' else sessions['come2201'] is not None
         families = {r['course_key']: r['revoked_at'] for r in db.execute('SELECT * FROM platform_token_families')}
-        assert families['come2201'] is not None and families['come3105'] is None
+        assert families['come3105'] is None
+        assert 'come2201' not in families if operation == 'archive' else families['come2201'] is not None
         refresh = {r['token_family_id']: r['state'] for r in db.execute('SELECT * FROM platform_refresh_tokens')}
-        assert refresh == {'family0': 'revoked', 'family1': 'active'}
+        assert refresh == ({'family1': 'active'} if operation == 'archive' else {'family0': 'revoked', 'family1': 'active'})
 
 
 def test_course_archive_new_validation_queue_blocks(services):

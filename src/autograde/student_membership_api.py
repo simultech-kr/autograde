@@ -9,7 +9,7 @@ import json
 from .platform_auth import InvalidSignedValue, new_api_token, sign_browser_value, verify_browser_value
 from .platform_service import PlatformResponse
 from .platform_state import PlatformAccessDenied, PlatformNotFound
-from .student_registration import RegistrationError
+from .student_registration import RegistrationError, confirm_password
 
 PREFIX = '/student/api/'
 ACTIONS = {'bootstrap', 'register', 'login', 'logout', 'enroll', 'withdraw', 'password', 'reset', 'activate'}
@@ -128,8 +128,8 @@ def request(members, method, path, form, cookies, origin):
         fields = {
             'register': {'student_key', 'password'}, 'login': {'student_key', 'password'},
             'logout': set(), 'enroll': {'course_keys'}, 'withdraw': {'course_key'},
-            'activate': {'token'}, 'password': {'current_password', 'new_password'},
-            'reset': {'student_key', 'token', 'new_password'},
+            'activate': {'token'}, 'password': {'current_password', 'new_password', 'confirm_password'},
+            'reset': {'student_key', 'token', 'new_password', 'confirm_password'},
         }
         _fields(form, fields[action])
         account = _authenticate_csrf(members, cookies, form, required=action not in {'login', 'register', 'reset'})
@@ -154,9 +154,11 @@ def request(members, method, path, form, cookies, origin):
             members.store.activate_token(account, form['token'].strip())
             return bootstrap(members, cookies, message='본인 확인이 완료되었습니다. 명단이 일치하는 신청 수업이 연결되었습니다.')
         if action == 'password':
+            confirm_password(form['new_password'], form['confirm_password'])
             members.store.change_password(account, form['current_password'], form['new_password'])
-            return _clear(members, cookies, key=account['student_key'], message='회원 비밀번호가 변경되었습니다. 새 비밀번호로 로그인하세요.')
+            return _clear(members, cookies, key=account['student_key'], message='비밀번호가 변경되어 기존 웹·IDE 인증이 종료되었습니다. 새 비밀번호로 로그인하고 새 수령 코드로 IDE를 연결하세요.')
         if action == 'reset':
+            confirm_password(form['new_password'], form['confirm_password'])
             members.store.reset_password(form['student_key'], form['token'].strip(), form['new_password'])
             return _clear(members, cookies, key=form['student_key'].strip(), message='회원 비밀번호를 재설정했습니다. 새 비밀번호로 로그인하세요.')
         return _clear(members, cookies, key=account['student_key'])

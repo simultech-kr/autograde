@@ -18,10 +18,12 @@ import pytest
 @pytest.mark.parametrize("admin_enabled", [False, True])
 def test_launcher_lifecycle(tmp_path, blocked_web, admin_enabled):
     with ExitStack() as stack:
-        sockets = [stack.enter_context(socket.socket()) for _ in range(2)]
+        sockets = [stack.enter_context(socket.socket()) for _ in range(3)]
         for sock in sockets:
             sock.bind(("127.0.0.1", 0))
-        api_port, web_port = [sock.getsockname()[1] for sock in sockets]
+        api_port, web_port, next_port = [sock.getsockname()[1] for sock in sockets]
+        # Reserve, but do not listen on, the configured Next port. No test probes
+        # a developer's real Next process on the usual 18082 port.
         sockets[0].close()
         if blocked_web:
             sockets[1].listen()
@@ -31,6 +33,7 @@ def test_launcher_lifecycle(tmp_path, blocked_web, admin_enabled):
         config.write_text(f"key,value\ncourse_key,come3105\ndata_root,state\n"
             f"public_base_url,http://127.0.0.1:{api_port}\nlisten,127.0.0.1\nport,{api_port}\n"
             f"web_public_base_url,http://127.0.0.1:{web_port}\nweb_port,{web_port}\n"
+            f"next_web_port,{next_port}\n"
             f"instructor_assignment_web_enabled,{str(admin_enabled).lower()}\n")
         roster = tmp_path / "student_roster.csv"
         roster.write_text("course_key,student_key,active,password\ncome3105,001234,true,042731\ncome2201,001234,true,072731\n")
@@ -92,6 +95,37 @@ def test_launcher_lifecycle(tmp_path, blocked_web, admin_enabled):
                     response = connection.getresponse()
                     assert response.status == 200
                     assert '학생별 자료 배포' in response.read().decode()
+                    connection.request('GET', '/instructor/operations', headers={'Authorization': auth})
+                    response = connection.getresponse()
+                    assert response.status == 200
+                    ops_cookie = response.getheader('Set-Cookie').split(';', 1)[0]
+                    ops_csrf = re.search(rb'name="csrf" value="([^"]+)"', response.read())[1].decode()
+                    headers = {'Authorization': auth, 'Cookie': ops_cookie,
+                               'Origin': f'http://127.0.0.1:{web_port}',
+                               'Content-Type': 'application/x-www-form-urlencoded'}
+                    connection.request('POST', '/instructor/operations/readiness', urlencode({'csrf': ops_csrf}), headers)
+                    response = connection.getresponse()
+                    assert response.status == 303
+                    response.read()
+                    deadline = time.monotonic() + 8
+                    while True:
+                        connection.request('GET', '/instructor/operations/readiness/status', headers=headers)
+                        response = connection.getresponse()
+                        assert response.status == 200
+                        readiness = json.loads(response.read())
+                        if not readiness['checking']:
+                            break
+                        assert time.monotonic() < deadline
+                        time.sleep(.05)
+                    cards = {card['id']: card for card in readiness['checks']}
+                    assert cards['next']['state'] == 'error'
+                    assert str(next_port) in '\n'.join(cards['next']['actions'])
+                    # A bound but non-listening port is refused on Linux and can
+                    # time out on macOS. Both mean no healthy Next listener.
+                    assert any(reason in cards['next']['details'][0] for reason in ('연결 거절', '응답 시간 초과'))
+                    assert cards['external']['state'] == 'error'
+                    assert 'HTTP 404' in cards['external']['details'][0]
+                    assert all('HTTP 200' in value for value in cards['external']['details'][1:])
             finally:
                 connection.close()
             # Verify initialization is actually usable through the new web listener.

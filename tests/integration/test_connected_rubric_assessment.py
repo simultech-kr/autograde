@@ -50,6 +50,10 @@ def connected(portal, tmp_path):
     for item in services.values():
         item._instructor_authorizer = identities.authorize_course
     catalog = open_web_catalog(paths, controller.catalog, b'p'*32, evidence_source=SubmissionEvidenceSource(state, bundles))
+    from autograde.course_privacy_files import plan_privacy_files, _cleanup_rubric
+    data_paths = AppPaths.from_value(state.database.parent).ensure()
+    courses.privacy_file_planner = lambda db, key, rows: plan_privacy_files(data_paths, db, key, rows)
+    courses.privacy_after_archive = lambda key: _cleanup_rubric(paths, key)
     controller.rubrics = catalog
     facade.instructor = controller
     document = json.loads((Path(__file__).parents[2] / 'examples/rubric/observer.rubric.json').read_text())

@@ -31,6 +31,12 @@ def _add_bundle_assignment(
     course_key: str,
 ) -> Mapping[str, Any]:
     """Create immutable delivery/input artifacts, then register one release."""
+    from .privacy_file_guard import privacy_file_guard
+    with privacy_file_guard(paths.root):
+        return _add_bundle_assignment_guarded(args, paths, state, course_key)
+
+
+def _add_bundle_assignment_guarded(args, paths, state, course_key):
 
     runner_reference = _assignment_runner_reference(args)
     store = _bundle_store(paths)
@@ -88,6 +94,12 @@ def _add_bundle_assignment(
 
 
 def _check_bundle_assignment(args, paths, state, course_key, *, grader=None):
+    from .privacy_file_guard import privacy_file_guard
+    with privacy_file_guard(paths.root):
+        return _check_bundle_assignment_guarded(args, paths, state, course_key, grader=grader)
+
+
+def _check_bundle_assignment_guarded(args, paths, state, course_key, *, grader=None):
     assignment = state.get_bundle_assignment(args.assignment_id)
     if assignment.course_key != course_key:
         raise PlatformNotFound("assignment was not found in this course")

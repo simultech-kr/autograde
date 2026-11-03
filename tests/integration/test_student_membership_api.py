@@ -117,14 +117,14 @@ def test_password_change_and_single_use_reset_revoke_old_common_sessions(portal)
     token = activation(facade.members.store)
     data = api(browser, 'activate', {'csrf': data['csrf'], 'token': token})[2]['result']
     old_cookie = browser.cookie('autograde_member')
-    status, _, changed = api(browser, 'password', {'csrf': data['csrf'], 'current_password': PASSWORD, 'new_password': 'changed synthetic password'})
+    status, _, changed = api(browser, 'password', {'csrf': data['csrf'], 'current_password': PASSWORD, 'new_password': 'changed synthetic password', 'confirm_password': 'changed synthetic password'})
     assert status == 200 and not changed['result']['authenticated']
     assert request(web, '/student/account', cookie='autograde_member=' + old_cookie)[0] == 403
     store = facade.members.store
     recovery = store.issue_token('come3105', KEY, 'reset', actor='test-admin', reason='synthetic recovery identity verified')['token']
-    status, _, reset = api(browser, 'reset', {'csrf': changed['result']['csrf'], 'student_key': KEY, 'token': recovery, 'new_password': 'recovered synthetic password'})
+    status, _, reset = api(browser, 'reset', {'csrf': changed['result']['csrf'], 'student_key': KEY, 'token': recovery, 'new_password': 'recovered synthetic password', 'confirm_password': 'recovered synthetic password'})
     assert status == 200 and not reset['result']['authenticated']
-    assert api(browser, 'reset', {'csrf': reset['result']['csrf'], 'student_key': KEY, 'token': recovery, 'new_password': 'attempted replay password'})[0] == 403
+    assert api(browser, 'reset', {'csrf': reset['result']['csrf'], 'student_key': KEY, 'token': recovery, 'new_password': 'attempted replay password', 'confirm_password': 'attempted replay password'})[0] == 403
     assert store.authenticate(KEY, 'recovered synthetic password')
 
 
@@ -138,7 +138,7 @@ def test_admin_recovery_repairs_unverified_account_without_granting_course_acces
     reset_code = store.issue_token('come3105', KEY, 'reset', actor='verified-admin', reason='actual student identity confirmed')['token']
     rightful = CookieBrowser(web)
     anonymous = api(rightful)[2]['result']
-    status, _, reset = api(rightful, 'reset', {'csrf': anonymous['csrf'], 'student_key': KEY, 'token': reset_code, 'new_password': 'rightful student new password'})
+    status, _, reset = api(rightful, 'reset', {'csrf': anonymous['csrf'], 'student_key': KEY, 'token': reset_code, 'new_password': 'rightful student new password', 'confirm_password': 'rightful student new password'})
     assert status == 200 and not reset['result']['authenticated']
     assert not store.account(KEY)['verified']
     assert not api(first)[2]['result']['authenticated']

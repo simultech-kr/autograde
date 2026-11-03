@@ -153,6 +153,10 @@ class ConnectedRubricAssessment:
         return row, snapshot, ticket
 
     def save(self, course, principal, rubric_id, version, submission, session, ticket, reviews):
+        with self.store.privacy_guard(course['course_key'], root=self.source.state.database.parent):
+            return self._save_guarded(course, principal, rubric_id, version, submission, session, ticket, reviews)
+
+    def _save_guarded(self, course, principal, rubric_id, version, submission, session, ticket, reviews):
         actor = self.authorize(course, principal, write=True)
         try:
             claims = verify_browser_value(self.secret, 'rubric-web-assessment', ticket)

@@ -6,6 +6,7 @@ import * as path from "node:path";
 import { tmpdir } from "node:os";
 import { ApiError, AutogradeClient, HttpTransport, TokenManager } from "../api";
 import type { StudentMaterial } from "../studentMaterials";
+import { EXPORT_PRIVACY_TITLE, EXPORT_PRIVACY_CONTINUE } from "../exportPrivacy";
 
 interface Loader { _load(name: string, parent: unknown, main: boolean): unknown }
 const loader = require("node:module") as Loader, original = loader._load;
@@ -25,6 +26,7 @@ let revealError: Error | undefined;
 let onReveal = () => {};
 let onWarning = () => {};
 let beforeInformation = () => {};
+let privacyDecision: string | undefined = EXPORT_PRIVACY_CONTINUE, privacyNotices = 0;
 const revealed: {command: string; uri: {fsPath: string}}[] = [];
 const stub = {
   CancellationTokenSource: class {
@@ -38,7 +40,10 @@ const stub = {
   ProgressLocation: {Notification: 1},
   window: {
     showInformationMessage: async (message: string) => {messages.push(message); beforeInformation(); return informationResponse ?? informationAction;},
-    showWarningMessage: async (message: string) => {messages.push(message); onWarning();},
+    showWarningMessage: async (message: string) => {
+      if (message === EXPORT_PRIVACY_TITLE) {privacyNotices++; return privacyDecision;}
+      messages.push(message); onWarning(); return undefined;
+    },
     showQuickPick: async (items: unknown[]) => { pickCount++; afterPick(); return items[0]; },
     showOpenDialog: async (options: {defaultUri?: unknown}) => {dialogCount++; receivedDefault = options.defaultUri;
       afterDirectory(); return [{scheme: "file", fsPath: directory}];},
@@ -56,6 +61,7 @@ function fixture() {
   afterPick = () => {}; afterDirectory = () => {}; receivedDefault = undefined;
   informationAction = undefined; informationResponse = undefined; beforeInformation = () => {}; revealed.length = 0;
   revealError = undefined; onReveal = () => {}; onWarning = () => {};
+  privacyDecision = EXPORT_PRIVACY_CONTINUE; privacyNotices = 0;
   const state = {generation: 1, base: "https://test.invalid", loggedIn: true, reads: 0, lists: 0,
     items: [material], downloaded: [] as string[], afterList: () => {}, failure: undefined as Error | undefined};
   const client = {getBaseUrl: () => state.base,
@@ -202,6 +208,7 @@ test("shared ordinary material receipt uses only the managed temporary folder an
       onDidSave: (_material, file) => {saved = file;}});
     await view.show();
     assert.equal(state.reads, 1); assert.equal(dialogCount, 0); assert.equal(suggestions, 0);
+    assert.equal(privacyNotices, 0);
     assert.equal(path.dirname(saved), managed); assert.deepEqual(await readFile(saved), pdf);
     assert.deepEqual(await readdir(outside), []);
     assert.match(messages.join(" "), /실습 종료 시 삭제/); assert.match(messages.join(" "), /내 학습내용 내보내기/);
@@ -209,6 +216,19 @@ test("shared ordinary material receipt uses only the managed temporary folder an
     assert.match(messages.join(" "), /이미 임시로 받았습니다/);
     assert.doesNotMatch(messages.join(" "), /다른 폴더를 선택/);
     view.dispose();
+  } finally {await rm(root, {recursive: true, force: true});}
+});
+
+test("manual personal material export requires explicit risk acknowledgement before downloading", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "autograde-material-privacy-"));
+  try {
+    for (const answer of [undefined, "취소", "다른 선택"]) {
+      const {state, client} = fixture(); directory = root; privacyDecision = answer;
+      const view = new StudentMaterialsView(client);
+      assert.equal(await view.show(material.id), "cancelled");
+      assert.equal(privacyNotices, 1); assert.equal(state.reads, 0);
+      assert.deepEqual(await readdir(root), []); view.dispose();
+    }
   } finally {await rm(root, {recursive: true, force: true});}
 });
 

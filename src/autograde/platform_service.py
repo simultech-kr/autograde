@@ -1068,7 +1068,11 @@ class StudentPlatformService:
         lock_index = int.from_bytes(
             hashlib.sha256(lock_material).digest()[:8], "big"
         ) % len(self._submission_locks)
-        with self._submission_locks[lock_index]:
+        from .privacy_file_guard import privacy_file_guard
+        with privacy_file_guard(self.state.database.parent), self._submission_locks[lock_index]:
+            # A closure may have completed while this request waited for the
+            # publication fence. Recheck before writing any uploaded bytes.
+            assignment = self._owned_bundle_assignment(access_token, safe_assignment_id)
             response = self._submit_bundle_unlocked(
                 access_token=access_token,
                 idempotency_key=safe_idempotency_key,

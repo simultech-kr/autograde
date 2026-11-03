@@ -4,6 +4,7 @@ import { ContentApi } from "./contentApi";
 import { contentErrorMessage, exportContent, syncContent, type ContentCollection, type ContentSyncOptions } from "./contentSync";
 import { shouldDiscardTokensAfterRefreshError } from "./authPolicy";
 import { learningExportDirectory } from "./learningExport";
+import { confirmExportPrivacy } from "./exportPrivacy";
 
 export const CONTENT_SYNC_COMMAND = "autograde.syncContent";
 export interface ContentSyncViewOptions {
@@ -96,6 +97,8 @@ export class ContentSyncView implements vscode.Disposable {
         guard(); if (!folders?.[0]) return "cancelled";
         if (folders[0].scheme !== "file") throw new Error("현재 IDE에서 접근할 수 있는 로컬/WSL 폴더를 선택하세요.");
         destination = await learningExportDirectory(folders[0].fsPath, excluded()); guard();
+        if (!await confirmExportPrivacy(vscode.window)) return "cancelled";
+        writeGuard();
       }
       const assignments = [...(this.options.assignmentDirectories?.() ?? []),
         ...(vscode.workspace.workspaceFolders ?? []).filter(folder => folder.uri.scheme === "file").map(folder => folder.uri.fsPath)];

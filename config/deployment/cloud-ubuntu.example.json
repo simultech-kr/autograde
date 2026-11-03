@@ -1,0 +1,17 @@
+{
+  "schema": "autograde.deployment.v1",
+  "deployment": "cloud",
+  "platform": "ubuntu",
+  "installation_id": "cloud-campus",
+  "install_dir": "/srv/autograde/cloud-campus",
+  "web_url": "https://classroom.example.edu",
+  "api_url": "https://api.classroom.example.edu",
+  "runner_image": "registry.example.edu/autograde/fixed-stdio@sha256:REPLACE_WITH_64_HEXADECIMAL_DIGEST",
+  "tls_certificate": "/etc/letsencrypt/live/classroom.example.edu/fullchain.pem",
+  "tls_key": "/etc/letsencrypt/live/classroom.example.edu/privkey.pem",
+  "allowed_cidrs": [],
+  "course_keys": [],
+  "worker_count": 4,
+  "ssh_target": "autograde@cloud.example.edu",
+  "ssh_port": 22
+}

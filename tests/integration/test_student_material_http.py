@@ -309,7 +309,9 @@ def test_stale_session_cannot_download_after_access_revocation(material_http, ch
     elif change == "enrollment":
         env.students.set_active(COURSE, "20260001", False, reason="synthetic withdrawal")
     elif change == "course":
-        env.courses.set_status(COURSE, "archived")
+        # Model a historical read-only archive independently of privacy purge.
+        with env.state._write() as db:
+            db.execute("UPDATE admin_courses SET status='archived' WHERE course_key=?", (COURSE,))
     elif change == "password":
         env.services[COURSE].set_student_password(student_key="20260001", password="234567")
     else:

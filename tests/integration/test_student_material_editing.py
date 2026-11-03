@@ -245,7 +245,10 @@ def test_direct_changes_reject_noneditable_state_without_touching_current_file(m
         assert env.admin.post(path + "/revise", revision=str(revision(env, path)), change_note="보류 중 수정본",
                               confirm="yes")[0] == 303
     else:
-        env.courses.set_status(COURSE, "archived")
+        # A historical archive still freezes its documents. New privacy
+        # closure instead removes the personal material and its entire history.
+        with env.state._write() as db:
+            db.execute("UPDATE admin_courses SET status='archived' WHERE course_key=?", (COURSE,))
     before = material(env, path)
     responses = [
         env.admin.post(path, revision=str(before["revision"]), **FIELDS),

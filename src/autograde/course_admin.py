@@ -88,7 +88,7 @@ def _course(db, course_key, *, writable=False):
     if row is None:
         raise PlatformNotFound('course was not found')
     if writable and row['status'] == 'archived':
-        raise PlatformConflict('archived course is read-only; reactivate it first')
+        raise PlatformConflict('보관된 수업은 읽기 전용입니다. 새 수업을 만들어 진행하세요.')
     return dict(row)
 
 
@@ -104,8 +104,21 @@ class CourseAdminService:
         self.remote_cleanup_required = bool(remote_cleanup_required)
         self.cleanup_context = cleanup_context
         self.after_delete_context = after_delete_context
+        self.privacy_file_planner = None
+        self.privacy_recover = None
+        self.privacy_after_archive = None
         from .course_deletion import initialize as initialize_deletion
         initialize_deletion(state)
+        from .course_privacy_archive import initialize as initialize_privacy
+        initialize_privacy(state)
+
+    def privacy_archive_preview(self, course_key):
+        from .course_privacy_archive import preview
+        return preview(self, course_key)
+
+    def archive_status(self, course_key):
+        from .course_privacy_archive import status
+        return status(self, course_key)
 
     def deletion_preview(self, course_key):
         from .course_deletion import preview
@@ -250,9 +263,14 @@ class CourseAdminService:
                 raise PlatformConflict('this course offering already exists') from exc
             return _course(db, course_key)
 
-    def set_status(self, course_key, status):
+    def set_status(self, course_key, status, *, expected_state=None, reauthorize=None):
         if status not in ('preparation', 'active', 'archived'):
             raise ValueError('unsupported course status')
+        if status == 'archived':
+            from .course_privacy_archive import archive
+            return archive(self, course_key, expected_state=expected_state, reauthorize=reauthorize)
+        if self.archive_status(course_key) is not None:
+            raise PlatformConflict('개인정보 파기가 완료된 수업은 다시 활성화할 수 없습니다. 새 수업을 만드세요.')
         if status == 'active' and self.before_activate:
             self.get_course(course_key)
             self.before_activate(course_key)
@@ -262,14 +280,6 @@ class CourseAdminService:
                 return old
             if status == 'preparation' and old['status'] != 'preparation':
                 raise PlatformConflict('an activated course cannot return to preparation')
-            if status == 'archived':
-                self._require_idle(db, course_key)
-                for row in db.execute('SELECT student_id FROM platform_enrollments WHERE course_key=?', (course_key,)):
-                    self.state._revoke_course_credentials(db, student_id=row['student_id'],
-                                                         course_key=course_key, now=utc_iso(), delete_password=False)
-                # Deny unbound pending device connections as well as approved ones.
-                db.execute("UPDATE device_authorizations SET state='denied',denied_at=?,updated_at=? "
-                           "WHERE course_key=? AND state IN ('pending','approved')", (utc_iso(), utc_iso(), course_key))
             db.execute('UPDATE admin_courses SET status=?,revision=revision+1,auth_revision=auth_revision+1,updated_at=? WHERE course_key=?',
                        (status, utc_iso(), course_key))
             return _course(db, course_key)

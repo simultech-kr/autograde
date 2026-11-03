@@ -848,6 +848,10 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
                         # Narrow JSON mutation route; all other instructor API
                         # routes remain GET-only. CSRF checked by the facade.
                         form = self._read_json_object(max_bytes=8192)
+                    elif path == '/instructor/operations/readiness':
+                        form = self._read_form(max_bytes=1024, max_fields=1)
+                        if set(form) != {'csrf'}:
+                            raise PlatformHTTPError(400, 'invalid_request', 'Unexpected readiness parameter')
                     elif upload or csv_upload or membership_roster_upload or exam_upload or material_upload or content_upload or extension_upload:
                         if not facade.admin_upload_slots.acquire(blocking=False):
                             raise PlatformHTTPError(503, "upload_busy", "파일 처리 중입니다. 잠시 후 다시 시도하세요.")

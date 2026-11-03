@@ -58,7 +58,9 @@ const assert = require('node:assert/strict');
   assert.equal(await fs.readFile(path.join(legacy, 'preserve.txt'), 'utf8'), 'existing personal work');
   const next = session.sharedSessionLayout(base, 'synthetic-seat');
   session.prepareSharedSession(next, {});
-  assert.notEqual(next.root, layout.root);
+  // The launcher deliberately reuses its fixed working directory. Isolation
+  // means that the previous learner's contents are removed before reuse.
+  assert.equal(next.root, layout.root);
   assert.deepEqual(await fs.readdir(next.workspace), []);
   session.cleanupSharedSession(next);
   process.stdout.write(JSON.stringify({archive: archive.destination, folder: folder.destination, skipped: collected.skipped}));

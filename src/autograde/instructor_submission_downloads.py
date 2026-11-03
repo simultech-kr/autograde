@@ -91,6 +91,11 @@ class InstructorSubmissionDownloads:
         self.cache_root = Path(cache_root).expanduser().absolute()
 
     def download(self, course_key, submission_id, file_index=None):
+        from .privacy_file_guard import privacy_file_guard
+        with privacy_file_guard(self.state.database.parent):
+            return self._download_guarded(course_key, submission_id, file_index)
+
+    def _download_guarded(self, course_key, submission_id, file_index=None):
         row, _ = self.state.get_instructor_submission_review(
             course_key=course_key, submission_id=submission_id)
         if file_index is not None and (type(file_index) is not int or file_index < 0):
@@ -123,6 +128,11 @@ class InstructorSubmissionDownloads:
             raise InstructorDownloadUnavailable(_UNAVAILABLE) from None
 
     def batch(self, course_key, assignment_id, mode='latest'):
+        from .privacy_file_guard import privacy_file_guard
+        with privacy_file_guard(self.state.database.parent):
+            return self._batch_guarded(course_key, assignment_id, mode)
+
+    def _batch_guarded(self, course_key, assignment_id, mode='latest'):
         if mode not in {'latest', 'all'}:
             raise ValueError('다운로드 범위가 올바르지 않습니다.')
         rows = self._batch_rows(course_key, assignment_id, mode)

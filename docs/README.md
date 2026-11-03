@@ -1,5 +1,7 @@
 # Documentation
 
+- [기관·클라우드 설치 스크립트](operations/deployment-installers.md): Ubuntu·macOS·Windows/WSL2 실행기, SSH Ubuntu 배포, HTTPS·내부 DNS 설정, 개인 관리자 초기화·실행·점검·백업.
+
 - [IDE 수업 서버 자동 검색](operations/ide-server-discovery.md): 학교 네트워크 설정을 변경하지 않는 mDNS 안내 프로그램, Mac IDE 검색·선택, 기관 설정 보관과 학생 자료 종료 정리.
 
 - [Mac IDE 자동 업데이트](operations/ide-auto-updates.md), [기관용 서명·승인 절차](operations/ide-signed-releases.md): 교수자 승인 버전의 자동 다운로드·다음 실행 적용, 실패 시 이전 버전 복귀, 공용 세션 정리와 최초 채널 아이콘 설치.

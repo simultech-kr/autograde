@@ -249,9 +249,10 @@ class InstructorWeb:
         try:
             scoped = self._scoped(authorization)
         except PlatformAPIError as exc:
-            if instructor_account_web.enabled(self) and method == 'GET' and exc.status == 401:
+            background_status = path == '/instructor/operations/readiness/status'
+            if not background_status and instructor_account_web.enabled(self) and method == 'GET' and exc.status == 401:
                 return self._redirect('/instructor/login')
-            if instructor_account_web.enabled(self) and method == 'GET' and exc.code == 'instructor_mfa_enrollment_required':
+            if not background_status and instructor_account_web.enabled(self) and method == 'GET' and exc.code == 'instructor_mfa_enrollment_required':
                 return self._redirect('/instructor/account')
             raise
         if method == 'POST' and scoped.principal and scoped.principal.read_only:
@@ -259,7 +260,8 @@ class InstructorWeb:
         return scoped._authenticated_request(method, path, form, cookies, origin, authorization)
 
     def _authenticated_request(self, method, path, form, cookies, origin, authorization):
-        polling = bool(re.fullmatch(r'/courses/[a-z0-9_-]{1,96}/instructor/(?:checks/[a-zA-Z0-9_-]+/status|submissions/live)', path))
+        polling = (path == '/instructor/operations/readiness/status' or
+                   bool(re.fullmatch(r'/courses/[a-z0-9_-]{1,96}/instructor/(?:checks/[a-zA-Z0-9_-]+/status|submissions/live)', path)))
         if polling and method != 'GET':
             raise PlatformAPIError(405, 'method_not_allowed', '조회만 가능한 경로입니다.')
         session, cookie = self._session(cookies, required=method == "POST" or polling)
@@ -547,6 +549,14 @@ class InstructorWeb:
     def _course_request(self, method, course, route, form, session, authorization):
         base = self._base(course)
         key = course['course_key']
+        if route == 'privacy-archive':
+            from .instructor_course_privacy import request
+            def authorize_archive():
+                current = self._scoped(authorization)
+                if current.principal and current.principal.read_only:
+                    raise PlatformAccessDenied()
+                return current.courses.get_course(key)
+            return request(self, method, course, form, session, reauthorize=authorize_archive)
         if route == 'registrations' or route.startswith('registrations/'):
             from .student_registration_web import instructor_request
             def authorize_member_recovery():
@@ -655,6 +665,10 @@ class InstructorWeb:
         if method == 'POST' and route == 'status':
             if _value(form, 'confirm') != 'yes':
                 raise ValueError('수업 상태 변경의 영향을 확인해 주세요.')
+            if _value(form, 'status') == 'archived':
+                # Legacy forms cannot silently become destructive after an
+                # upgrade. Always review the new privacy closure explicitly.
+                return self._redirect(base + '/privacy-archive')
             self.courses.set_status(key, _value(form, 'status'))
             return self._redirect(base)
         if method == 'GET' and not route:
@@ -667,10 +681,13 @@ class InstructorWeb:
         if course['status'] != 'archived':
             body += '<section><h3>수업 정보 수정</h3>' + self._form(base + '/update', session, self._course_fields(course) + _button('수업 정보 저장')) + '</section>'
         else:
-            body += '<p>보관된 수업의 정보 수정은 운영 상태를 변경한 뒤 진행하세요.</p>'
-        body += '<section><h3>운영 상태</h3><p>보관하면 해당 수업의 인증·수령 코드를 폐기하고 학생 접근을 막습니다. 점수와 제출은 보존합니다. 처리 중 작업이 있으면 보관할 수 없습니다.</p>'
-        body += self._form(base + '/status', session, _select('status', '변경할 상태', [('preparation', '준비'), ('active', '운영'), ('archived', '보관')], course['status']) +
-                           _checkbox('confirm', '인증 폐기와 학생 접근에 미치는 영향을 확인했습니다.') + _button('수업 상태 변경')) + '</section>'
+            body += '<p>보관된 수업입니다. 개인정보 파기 결과를 확인하세요. 파기한 학생 기록은 복원할 수 없습니다.</p>'
+        body += '<section><h3>운영 상태</h3>'
+        if course['status'] != 'archived':
+            body += self._form(base + '/status', session, _select('status', '변경할 상태', [('preparation', '준비'), ('active', '운영')], course['status']) +
+                               _checkbox('confirm', '학생 접근에 미치는 영향을 확인했습니다.') + _button('수업 상태 변경'))
+        body += ('<p>수업 보관은 개인별 학생 기록 파기를 포함합니다. 교수자 공용 과제·자료와 허용된 집계 통계만 남깁니다. 진행 중 작업이 있으면 보관할 수 없습니다.</p>'
+                 f'<a class="button" href="{base}/privacy-archive">수업 보관·파기 {"결과 확인" if course["status"] == "archived" else "범위 확인"}</a></section>')
         if not self.principal or self.principal.role == 'admin':
             body += ('<section><h3>교과목 영구 삭제</h3><p>수강·과제·제출·자료와 이 수업의 기록을 함께 삭제합니다. '
                      '보관을 거치지 않고 삭제 범위를 먼저 확인할 수 있습니다.</p>'
@@ -816,7 +833,7 @@ class InstructorWeb:
         from .instructor_students import overview
         body = overview(self, course, form)
         if course['status'] == 'archived':
-            return '수강생 관리', body + '<p>보관된 수업입니다. 학생 기록은 보존되며 등록·수정은 차단됩니다.</p>'
+            return '수강생 관리', body + '<p>보관된 수업입니다. 수업 설정에서 개인별 기록 파기 결과를 확인하세요. 등록·수정은 차단됩니다.</p>'
         body += '<details id="legacy-registration" class="roster-legacy roster-write-only"><summary>전용 비밀번호로 학생 등록 <small>회원 가입 없이 사용하는 기존 방식</small></summary><div class="roster-legacy-content"><p>회원 가입 없이 수업 전용 비밀번호를 발급합니다. 회원 가입 방식으로 운영하려면 상단의 수강 명단 등록을 사용하세요.</p>' + self._form(base + '/students', session, _field('student_key', '학번 (앞자리 0 포함)', required=True) +
                 _field('name', '이름 (선택)') + _select('active', '수강 상태', [('true', '수강 중'), ('false', '비활성')], 'true') +
                 _field('password', '숫자 6자리 비밀번호 (비우면 자동 발급)', kind='password', extra='pattern="[0-9]{6}" maxlength="6" autocomplete="new-password"') + _button('학생 등록')) + '</div></details>'

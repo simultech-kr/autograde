@@ -1,5 +1,8 @@
 # Scripts
 
+- `deploy/ubuntu.sh`, `deploy/macos.sh`, `deploy/windows.ps1`: 기관 설치형 및 SSH 클라우드 설치형 실행기. [설치 절차](../docs/operations/deployment-installers.md).
+- `deploy/check_nginx_config.py`: 고정 Nginx 컨테이너와 합성 인증서로 기관형·클라우드형 HTTPS 설정 검사. 호스트 프록시는 시작하지 않는다.
+
 - `check_instructor_identity.cjs`: 개인 교수자·관리자 합성 화면 24개 크기/테마 조합과 담당 분반·수업 생성 컨트롤 검증.
   [실행 안내](../docs/operations/instructor-personal-auth.md#검증).
 

@@ -2,10 +2,12 @@
 import base64
 import hashlib
 from .instructor_draft_browser import SCRIPT as DRAFT_SAVE_SCRIPT
+from .operations_readiness_browser import SCRIPT as READINESS_SCRIPT
 
 
 SCRIPT = r"""(() => {
   'use strict';
+  /* classroom-readiness */
   const portalMenu = document.querySelector('details.portal-menu');
   if (portalMenu) {
     const desktopMenu = window.matchMedia('(min-width: 1101px)');
@@ -245,7 +247,7 @@ SCRIPT = r"""(() => {
     window.addEventListener('pagehide', stop); window.addEventListener('pageshow', resume);
     schedule();
   });
-})();""".replace('/* draft-inline-save */', DRAFT_SAVE_SCRIPT)
+})();""".replace('/* draft-inline-save */', DRAFT_SAVE_SCRIPT).replace('/* classroom-readiness */', READINESS_SCRIPT)
 
 SCRIPT_HASH = base64.b64encode(hashlib.sha256(SCRIPT.encode('utf-8')).digest()).decode('ascii')
 SCRIPT_CSP = f"; script-src 'sha256-{SCRIPT_HASH}'; connect-src 'self'"
