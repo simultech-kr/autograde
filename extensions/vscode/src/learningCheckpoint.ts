@@ -122,7 +122,10 @@ export class LearningCheckpointAutosaver {
     if (this.scope?.assignmentId !== checkpoint.assignment_id) return;
     this.update({...this.status, restored: checkpoint});
   }
-  async saveNow(): Promise<boolean> {
+  async saveNow(): Promise<boolean> { return this.save(false); }
+  /** Exit is an automatic capture, not consent to replace prior work with an untouched starter. */
+  async flushPending(): Promise<boolean> { return this.save(true); }
+  private async save(preserveStarter: boolean): Promise<boolean> {
     this.reconcile();
     const scope = this.scope, revision = this.revision;
     if (!scope) return false;
@@ -130,7 +133,7 @@ export class LearningCheckpointAutosaver {
     if (!this.current(scope, revision)) return false;
     this.blocked = false; this.attempts = 0; this.attemptedHash = undefined;
     this.update({...this.status, state: "waiting"});
-    await this.run(true);
+    await this.run(true, preserveStarter);
     return this.current(scope, revision) && this.status.state === "saved";
   }
   abortCurrent(): void { this.flight?.controller.abort(); }
@@ -143,7 +146,7 @@ export class LearningCheckpointAutosaver {
   private current(scope: LearningCheckpointScope, revision: number): boolean {
     return !this.disposed && revision === this.revision && sameLearningScope(scope, this.safeScope());
   }
-  private run(force: boolean): Promise<void> {
+  private run(force: boolean, preserveStarter = false): Promise<void> {
     this.reconcile();
     if (this.disposed || this.blocked || !this.scope || this.flight) return Promise.resolve();
     this.clearTimer();
@@ -154,7 +157,7 @@ export class LearningCheckpointAutosaver {
     this.flight = flight;
     flight.promise = Promise.resolve().then(async () => {
       try {
-        const baselineCapture = !this.baseline && !force;
+        const baselineCapture = !this.baseline && (!force || preserveStarter && !this.observedEdit);
         const capturedEditRevision = this.editRevision;
         const bundle = await this.options.capture(scope, !baselineCapture, current);
         if (!bundle || !current()) return;
@@ -162,7 +165,7 @@ export class LearningCheckpointAutosaver {
         if (!force && bundle.sha256 === this.savedHash) {
           this.update({...this.status, state: capturedEditRevision === this.editRevision ? "saved" : "waiting"}); return;
         }
-        if (!force && !this.savedHash && !this.observedEdit && this.options.baselineOnlyUntilChange && bundle.sha256 === this.baseline) return;
+        if ((!force || preserveStarter) && !this.savedHash && !this.observedEdit && this.options.baselineOnlyUntilChange && bundle.sha256 === this.baseline) return;
         if (bundle.sha256 !== this.attemptedHash) { this.attemptedHash = bundle.sha256; this.attempts = 0; this.attemptKey = `learning-${randomUUID()}`; }
         if (!force && this.attempts >= MAX_ATTEMPTS) return;
         this.attempts++;

@@ -1,12 +1,15 @@
 """Administrator-only operations screen using the existing portal shell."""
 from html import escape
 import json
+import re
 from datetime import datetime, timedelta, timezone
 
 from .platform_service import PlatformAPIError, PlatformResponse
 from .platform_state import PlatformAccessDenied
 from .instructor_responsive import result_table
 from .operations_readiness_view import render as render_readiness
+
+SEAT_POLICY_PATH = re.compile(r'/instructor/operations/seats/([a-z0-9][a-z0-9_-]{0,63})/policy')
 
 ALERTS = {'workers_unavailable': '채점 작업자 확인 필요', 'storage_low': '저장 공간 부족',
     'storage_unknown': '저장 공간 미확인', 'queue_wait_high': '5분 이상 채점 대기',
@@ -31,7 +34,7 @@ ALERT_ACTIONS = {
 
 def matches(path):
     return path in {'/instructor/operations', '/instructor/operations/diagnostics.json',
-                   '/instructor/operations/readiness', '/instructor/operations/readiness/status'}
+                   '/instructor/operations/readiness', '/instructor/operations/readiness/status'} or bool(SEAT_POLICY_PATH.fullmatch(path))
 
 
 def _e(value):
@@ -65,6 +68,17 @@ def _badge(state):
 def request(web, method, path, form, session):
     if web.principal and web.principal.role != 'admin':
         raise PlatformAccessDenied('administrator required')
+    policy = SEAT_POLICY_PATH.fullmatch(path)
+    if policy:
+        if method != 'POST':
+            raise PlatformAPIError(405, 'method_not_allowed', '기기 정책 저장 버튼을 사용하세요.')
+        if set(form) != {'csrf', 'cleanup_mode'}:
+            raise PlatformAPIError(400, 'invalid_seat_policy', '기기 정책 요청을 다시 확인하세요.')
+        # Authentication, read-only role, Origin and CSRF checks run in the
+        # existing InstructorWeb boundary before dispatching this mutation.
+        web.operations.set_seat_policy(policy[1], form['cleanup_mode'],
+            actor=web.principal.user_id if web.principal else 'shared_operator')
+        return PlatformResponse(303, None, {'Location': '/instructor/operations#operations-seats'})
     if path == '/instructor/operations/readiness':
         if method != 'POST':
             raise PlatformAPIError(405, 'method_not_allowed', '준비 점검 버튼으로 점검을 시작하세요.')
@@ -110,13 +124,26 @@ def request(web, method, path, form, session):
     body += '<div><dt>접수부터 현재 완료 상태까지 평균 (초)</dt><dd>' + _e(grading.get('mean_receipt_to_current_completed_state_seconds')) + '</dd></div></dl>'
     body += '<p class="hint">최근 24시간 접수분 기준입니다. 수동 결과 공개의 지연이 포함될 수 있습니다. 백업 복원 시험·OS별 인수 시험 통과를 뜻하지 않습니다.</p></section>'
     body += '<section class="ui-panel" id="operations-seats"><h2>실습실 기기</h2><p class="hint">등록된 모든 좌석을 표시합니다. 최근 보고도 클라이언트의 자기 보고이며 보안 검증 증명은 아닙니다.</p>'
+    body += ('<p class="hint">Windows 공용 실습실의 기본 정리 시점은 다음 IDE 시작입니다. 정상 종료하면 로그인 정보는 지우고, '
+             '다음 시작에서 이전 작업 폴더를 지운 뒤 새 실습을 시작합니다. 학생이 바뀌면 새로 로그인해야 하며, '
+             '로그인 후 서버에 저장된 이전 저장본을 복원할 수 있습니다. 서버에 저장되지 않은 변경은 복원되지 않습니다. '
+             '정리 시점을 바꾸면 이 기능을 지원하는 Windows 실행기의 다음 시작부터 적용되며 실행 중인 실습의 정책은 바뀌지 않습니다. '
+             '아래 선택값은 서버 설정이며 기기의 실제 적용 확인은 아닙니다.</p>')
     if report['seats']:
         rows = []
         for seat in report['seats']:
+            policy_id = 'cleanup-mode-' + seat['seat_id']
+            policy_form = ('<form method="post" action="/instructor/operations/seats/' + _e(seat['seat_id']) + '/policy">'
+                '<input type="hidden" name="csrf" value="' + _e(session.get('csrf', '')) + '">'
+                '<label for="' + _e(policy_id) + '">' + _e(seat['label']) + ' 정리 시점</label>'
+                '<select id="' + _e(policy_id) + '" name="cleanup_mode">')
+            for value, label in (('next_start', '다음 IDE 시작 (기본)'), ('on_exit', 'IDE 종료')):
+                policy_form += '<option value="' + value + '"' + (' selected' if seat['cleanup_mode'] == value else '') + '>' + label + '</option>'
+            policy_form += '</select><button type="submit">정리 시점 저장</button></form>'
             rows.append((_e(seat['label']) + (' · 사용 중지' if not seat['active'] else ''),
                 _badge(seat['presence']), _version(seat['ide_version']) + ' / ' + _version(seat['extension_version']),
-                _badge(seat['cleanup']), _badge(seat['update']), _time(seat['last_seen_at'])))
-        body += result_table(('좌석', '연결', 'IDE / 확장', '정리', '업데이트', '마지막 보고'), rows,
+                _badge(seat['cleanup']), _badge(seat['update']), _time(seat['last_seen_at']), policy_form))
+        body += result_table(('좌석', '연결', 'IDE / 확장', '정리', '업데이트', '마지막 보고', 'Windows 정리 정책'), rows,
                              '등록 좌석의 최신 보고 · 시각 KST · 좁은 화면에서는 좌석별 카드로 표시합니다.')
     else:
         body += '<p class="portal-empty">등록된 기기가 없습니다. 운영자가 기기를 등록하면 학생의 로그인 여부와 관계없이 관리할 수 있습니다.</p>'

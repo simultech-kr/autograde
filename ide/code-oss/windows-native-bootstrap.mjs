@@ -46,8 +46,12 @@ export function prepareWindowsSession(bundle, sessionRoot, launcherPid, { parent
   const owner = readOwner(path.join(sessionRoot, '.native-owner.json'));
   const anchor = readOwner(path.join(path.dirname(sessionRoot), '.current-owner.json'));
   const id = owner.sessionId;
+  // Older native launchers clean on exit. Never advertise deferred cleanup unless
+  // both supervisor ownership records explicitly agree on the startup snapshot.
+  const cleanupMode = owner.cleanupMode === undefined ? 'on_exit' : owner.cleanupMode;
   if (owner.schema !== 1 || owner.root !== sessionRoot || !/^[a-f0-9]{24}$/.test(id ?? '') || owner.launcherPid !== launcherPid || !/^S-1-/.test(owner.sid ?? '') ||
       !/^[a-f0-9]{8}:[a-f0-9]{16}$/.test(owner.rootIdentity ?? '') ||
+      !['next_start', 'on_exit'].includes(cleanupMode) || owner.cleanupMode !== anchor.cleanupMode ||
       ['schema', 'root', 'sessionId', 'launcherPid', 'launcherStarted', 'sid', 'rootIdentity', 'jobName'].some(field => owner[field] !== anchor[field])) throw new Error('Native session ownership mismatch');
   const workspace = path.join(sessionRoot, 'workspace'), materials = path.join(sessionRoot, 'materials'), runtime = path.join(sessionRoot, 'r'), build = path.join(sessionRoot, 'build');
   for (const relative of ['workspace', 'materials', 'tmp', 'home', 'appdata', 'localappdata', 'build', 'r/user-data/User', 'r/extensions', 'r/shared-data']) fs.mkdirSync(path.join(sessionRoot, relative), { recursive: true });
@@ -55,7 +59,7 @@ export function prepareWindowsSession(bundle, sessionRoot, launcherPid, { parent
     'terminal.integrated.defaultProfile.windows': 'Autograde MSVC',
     'terminal.integrated.profiles.windows': { 'Autograde MSVC': { path: path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32/cmd.exe'), args: ['/d'] } },
     'terminal.integrated.cwd': workspace, 'files.defaultLanguage': 'cpp', 'files.hotExit': 'off', 'workbench.localHistory.enabled': false,
-    'window.restoreWindows': 'none' }), { flag: 'wx' });
+    'window.restoreWindows': 'none', 'window.confirmBeforeClose': 'always' }), { flag: 'wx' });
   // User-level tasks continue to work when an assignment opens a subfolder.
   fs.writeFileSync(path.join(runtime, 'user-data/User/tasks.json'), JSON.stringify({ version: '2.0.0', tasks: ['C++17', 'C17'].map(language => (
     { label: `Autograde: Build current ${language} file (MSVC)`, type: 'process', command: 'cl.exe',
@@ -65,16 +69,19 @@ export function prepareWindowsSession(bundle, sessionRoot, launcherPid, { parent
   )) }), { flag: 'wx' });
   const stat = fs.statSync(sessionRoot);
   fs.writeFileSync(path.join(sessionRoot, '.autograde-session.json'), JSON.stringify({ schema: 1, sessionId: id, root: sessionRoot,
-    rootDev: stat.dev, rootIno: stat.ino, launcherPid, phase: 'running', policy: 'standard' }), { flag: 'wx' });
-  return { root: sessionRoot, workspace, materials, runtime, id };
+    rootDev: stat.dev, rootIno: stat.ino, launcherPid, phase: 'running', policy: 'standard', cleanupMode }), { flag: 'wx' });
+  return { root: sessionRoot, workspace, materials, runtime, id, cleanupMode };
 }
 
 export function windowsLaunchSpec(bundle, layout, inherited = process.env) {
+  const cleanupMode = layout.cleanupMode === undefined ? 'on_exit' : layout.cleanupMode;
+  if (!['next_start', 'on_exit'].includes(cleanupMode)) throw new Error('Invalid native cleanup mode');
   const env = Object.fromEntries(Object.entries(inherited).filter(([key]) => !/^(NODE_|ELECTRON_|VSCODE_|AUTOGRADE_)/i.test(key)));
   Object.assign(env, { USERPROFILE: path.join(layout.root, 'home'), HOME: path.join(layout.root, 'home'),
     APPDATA: path.join(layout.root, 'appdata'), LOCALAPPDATA: path.join(layout.root, 'localappdata'),
     TEMP: path.join(layout.root, 'tmp'), TMP: path.join(layout.root, 'tmp'),
     AUTOGRADE_LEARNING_POLICY: 'standard', AUTOGRADE_LEARNING_LIFETIME: 'shared',
+    AUTOGRADE_SESSION_CLEANUP_MODE: cleanupMode,
     AUTOGRADE_LEARNER_WORKSPACE: layout.workspace, AUTOGRADE_LEARNER_MATERIALS: layout.materials,
     AUTOGRADE_SESSION_ROOT: layout.root, AUTOGRADE_SESSION_ID: layout.id,
     VSCODE_DEV: '1', VSCODE_CLI: '1', NODE_ENV: 'development' });

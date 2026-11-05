@@ -36,20 +36,70 @@ MSVC·SDK는 학생 C/C++ 개발 도구다. 번들 Node를 26으로 바꾸어도
 강의자료는 `current\materials`에 둔다. 실행할 때마다 세션 식별자를 새로 발급하지만 폴더 위치는
 바꾸지 않는다. 현재 Windows 사용자 SID만 접근 가능한 ACL을 적용한다. 전용 Node·Electron은 suspended 상태에서 Windows job에
 배정한 뒤 실행한다. 실행기 종료 시 job의 프로세스를 종료하고 모두 멈춘 것을 확인한 뒤
-코드·자료·IDE 상태·임시 빌드 파일을 정리한다. PID뿐 아니라 시작 시각, 소유 marker와 경로를
-검증해 이전 중단 세션을 정리한다. 다음 실행은 이전 작업 폴더의 코드·자료·IDE 상태를 삭제한 뒤
+로그인·브라우저 저장소·IDE 상태와 임시 빌드 파일을 정리한다. 기본 `next_start` 정책에서는
+코드·자료와 소유 marker만 남기며 `r`, `home`, `appdata`, `localappdata`, `tmp`, `build`는
+정상 종료 때 삭제한다. 작업 코드 안에 학생이 직접 만든 빌드 결과는 다음 실행까지 남을 수 있다.
+PID뿐 아니라 시작 시각, 소유 marker와 경로를 검증해 이전 중단 세션을 정리한다.
+다음 실행은 이전 작업 폴더의 코드·자료·남은 상태를 삭제한 뒤
 같은 위치에 빈 작업 공간을 만든다. 예전 `sessions\e-…` 형식도 소유권이 확인되면 정리한다.
 마지막 내부 marker를 지운 직후 중단된 경우에도 부모 marker의 NTFS 폴더 식별자를 확인해
 남은 빈 폴더 정리를 마친다. 이전 실행기가 살아 있거나 링크·권한 변경·잠긴 파일·불명확한
 소유권이 있으면 파일을 임의로 지우지 않고 새 실행을 막는다.
 
 로그인한 학생의 작업 코드는 확장이 주기적으로 서버에 저장하며 공식 제출과 구분한다.
-IDE의 마지막 저장 성공·실패 표시를 확인한다. 종료나 다음 실행의 정리는 서버 저장 성공을
+IDE의 마지막 저장 성공·실패 표시를 확인한다. 실행기 창의 종료 버튼·닫기 버튼은 삭제 시점과
+서버에는 마지막 저장 성공본만 남는다는 확인을 표시한다. 실행기에서 프로세스를 종료하거나
+IDE 창의 X·OS 종료·강제 종료를 사용하는 것은 확장의 명시적 종료 명령에서 하는 마지막 저장과
+동일하지 않다. 저장 성공을 보장하지 않으며 IDE 창의 X 확인 여부는 해당 IDE/확장 동작에 따른다.
+종료나 다음 실행의 정리는 서버 저장 성공을
 기다려 자료를 보존하는 기능이 아니다. 연결이 끊긴 상태의 변경이나 저장 전 강제 종료로 남은
 자료는 다음 실행 시 삭제되어 복원할 수 없다. 시작할 때 이전 학생의 자격 증명으로 업로드하지 않는다.
 필요한 코드는 먼저 제출하거나 개인 폴더/USB로 내보낸다. `exports` 형제 폴더와 외부 내보내기는
 세션 정리 대상이 아니다. 같은 Windows 계정으로 실행되는 모든 프로그램을 격리하는 보안 경계나
 시험 감독 제품은 아니다.
+
+## 담당자 정리 정책
+
+실행기는 시작할 때 한 번 `%USERPROFILE%\Autograde Operator\device.json`을 읽는다.
+좌석 보고기와 같은 `apiUrl`, `seatId`, `reportToken` 세 항목만 사용하며 API 주소는 경로·계정·쿼리가
+없는 HTTPS origin이어야 한다. `GET /v1/operations/seats/{seatId}/policy`에 기기 토큰을 Bearer로
+전달한다. TLS 1.2와 기본 인증서 검증을 사용하고 리디렉션은 따르지 않는다. 요청은 3초, 설정과
+응답은 각각 4 KiB로 제한한다. 토큰은 IDE 세션 marker·환경 변수·진단 로그에 넣지 않는다.
+
+서버에서 확인한 `on_exit`는 정상 종료 시 코드·자료도 즉시 삭제한다. `next_start`는 다음 실행
+전에 삭제한다. 선택된 값은 부모·자식 소유 marker에 같은 값으로 기록하고 해당 실행이 끝날 때까지
+변경하지 않는다. 서버 변경은 다음 실행부터 반영한다. 설정 없음·권한/형식 오류·인증 실패·통신 실패·
+잘못된 응답은 모두 `next_start` 기본값으로 돌아가며 실행기 시작 화면에 **서버 정책 미확인과
+기본값 적용 경고**를 표시한다. 이전 정책은 캐시하지 않으므로 오프라인에서 서버의 `on_exit`가
+계속 강제된다고 보장하지 않는다.
+
+기기 설정은 학생이 사용하는 Windows 계정의 현재 사용자 전용 폴더·파일로 준비한다. 다른 사용자에게
+허용된 ACL, 링크 경로와 여러 하드 링크를 가진 파일은 거부한다. 담당자가 발급받은 `device.json`을
+해당 계정으로 아래처럼 설치한다. 토큰 내용을 콘솔에 출력하거나 배포 ZIP에 포함하지 않는다.
+
+```powershell
+$ErrorActionPreference = 'Stop'
+$deviceSource = (Resolve-Path -LiteralPath (Read-Host '발급받은 device.json의 안전한 원본 경로')).Path
+$operatorDirectory = Join-Path $env:USERPROFILE 'Autograde Operator'
+$deviceFile = Join-Path $operatorDirectory 'device.json'
+if (Test-Path -LiteralPath $operatorDirectory) { throw '기존 설정은 담당자가 소유권·링크·토큰 교체 여부를 먼저 확인하세요.' }
+$sid = [Security.Principal.WindowsIdentity]::GetCurrent().User
+$directoryAcl = New-Object Security.AccessControl.DirectorySecurity
+$directoryAcl.SetOwner($sid)
+$directoryAcl.SetAccessRuleProtection($true, $false)
+$directoryRule = New-Object Security.AccessControl.FileSystemAccessRule($sid, 'FullControl', 'ContainerInherit, ObjectInherit', 'None', 'Allow')
+$directoryAcl.AddAccessRule($directoryRule)
+[IO.Directory]::CreateDirectory($operatorDirectory, $directoryAcl) | Out-Null
+Copy-Item -LiteralPath $deviceSource -Destination $deviceFile
+$fileAcl = New-Object Security.AccessControl.FileSecurity
+$fileAcl.SetOwner($sid)
+$fileAcl.SetAccessRuleProtection($true, $false)
+$fileAcl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($sid, 'FullControl', 'Allow')))
+Set-Acl -LiteralPath $deviceFile -AclObject $fileAcl
+```
+
+정책을 바꾼 뒤에는 학생 코드가 없는 시험 좌석에서 실행기 화면의 **서버 담당자 정책 확인** 문구와
+종료/다음 실행 동작을 확인한다. 기본값 경고가 나오면 정책 적용에 성공한 것으로 간주하지 않는다.
 
 현재 산출물은 **서명되지 않은 release candidate**다. Windows에서 실행한 빌드 검사는 별도
 report에 기록한다. 다른 OS에서 C# 컴파일 또는 PE 형식 검사만 한 결과를 Windows 실행 성공으로

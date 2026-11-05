@@ -31,6 +31,35 @@ test("shared lifecycle hints do not apply to ordinary VS Code or persistent laun
   await assert.rejects(SharedLearningSession.fromEnvironment("Autograde IDE", {AUTOGRADE_LEARNING_LIFETIME: "shared"}), /공용 실습/);
 });
 
+test("cleanup policy is normalized from matching launcher marker/environment; legacy absence stays on_exit", async () => {
+  const f = await fixture();
+  try {
+    assert.equal((await f.read())!.cleanupMode, "on_exit");
+    for (const cleanupMode of ["on_exit", "next_start"] as const) {
+      await writeFile(path.join(f.root, SHARED_SESSION_MARKER), JSON.stringify({...f.marker, cleanupMode}), {mode: 0o600});
+      const session = (await SharedLearningSession.fromEnvironment("Autograde IDE", {...f.environment, AUTOGRADE_SESSION_CLEANUP_MODE: cleanupMode}))!;
+      assert.equal(session.cleanupMode, cleanupMode);
+      await session.assertWorkspacePath(f.workspace);
+    }
+  } finally { await f.dispose(); }
+});
+
+test("unknown, inconsistent and changed cleanup policies fail closed", async () => {
+  const f = await fixture();
+  try {
+    for (const [markerMode, environmentMode] of [["next_start", "on_exit"], ["on_exit", "next_start"],
+      ["next_start", undefined], [undefined, "next_start"], ["unknown", "unknown"], ["", ""]]) {
+      await writeFile(path.join(f.root, SHARED_SESSION_MARKER), JSON.stringify({...f.marker, cleanupMode: markerMode}), {mode: 0o600});
+      await assert.rejects(SharedLearningSession.fromEnvironment("Autograde IDE", {...f.environment, AUTOGRADE_SESSION_CLEANUP_MODE: environmentMode}), /공용 실습/);
+    }
+    await writeFile(path.join(f.root, SHARED_SESSION_MARKER), JSON.stringify(f.marker), {mode: 0o600});
+    const session = (await f.read())!;
+    await writeFile(path.join(f.root, SHARED_SESSION_MARKER), JSON.stringify({...f.marker, cleanupMode: "next_start"}), {mode: 0o600});
+    await assert.rejects(session.assertWorkspacePath(f.workspace), /공용 실습/);
+    await assert.rejects(session.markAuthenticated(), /공용 실습/);
+  } finally { await f.dispose(); }
+});
+
 test("first authentication is remembered without tokens, subsequent login and host reload are blocked", async () => {
   const f = await fixture();
   try {

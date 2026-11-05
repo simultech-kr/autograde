@@ -107,6 +107,15 @@ test("shared-session notice distinguishes temporary work from retained exports a
   assert.equal(learningHomeBlockedReason("endSession", {authenticated: false, trusted: false, hasWorkspace: false, sharedSession: true}), undefined);
 });
 
+test("next_start home explains launch-time workspace cleanup and authenticated server recovery", () => {
+  const html = renderLearningHome({...ready, sharedSession: true, cleanupMode: "next_start"}, "safe");
+  assert.match(html, /코드·자료는 다음 IDE 실행 시 정리/);
+  assert.match(html, /로그인 정보와 IDE 임시 기록을 정리/);
+  assert.match(html, /비정상 종료 후 새 수령 코드로 같은 과제를 연결하면 서버 작업 저장본을 새 폴더로 복원/);
+  assert.match(html, /별도로 내보낸 폴더·ZIP은 보존/);
+  assert.doesNotMatch(html, /완전히 종료하면.*코드·자료|창 닫기·강제 종료도 로컬 실습 내용과 로그인 정보를 삭제/);
+});
+
 test("shared home blocks identity replacement and keeps local export and exit available after expiry", () => {
   const fresh = {...ready, authenticated: false, sharedSession: true};
   assert.equal(learningHomeBlockedReason("claim", fresh), undefined);

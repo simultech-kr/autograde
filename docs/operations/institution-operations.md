@@ -121,7 +121,7 @@ autograde-ops rotate-seat --config /srv/autograde-institution/pilot.csv \
 autograde-ops revoke-seat --config /srv/autograde-institution/pilot.csv --seat-id lab-a-01
 ```
 
-발급 토큰은 화면/로그에 출력하지 않고 새 0600 파일에 기록한다. 토큰 권한은 자기 좌석의 고정된 상태 필드 보고뿐이며 학생 인증·관리자 작업에 사용할 수 없다. 담당자가 파일을 해당 PC의 다음 위치에 배치한다.
+발급 토큰은 화면/로그에 출력하지 않고 새 0600 파일에 기록한다. 토큰 권한은 자기 좌석의 고정된 상태 필드 보고와 정리 정책 조회이며 학생 인증·관리자 작업·다른 좌석 조회에 사용할 수 없다. 담당자가 파일을 해당 PC의 다음 위치에 배치한다.
 
 발급 파일 저장에 실패하면 DB 등록·회전도 취소하고 이번에 만든 미완성 파일을 제거한다. 같은 출력 경로로 재시도할 수 있으며 기존 파일은 덮어쓰거나 삭제하지 않는다. 회전 성공 시 기존 토큰은 즉시 무효가 되므로 새 파일을 해당 PC에 배치한다. 회전은 중지한 좌석도 다시 활성화하므로 복구할 정확한 좌석 ID를 확인한다.
 
@@ -131,7 +131,38 @@ autograde-ops revoke-seat --config /srv/autograde-institution/pilot.csv --seat-i
 | Linux / WSL2 | `~/.config/autograde-operator/device.json` |
 | Windows native | `~/Autograde Operator/device.json` |
 
-학생 작업 폴더·확장 설정·공개 릴리스 manifest에는 넣지 않는다. POSIX 파일은 소유자 또는 root 소유 0600이어야 하며 Windows는 관리자와 실행 사용자만 읽도록 ACL을 설정한다. 보고 실패가 IDE 실행/정리를 중단하지 않으며 서버는 미보고/지연으로 표시한다. 시작·정상 정리 및 60초 간격으로 보고한다. Windows native 정리는 부모 실행기가 Node 종료 뒤 수행하므로 현재 보고는 정리 상태를 **미확인**으로 남긴다. 강제 전원 종료도 정상 정리로 보고하지 않는다. 보고 endpoint는 기존 HTTPS API `:20000/v1/operations/seats/report`이며 새 외부 포트를 열지 않는다.
+학생 작업 폴더·확장 설정·공개 릴리스 manifest에는 넣지 않는다. POSIX 파일은 소유자 또는 root 소유 0600이어야 하며 Windows는 관리자와 실행 사용자만 읽도록 ACL을 설정한다. 보고 실패가 IDE 실행/정리를 중단하지 않으며 서버는 미보고/지연으로 표시한다. 시작·정상 정리 및 60초 간격으로 보고한다. Windows native 정리는 부모 실행기가 시작·종료 정책에 따라 수행하며, 정리 결과를 확인하지 못한 보고는 **미확인**으로 남긴다. 강제 전원 종료도 정상 정리로 보고하지 않는다. 보고 endpoint는 기존 HTTPS API `:20000/v1/operations/seats/report`이며 새 외부 포트를 열지 않는다.
+
+### Windows 공용 실습실의 정리 시점
+
+관리자는 **서버·실습실 운영 → 실습실 기기 → Windows 정리 정책**에서 좌석별로
+`다음 IDE 시작 (기본)` 또는 `IDE 종료`를 저장할 수 있다. 같은 변경을 서버 CLI에서도 할 수 있다.
+
+```sh
+autograde-ops set-seat-policy --config /srv/autograde-institution/pilot.csv \
+  --seat-id lab-a-01 --cleanup-mode next_start
+```
+
+`next_start`는 정상 종료 시 로그인 정보를 지우고 로컬 작업 폴더는 남긴다. 다음 IDE 시작 시
+이전 작업 폴더를 정리한 뒤 새 실습을 시작한다. `on_exit`는 종료 시 작업 폴더도 정리한다.
+학생이 바뀌면 새로 인증해야 하며, 로그인 후 서버에 저장된 이전 저장본을 복원할 수 있다.
+PC 강제 종료·재부팅 후에도 서버가 이미 받은 저장본은 남지만, 서버로 전송되지 않은 변경은
+복구할 수 없다. 로컬 폴더 잔존을 복구 보장으로 설명하지 않는다.
+
+Windows 실행기는 작업을 열기 전에 비공개 `device.json`의 HTTPS API와 좌석 토큰으로
+`GET /v1/operations/seats/{seat_id}/policy`를 요청한다. 응답은
+`{"schema":1,"seat_id":"lab-a-01","cleanup_mode":"next_start"}` 형식이다.
+자기 좌석의 활성 토큰만 조회할 수 있고, 폐기되거나 회전 전 토큰은 즉시 거절한다.
+정책은 한 실행 동안 고정되며 관리자 변경은 다음 실행부터 적용된다. 설정 누락·통신 실패 시
+실행기가 기본 `next_start`를 선택하고 이를 사용자에게 알린다. 관리자 화면의 정책은 서버에
+저장된 값이며, 현재 오프라인 기기가 그 값을 적용했다는 확인 표시가 아니다.
+
+기존 등록부는 시작할 때 `cleanup_mode=next_start` 열을 추가하는 방식으로 갱신하며
+좌석·토큰·폐기 상태·보고 내역을 보존한다. 변경은 `operations.sqlite3`의 `seat_policy_audit`에
+변경 주체·좌석·이전 값·새 값·시각과 함께 같은 트랜잭션으로 기록된다. CLI 주체는
+`local_operator`, 공유 운영자 파일럿은 `shared_operator`, 개인 관리자는 계정 ID다.
+웹 저장 경로 `POST /instructor/operations/seats/{seat_id}/policy`는 기존 관리자 권한,
+Origin·CSRF 검사를 거치며 담당 교수자·조회 전용 계정과 기기 토큰은 변경할 수 없다.
 
 ## 운영 화면 검증
 

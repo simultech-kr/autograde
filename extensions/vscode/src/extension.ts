@@ -89,13 +89,13 @@ import { learningEnvironment } from "./learningEnvironment";
 import { ClassroomActivityReporter, classroomEnvironment, isClassroomFileUri, isManagedClassroomSave, type ClassroomSharingStatus } from "./classroomActivity";
 import { ClassroomActionError, ClassroomCommands, CLASSROOM_COMMAND_LABELS, type ClassroomCommandResponse } from "./classroomCommands";
 import { findSafeStarterPreview } from "./bundleWorkspace";
-import { SharedLearningSession, END_LEARNING_SESSION_COMMAND } from "./sharedLearningSession";
+import { SharedLearningSession, END_LEARNING_SESSION_COMMAND, sharedSessionCleanupNotice } from "./sharedLearningSession";
 import { LearningExportView, LEARNING_EXPORT_COMMAND } from "./learningExportView";
 import { ManagedExtensions, MANAGED_EXTENSIONS_COMMAND } from "./managedExtensions";
 import { ManagedExtensionsApi } from "./managedExtensionsApi";
 import { ManagedExtensionsInstaller } from "./managedExtensionsView";
 import { LearningCheckpointView, SAVE_LEARNING_CHECKPOINT_COMMAND, RESTORE_LEARNING_CHECKPOINT_COMMAND } from "./learningCheckpointView";
-import { learningCheckpointLabel, type LearningCheckpointStatus } from "./learningCheckpoint";
+import { learningCheckpointLabel, sameLearningScope, type LearningCheckpointStatus } from "./learningCheckpoint";
 import { resolveUnsavedSharedExit } from "./sharedExitDecision";
 import { ServerDownloadsView, SERVER_DOWNLOADS_COMMAND } from "./serverDownloadsView";
 import { REMOTE_LEARNING_COMMAND } from "./remoteLearning";
@@ -218,6 +218,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     },
   });
   const learningExport = new LearningExportView(client, {
+    cleanupMode: sharedSession?.cleanupMode,
     currentWorkspace: () => {
       const selected = assignmentWorkspaces.selected;
       if (selected) return {rootPath: selected.rootPath, assignmentId: selected.assignment.id, title: selected.assignment.title};
@@ -258,6 +259,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     checkpointStatus: learningCheckpointLabel(checkpointStatus),
     remoteLearningStatus,
     sharedSession: Boolean(sharedSession),
+    cleanupMode: sharedSession?.cleanupMode,
     sessionNeedsRestart: Boolean(sharedSession?.authenticationUsed && !authenticationUiState),
     sessionGeneration: tokens.getSessionGeneration(),
     serviceBaseUrl: (() => { try { return transport.getBaseUrl(); } catch { return ""; } })(),
@@ -480,6 +482,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     if (assignmentOperations.isBusy || submitting) throw new Error("과제 작업이 진행 중입니다. 완료하거나 취소한 뒤 다시 시도하세요.");
     // Unlike runCommand, preserve errors so the form cannot show a false success.
     await assignmentOperations.tryRun(action);
+    await learningCheckpoints?.offerRecovery();
   };
   const discoveryMachineSetting = <T>(key: string): T | undefined => {
     const setting = vscode.workspace.getConfiguration("autograde").inspect<T>(key);
@@ -516,14 +519,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       await connectionMonitor.checkNow();
     },
   });
-  const runAssignmentCommand = (action: () => Promise<unknown>): Promise<void> => runCommand(() =>
-    assignmentOperations.run(action, () => {
+  const runAssignmentCommand = (action: () => Promise<unknown>): Promise<void> => runCommand(async () => {
+    await assignmentOperations.run(action, () => {
       void vscode.window.showInformationMessage("수령 코드 입력 또는 과제 작업이 진행 중입니다. 열린 입력창이나 진행 알림에서 완료·취소한 뒤 다시 선택하세요.");
-    }),
-  );
+    });
+    await learningCheckpoints?.offerRecovery();
+  });
   const runServerDownload = async <T>(action: () => Promise<T>): Promise<T> => {
     if (assignmentOperations.isBusy || submitting) throw new Error("과제 작업이 진행 중입니다. 완료하거나 취소한 뒤 다시 다운로드하세요.");
-    return await assignmentOperations.tryRun(action) as T;
+    const result = await assignmentOperations.tryRun(action) as T;
+    await learningCheckpoints?.offerRecovery();
+    return result;
   };
   serverDownloads = new ServerDownloadsView(client, {
     authenticated: () => authenticationUiState && studentState.isActive(),
@@ -558,6 +564,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     isBusy: () => assignmentOperations.isBusy || submitting,
     withCaptureLock: action => assignmentOperations.tryRun(action),
     sharedSession,
+    restoreOffered: scope => runAssignmentCommand(async () => {
+      if (sameLearningScope(scope, learningScope())) await learningCheckpoints!.restore();
+    }),
     connect: async (uri, scope, current) => {
       const assignment = treeProvider.getAssignments().find(item => item.id === scope.assignmentId);
       if (assignment && current()) await connectAssignmentFolder(assignmentWorkspaces, uri, assignment, current);
@@ -686,15 +695,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     if (!sharedSession || endingSharedSession) return;
     endingSharedSession = true;
     try {
-    const action = await vscode.window.showWarningMessage("공용 실습을 종료하면 이번 세션의 코드·자료·IDE 기록을 정리합니다.", {
-      modal: true, detail: `${learningCheckpoints?.exitEvidence() ?? "이 세션의 서버 저장 증거가 없습니다."}\n서버 저장이 확인된 작업본·공식 제출본과 세션 밖에 내보낸 파일은 보존됩니다. 종료 전에 현재 작업의 서버 저장을 시도합니다. 창 닫기·강제 종료도 로컬 파일을 삭제하므로 필요한 코드는 먼저 내보내세요. 종료를 취소하면 다음 학생에게 자리를 넘기지 마세요.`,
+    const action = await vscode.window.showWarningMessage("서버 저장을 확인하고 공용 실습을 종료합니다.", {
+      modal: true, detail: `${learningCheckpoints?.exitEvidence() ?? "이 세션의 서버 저장 증거가 없습니다."}\n${sharedSessionCleanupNotice(sharedSession.cleanupMode)} 서버 저장이 확인된 작업본·공식 제출본과 세션 밖에 내보낸 파일은 보존됩니다. 종료 전에 현재 작업의 서버 저장을 시도합니다. 비정상 종료 후에도 다음 실행에서 남은 파일을 정리하므로 필요한 코드는 먼저 내보내세요. 종료를 취소하면 다음 학생에게 자리를 넘기지 마세요.`,
     }, "먼저 내보내기", "실습 종료");
     if (action === "먼저 내보내기") { await vscode.commands.executeCommand("autograde.exportLearning"); return; }
     if (action !== "실습 종료") return;
     const remoteClosed = await remoteLearning?.finishBeforeExit();
     if (remoteClosed === false) {
       const decision = await vscode.window.showWarningMessage("원격 실행공간의 서버 저장 또는 삭제를 확인하지 못했습니다.",
-        {modal: true, detail: "연결을 확인한 뒤 원격 실습 화면에서 다시 종료하거나 먼저 내보내세요. 그래도 IDE를 종료하면 로컬 파일은 정리되며 원격 공간은 서버의 만료 정책으로 정리됩니다. 저장되지 않은 편집은 복원을 보장하지 않습니다."},
+        {modal: true, detail: `연결을 확인한 뒤 원격 실습 화면에서 다시 종료하거나 먼저 내보내세요. ${sharedSessionCleanupNotice(sharedSession.cleanupMode)} 원격 공간은 서버의 만료 정책으로 정리됩니다. 저장되지 않은 편집은 복원을 보장하지 않습니다.`},
         "원격 실습으로 돌아가기", "먼저 내보내기", "원격 정리 미확인으로 종료");
       if (decision === "원격 실습으로 돌아가기") { await remoteLearning?.show(); return; }
       if (decision === "먼저 내보내기") { await vscode.commands.executeCommand("autograde.exportLearning"); return; }
@@ -703,6 +712,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     let saved = await learningCheckpoints?.flushBeforeExit();
     if (!saved && (assignmentWorkspaces.selected || sharedSession.authenticationUsed)) {
       const approved = await resolveUnsavedSharedExit({
+        cleanupMode: sharedSession.cleanupMode,
         evidence: () => learningCheckpoints?.exitEvidence() ?? "이 세션의 서버 저장 증거가 없습니다.",
         retry: async () => { saved = await learningCheckpoints?.flushBeforeExit(); return saved === true; },
         exportWork: async () => { await vscode.commands.executeCommand("autograde.exportLearning"); },
@@ -939,7 +949,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     learningHome.show();
     void vscode.window.showInformationMessage(sharedSession.authenticationUsed
       ? "이 공용 실습의 인증이 종료되었습니다. 필요한 현재 코드를 내보낸 뒤 ‘공용 실습 종료’를 누르고 새 세션에서 연결하세요."
-      : "공용 실습: 새 작업 폴더를 사용합니다. IDE를 완전히 종료하면 코드·자료·기록이 정리됩니다. 보관할 내용은 먼저 내보내세요.");
+      : `공용 실습: 새 작업 폴더를 사용합니다. ${sharedSessionCleanupNotice(sharedSession.cleanupMode)} 보관할 내용은 서버 저장을 확인하거나 먼저 내보내세요.`);
   }
   if (shouldOpenLearningHome(vscode.env.appName, vscode.workspace.workspaceFolders?.length ?? 0,
     Boolean(vscode.workspace.workspaceFile), vscode.window.tabGroups.all.reduce((count, group) => count + group.tabs.length, 0))) {

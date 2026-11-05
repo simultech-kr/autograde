@@ -13,6 +13,7 @@ interface Loader { _load(name: string, parent: unknown, main: boolean): unknown 
 const loader = require("node:module") as Loader, original = loader._load;
 interface Pick {category?: string; format?: string}
 const messages: string[] = [];
+const pickerHints: string[] = [];
 const privacyNotices: {modal?: boolean; detail?: string}[] = [];
 let privacyDecision: string | undefined = EXPORT_PRIVACY_CONTINUE, afterPrivacy = () => {};
 let trusted = true, directory = "", format = "folder", selectedCategories = ["current"], picks = 0, dialogCount = 0;
@@ -31,7 +32,8 @@ const stub = {
       if (message === EXPORT_PRIVACY_TITLE) {privacyNotices.push(options ?? {}); afterPrivacy(); return privacyDecision;}
       messages.push(message); return options?.modal ? decision : undefined;
     },
-    showQuickPick: async (items: Pick[], options: {canPickMany: boolean}) => {
+    showQuickPick: async (items: Pick[], options: {canPickMany: boolean; placeHolder?: string}) => {
+      if (options.placeHolder) pickerHints.push(options.placeHolder);
       picks++; afterPick();
       if (!options.canPickMany) return items.find(item => item.format === format);
       if (items.some(item => item.category)) return items.filter(item => selectedCategories.includes(item.category ?? ""));
@@ -57,8 +59,9 @@ const material: StudentMaterial = {id: "mat_test", courseKey: "come2201", title:
   format: "pdf", sizeBytes: pdf.length, sha256: contentSha256(pdf), fileRevision: 1, edition: 1,
   availability: "open", opensAt: "2026-01-01T00:00:00Z", closesAt: "2027-01-01T00:00:00Z", updated: false};
 
-async function fixture() {
+async function fixture(cleanupMode?: "on_exit" | "next_start") {
   messages.length = 0; trusted = true; selectedCategories = ["current"]; format = "folder"; picks = 0; dialogCount = 0;
+  pickerHints.length = 0;
   afterPick = () => {}; afterDirectory = () => {}; documents = []; decision = "저장하고 내보내기";
   privacyNotices.length = 0; privacyDecision = EXPORT_PRIVACY_CONTINUE; afterPrivacy = () => {};
   remoteName = undefined; directoryScheme = "file"; directoryAuthority = ""; folders = [];
@@ -78,7 +81,7 @@ async function fixture() {
     getStudentMaterialFile: async () => {state.reads++; state.afterRead(); return pdf;},
   } as unknown as AutogradeClient;
   const view = new LearningExportView(client, {currentWorkspace: () => state.workspace ? {rootPath: state.workspace, title: "실습 코드"} : undefined,
-    assignments: () => [assignment], cacheRoot: () => cache, excludedDestinations: () => [session]});
+    assignments: () => [assignment], cacheRoot: () => cache, excludedDestinations: () => [session], cleanupMode});
   Object.assign((view as unknown as {content: object}).content, {
     context: async () => context,
     catalog: async () => ({...context, collections: state.unsupported ? [] : [manifest]}),
@@ -100,6 +103,17 @@ test("offline current-code export requires no server login and never submits or 
     assert.equal(privacyNotices.length, 1); assert.equal(privacyNotices[0]!.modal, true);
     assert.match(privacyNotices[0]!.detail!, /학번.*이름.*점수/);
     assert.match(privacyNotices[0]!.detail!, /삭제되지 않으며.*다른 사람이/);
+  } finally {await f.close();}
+});
+
+test("shared export explains the actual cleanup time and keeps independent output", async () => {
+  const f = await fixture("next_start");
+  try {
+    await f.view.show();
+    assert.match(pickerHints.join(" "), /코드·자료는 다음 IDE 실행 시 정리/);
+    assert.match(pickerHints.join(" "), /내보낸 파일은 자동 정리 후에도 보존/);
+    assert.doesNotMatch(pickerHints.join(" "), /완전히 종료하면.*코드·자료/);
+    assert.equal((await readdir(f.output)).length, 1);
   } finally {await f.close();}
 });
 

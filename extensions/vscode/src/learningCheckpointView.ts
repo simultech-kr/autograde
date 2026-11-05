@@ -16,12 +16,15 @@ export class LearningCheckpointView {
   readonly autosaver: LearningCheckpointAutosaver;
   private readonly statusBar = vscode.window.createStatusBarItem("autograde.learningCheckpoint", vscode.StatusBarAlignment.Left, 98);
   private restoreFlight?: AbortController;
+  private recoveryFlight?: {scope: LearningCheckpointScope; controller: AbortController};
+  private readonly recoveryOffered = new Set<string>();
   private disposed = false;
   constructor(private readonly client: AutogradeClient, private readonly options: {
     currentScope(): LearningCheckpointScope | undefined;
     isBusy(): boolean;
     withCaptureLock?(action: () => Promise<SubmissionBundle | undefined>): Promise<SubmissionBundle | undefined>;
     sharedSession?: {readonly workspace: string; assertWorkspacePath(candidate: string): Promise<void>};
+    restoreOffered?(scope: LearningCheckpointScope): Promise<void>;
     connect(root: vscode.Uri, scope: LearningCheckpointScope, current: () => boolean): Promise<void>;
     onStatus(status: LearningCheckpointStatus): void;
   }) {
@@ -82,6 +85,36 @@ export class LearningCheckpointView {
     this.autosaver.reconcile();
     // Restore requests also use scope guards after every awaited operation.
     if (!this.scope()) this.restoreFlight?.abort();
+    if (this.recoveryFlight && !sameLearningScope(this.recoveryFlight.scope, this.scope())) this.recoveryFlight.controller.abort();
+  }
+  private recoveryIdentity(scope: LearningCheckpointScope): string {
+    // Restoring intentionally changes only the folder; do not offer the same history again.
+    return JSON.stringify([scope.baseUrl, scope.generation, scope.assignmentId, scope.scheme, scope.authority]);
+  }
+  /** Called after assignment acceptance/download/open releases its operation lock. */
+  async offerRecovery(): Promise<void> {
+    const scope = this.scope();
+    if (!scope || !this.options.sharedSession || this.options.isBusy() || this.restoreFlight || this.recoveryFlight) return;
+    const key = this.recoveryIdentity(scope);
+    if (this.recoveryOffered.has(key)) return;
+    this.recoveryOffered.add(key);
+    const controller = new AbortController(), flight = {scope, controller}; this.recoveryFlight = flight;
+    const current = () => !controller.signal.aborted && sameLearningScope(scope, this.scope());
+    try {
+      await this.validateRoot(scope); if (!current()) return;
+      const versions = await this.client.getLearningCheckpoints(scope, controller.signal); if (!current() || !versions.length) return;
+      const latest = versions.reduce((first, item) => item.version > first.version ? item : first);
+      const choice = await vscode.window.showInformationMessage(
+        `이 과제의 이전 서버 작업 저장본 ${versions.length}개가 있습니다. 최근 저장: ${new Date(latest.created_at).toLocaleString()} · v${latest.version}. 새 폴더로 복원하면 현재 템플릿과 작업은 그대로 보존됩니다.`,
+        "서버 작업 저장본 복원", "현재 폴더 계속 사용");
+      if (!current() || choice !== "서버 작업 저장본 복원") return;
+      // Release the discovery flight before the command re-enters offerRecovery.
+      if (this.recoveryFlight === flight) this.recoveryFlight = undefined;
+      if (this.options.restoreOffered) await this.options.restoreOffered(scope);
+      else if (!this.options.isBusy()) await this.restore();
+    } catch {
+      if (current()) void vscode.window.showWarningMessage("이전 서버 작업 저장본을 확인하거나 복원하지 못했습니다. 연결을 확인한 뒤 학습 홈의 ‘서버 작업 저장본 · 새 폴더로 복원’을 선택하세요.");
+    } finally { if (this.recoveryFlight === flight) this.recoveryFlight = undefined; }
   }
   private async validateRoot(scope: LearningCheckpointScope): Promise<void> {
     await this.options.sharedSession?.assertWorkspacePath(scope.rootPath);
@@ -103,7 +136,7 @@ export class LearningCheckpointView {
     if (!this.scope()) return false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      return await Promise.race([this.saveNow(false), new Promise<boolean>(resolve => {
+      return await Promise.race([this.options.isBusy() ? Promise.resolve(false) : this.autosaver.flushPending(), new Promise<boolean>(resolve => {
         timer = setTimeout(() => { this.autosaver.abortCurrent(); resolve(false); }, timeoutMs);
       })]);
     } finally { if (timer) clearTimeout(timer); }
@@ -129,6 +162,7 @@ export class LearningCheckpointView {
     const scope = this.scope();
     if (!scope) throw new Error("새 수령 코드로 연결하고 과제 폴더를 먼저 여세요.");
     if (this.restoreFlight) return;
+    this.recoveryOffered.add(this.recoveryIdentity(scope));
     const controller = new AbortController(); this.restoreFlight = controller;
     const current = () => !controller.signal.aborted && sameLearningScope(scope, this.scope());
     const guard = () => { if (!current()) throw new Error("연결된 과제 또는 인증이 변경되어 복원을 중단했습니다."); };
@@ -174,5 +208,5 @@ export class LearningCheckpointView {
       throw error;
     } finally { if (this.restoreFlight === controller) this.restoreFlight = undefined; }
   }
-  dispose(): void { this.disposed = true; this.restoreFlight?.abort(); this.autosaver.dispose(); this.statusBar.dispose(); }
+  dispose(): void { this.disposed = true; this.restoreFlight?.abort(); this.recoveryFlight?.controller.abort(); this.autosaver.dispose(); this.statusBar.dispose(); }
 }

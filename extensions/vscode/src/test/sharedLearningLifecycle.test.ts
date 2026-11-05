@@ -16,7 +16,7 @@ const noOp = () => {}, disposable = () => ({dispose: noOp});
 const commands = new Map<string, (...args: unknown[]) => unknown>();
 const ui = {choice: undefined as string | undefined, quits: 0, exports: 0, signins: 0, claims: 0,
   choices: [] as (string | undefined)[],
-  revoked: 0, warnings: [] as string[], errors: [] as string[], workspace: "", exportRoot: "",
+  revoked: 0, warnings: [] as string[], warningDetails: [] as string[], information: [] as string[], errors: [] as string[], workspace: "", exportRoot: "",
   failRevoke: false, assignments: [] as Assignment[], inspected: "", serverOrigin: "https://test.invalid", homeForms: [] as unknown[],
   configuration: {} as Record<string, {defaultValue?: unknown; globalValue?: unknown; workspaceValue?: unknown}>,
   configurationReads: [] as string[], scannedProfiles: [] as actualDiscovery.TrustedDiscoveryServer[][]};
@@ -66,8 +66,8 @@ const vscode = {
     createTreeView: () => ({dispose: noOp, onDidChangeSelection: disposable}),
     createOutputChannel: () => ({dispose: noOp, clear: noOp, hide: noOp}),
     createStatusBarItem: () => ({dispose: noOp, show: noOp, hide: noOp}),
-    showInformationMessage: async () => undefined,
-    showWarningMessage: async (message: string) => {ui.warnings.push(message); return ui.choices.length ? ui.choices.shift() : ui.choice;},
+    showInformationMessage: async (message: string) => {ui.information.push(message); return undefined;},
+    showWarningMessage: async (message: string, options?: {detail?: string}) => {ui.warnings.push(message); ui.warningDetails.push(options?.detail ?? ""); return ui.choices.length ? ui.choices.shift() : ui.choice;},
     showErrorMessage: async (message: string) => {ui.errors.push(message); return undefined;},
     withProgress: async (_options: unknown, task: (progress: unknown, cancellation: unknown) => Promise<unknown>) =>
       task({report: noOp}, {isCancellationRequested: false, onCancellationRequested: disposable})},
@@ -119,17 +119,17 @@ loader._load = function(name, parent, main) {
 const extension = require("../extension") as typeof import("../extension");
 loader._load = originalLoad;
 
-async function fixture(used = false) {
-  commands.clear(); Object.assign(ui, {choice: undefined, choices: [], quits: 0, exports: 0, signins: 0, claims: 0, revoked: 0, warnings: [], errors: [], failRevoke: false, assignments: [], inspected: "", serverOrigin: "https://test.invalid", homeForms: [],
+async function fixture(used = false, cleanupMode: "on_exit" | "next_start" = "on_exit") {
+  commands.clear(); Object.assign(ui, {choice: undefined, choices: [], quits: 0, exports: 0, signins: 0, claims: 0, revoked: 0, warnings: [], warningDetails: [], information: [], errors: [], failRevoke: false, assignments: [], inspected: "", serverOrigin: "https://test.invalid", homeForms: [],
     configuration: {"discovery.enabled": {defaultValue: false}}, configurationReads: [], scannedProfiles: []});
   const parent = await mkdtemp(path.join(await realpath(os.tmpdir()), "ag-lifecycle-test-"));
   const id = randomBytes(12).toString("hex"), root = path.join(parent, `e-${id}`), workspace = path.join(root, "workspace");
   await mkdir(root, {mode: 0o700}); await mkdir(workspace, {mode: 0o700}); await mkdir(path.join(root, "materials"), {mode: 0o700});
   const stat = await lstat(root);
   await writeFile(path.join(root, SHARED_SESSION_MARKER), JSON.stringify({schema: 1, sessionId: id, root, rootDev: stat.dev,
-    rootIno: stat.ino, launcherPid: process.pid, phase: "running"}), {mode: 0o600});
+    rootIno: stat.ino, launcherPid: process.pid, phase: "running", cleanupMode}), {mode: 0o600});
   if (used) await writeFile(path.join(root, SHARED_AUTH_USED), JSON.stringify({schema: 1, sessionId: id, authenticated: true}), {mode: 0o600});
-  const settings = {AUTOGRADE_LEARNING_LIFETIME: "shared", AUTOGRADE_SESSION_ROOT: root, AUTOGRADE_SESSION_ID: id,
+  const settings = {AUTOGRADE_LEARNING_LIFETIME: "shared", AUTOGRADE_SESSION_ROOT: root, AUTOGRADE_SESSION_ID: id, AUTOGRADE_SESSION_CLEANUP_MODE: cleanupMode,
     AUTOGRADE_LEARNER_WORKSPACE: workspace, AUTOGRADE_LEARNER_MATERIALS: path.join(root, "materials"), AUTOGRADE_DISCOVERY_PROFILE_PATH: ""};
   const old = Object.fromEntries(Object.keys(settings).map(key => [key, process.env[key]])); Object.assign(process.env, settings); ui.workspace = workspace;
   const context = {subscriptions: [] as {dispose(): void}[], secrets: {delete: async () => {}},
@@ -179,6 +179,21 @@ test("actual reload blocks authentication but allows own code export and full ID
     assert.equal(ui.revoked, 1); assert.equal(tokens.loggedIn, false); assert.equal(ui.quits, 1);
     // The actual process supervisor, not extension deactivation, owns deletion.
     extension.deactivate(); assert.equal((await lstat(f.workspace)).isDirectory(), true);
+  } finally {await f.dispose();}
+});
+
+test("next_start actual lifecycle explains deferred file cleanup while revoking login and quitting", async () => {
+  const f = await fixture(false, "next_start");
+  try {
+    assert.match(ui.information.join(" "), /코드·자료는 다음 IDE 실행 시 정리/);
+    await homeInputs.claim("AK1-2345-6789-ABCD", ui.serverOrigin);
+    await writeFile(path.join(f.workspace, "main.cpp"), "local work retained until launcher cleanup");
+    ui.choices = ["실습 종료", "미저장 변경 폐기 선택", "미저장 변경을 폐기하고 종료"];
+    await f.command("autograde.endLearningSession");
+    assert.equal(ui.revoked, 1); assert.equal(tokens.loggedIn, false); assert.equal(ui.quits, 1);
+    assert.match(ui.warningDetails.join(" "), /코드·자료는 다음 IDE 실행 시 정리/);
+    assert.doesNotMatch(ui.warningDetails.join(" "), /지금 종료하면 로컬 코드|창 닫기·강제 종료도 로컬 파일을 삭제/);
+    assert.equal(await readFile(path.join(f.workspace, "main.cpp"), "utf8"), "local work retained until launcher cleanup");
   } finally {await f.dispose();}
 });
 

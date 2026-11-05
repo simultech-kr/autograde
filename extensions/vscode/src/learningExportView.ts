@@ -10,6 +10,7 @@ import { studentMaterialFilename, verifyStudentMaterial, type StudentMaterial } 
 import type { SubmissionVersion } from "./submissionHistory";
 import type { Assignment } from "./types";
 import { confirmExportPrivacy } from "./exportPrivacy";
+import { sharedSessionCleanupNotice, type SharedSessionCleanupMode } from "./sharedLearningSession";
 
 export const LEARNING_EXPORT_COMMAND = "autograde.exportLearning";
 export interface ExportWorkspace { readonly rootPath: string; readonly assignmentId?: string; readonly title?: string }
@@ -18,6 +19,7 @@ export interface LearningExportViewOptions {
   readonly assignments: () => readonly Assignment[];
   readonly cacheRoot: () => string;
   readonly excludedDestinations: () => readonly string[];
+  readonly cleanupMode?: SharedSessionCleanupMode;
 }
 type Category = "current" | "submissions" | "content" | "personal";
 const plain = (text: string) => text.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\$\(/g, "＄(");
@@ -70,7 +72,8 @@ export class LearningExportView implements vscode.Disposable {
       if (!categories.length) {await vscode.window.showInformationMessage("내보낼 코드 폴더를 열거나 수령 코드로 연결하세요. 서버 자료는 학생 인증이 필요합니다."); return;}
       const selected = await pick(categories, {title: "내 학습내용 내보내기 · 항목 선택", placeHolder: authenticationUnavailable
         ? "서버 인증을 확인할 수 없어 현재 코드만 제공합니다. 로컬 코드는 연결 없이 내보낼 수 있습니다."
-        : "여러 항목을 선택할 수 있습니다. 공식 제출과 별개이며 기존 파일은 변경하지 않습니다."});
+        : this.options.cleanupMode ? `${sharedSessionCleanupNotice(this.options.cleanupMode)} 여러 항목을 선택할 수 있습니다. 내보낸 파일은 자동 정리 후에도 보존됩니다.`
+          : "여러 항목을 선택할 수 있습니다. 공식 제출과 별개이며 기존 파일은 변경하지 않습니다."});
       if (!selected?.length) return;
       const chosen = new Set(selected.map(item => item.category));
       const versions: {assignment: Assignment; version: SubmissionVersion}[] = [];

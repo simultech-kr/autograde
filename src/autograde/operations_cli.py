@@ -145,6 +145,10 @@ def main(argv=None):
     revoke = commands.add_parser('revoke-seat')
     revoke.add_argument('--config', required=True)
     revoke.add_argument('--seat-id', required=True)
+    policy = commands.add_parser('set-seat-policy')
+    policy.add_argument('--config', required=True)
+    policy.add_argument('--seat-id', required=True)
+    policy.add_argument('--cleanup-mode', required=True, choices=('next_start', 'on_exit'))
     setup = commands.add_parser('configure')
     setup.add_argument('--directory', required=True)
     setup.add_argument('--api-url', required=True)
@@ -185,6 +189,8 @@ def main(argv=None):
             result = {'seat_id': args.seat_id, 'credential_written': True}
         elif args.command == 'revoke-seat':
             result = SeatRegistry(paths.root).revoke(args.seat_id)
+        elif args.command == 'set-seat-policy':
+            result = SeatRegistry(paths.root).set_policy(args.seat_id, args.cleanup_mode)
         else:
             result = configure(args.directory, api_url=args.api_url, web_url=args.web_url, runner_image=args.runner_image, runtime=args.runtime)
         print(json.dumps({'ok': True, 'result': result}, ensure_ascii=False))

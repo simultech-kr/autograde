@@ -211,7 +211,7 @@
       {
         "command": "autograde.endLearningSession",
         "title": "Autograde: End Shared Learning Session",
-        "shortTitle": "공용 실습 종료 · 임시 파일 정리",
+        "shortTitle": "공용 실습 종료 · 저장 확인",
         "enablement": "autograde.sharedSession",
         "icon": "$(sign-out)"
       },
@@ -349,7 +349,7 @@
       {
         "view": "autograde.assignments",
         "when": "!autograde.authenticated",
-        "contents": "학생 포털에서 새 수령 코드를 받아 연결하세요. 웹 주소와 채점 서버 주소는 교수자의 안내를 따릅니다. 일반 VS Code의 기존 과제 파일은 이어서 사용할 수 있습니다. 공용 Autograde IDE는 종료 후 파일이 정리되며 서버 저장본을 복원할 수 있습니다.\n[학습 홈](command:autograde.openLearningHome)\n[학생 포털 · 내 수업](command:autograde.openStudentPortal)\n[서버 과제·자료 다운로드](command:autograde.openServerDownloads)\n[서버 주소 설정](command:autograde.configureServiceAddress)\n[서버 연결 확인](command:autograde.checkServerConnection)\n[수령 코드 입력 및 다운로드](command:autograde.redeemAssignmentClaim)"
+        "contents": "학생 포털에서 새 수령 코드를 받아 연결하세요. 웹 주소와 채점 서버 주소는 교수자의 안내를 따릅니다. 일반 VS Code의 기존 과제 파일은 이어서 사용할 수 있습니다. 공용 Autograde IDE는 실행 정책에 따라 종료 또는 다음 실행 시 파일을 정리하며, 서버 저장본을 복원할 수 있습니다.\n[학습 홈](command:autograde.openLearningHome)\n[학생 포털 · 내 수업](command:autograde.openStudentPortal)\n[서버 과제·자료 다운로드](command:autograde.openServerDownloads)\n[서버 주소 설정](command:autograde.configureServiceAddress)\n[서버 연결 확인](command:autograde.checkServerConnection)\n[수령 코드 입력 및 다운로드](command:autograde.redeemAssignmentClaim)"
       },
       {
         "view": "autograde.assignments",

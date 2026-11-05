@@ -5,6 +5,20 @@ import * as path from "node:path";
 export const SHARED_SESSION_MARKER = ".autograde-session.json";
 export const SHARED_AUTH_USED = ".autograde-auth-used";
 export const END_LEARNING_SESSION_COMMAND = "autograde.endLearningSession";
+export type SharedSessionCleanupMode = "on_exit" | "next_start";
+
+function cleanupMode(value: unknown): SharedSessionCleanupMode {
+  if (value === undefined) return "on_exit";
+  if (value === "on_exit" || value === "next_start") return value;
+  throw new Error(message);
+}
+
+/** Work-file lifetime comes from the launcher; authentication always ends with the session. */
+export function sharedSessionCleanupNotice(mode: SharedSessionCleanupMode = "on_exit"): string {
+  return mode === "next_start"
+    ? "이번 실습의 코드·자료는 다음 IDE 실행 시 정리합니다. 정상 종료할 때 로그인 정보와 IDE 임시 기록을 정리합니다."
+    : "IDE를 완전히 종료하면 이번 실습의 코드·자료·로그인 정보·IDE 임시 기록을 정리합니다. 다음 실행 시 남은 파일도 정리합니다.";
+}
 
 const message = "공용 실습 세션을 확인할 수 없습니다. IDE를 완전히 종료하고 Autograde 실행기로 다시 시작하세요.";
 const inside = (parent: string, child: string): boolean => {
@@ -50,7 +64,8 @@ async function readPrivateObject(file: string): Promise<Record<string, unknown>>
 export class SharedLearningSession {
   private used: boolean;
   private constructor(public readonly root: string, public readonly workspace: string,
-    public readonly materials: string, public readonly id: string, private readonly rootIdentity: {dev: number; ino: number}, used: boolean) { this.used = used; }
+    public readonly materials: string, public readonly id: string, public readonly cleanupMode: SharedSessionCleanupMode,
+    private readonly rootIdentity: {dev: number; ino: number}, used: boolean) { this.used = used; }
 
   static async fromEnvironment(appName: string, environment: Readonly<Record<string, string | undefined>>): Promise<SharedLearningSession | undefined> {
     if (!["Autograde IDE", "Autograde IDE Dev"].includes(appName) || environment.AUTOGRADE_LEARNING_LIFETIME !== "shared") return undefined;
@@ -63,9 +78,10 @@ export class SharedLearningSession {
     await regularDirectory(root, true);
     const stat = await lstat(root);
     const marker = await readPrivateObject(path.join(root, SHARED_SESSION_MARKER));
+    const mode = cleanupMode(environment.AUTOGRADE_SESSION_CLEANUP_MODE);
     if (marker.schema !== 1 || marker.sessionId !== id || marker.root !== root || marker.rootDev !== stat.dev
       || marker.rootIno !== stat.ino || !Number.isSafeInteger(marker.launcherPid) || (marker.launcherPid as number) <= 0
-      || !["launching", "running"].includes(String(marker.phase))) throw new Error(message);
+      || !["launching", "running"].includes(String(marker.phase)) || cleanupMode(marker.cleanupMode) !== mode) throw new Error(message);
     try { process.kill(marker.launcherPid as number, 0); } catch { throw new Error(message); }
     const workspace = path.join(root, "workspace"), materials = path.join(root, "materials");
     await regularDirectory(workspace, true); await regularDirectory(materials, true);
@@ -75,7 +91,7 @@ export class SharedLearningSession {
       if (flag.schema !== 1 || flag.sessionId !== id || flag.authenticated !== true) throw new Error(message);
       used = true;
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-    return new SharedLearningSession(root, workspace, materials, id, {dev: stat.dev, ino: stat.ino}, used);
+    return new SharedLearningSession(root, workspace, materials, id, mode, {dev: stat.dev, ino: stat.ino}, used);
   }
 
   get authenticationUsed(): boolean { return this.used; }
@@ -109,6 +125,6 @@ export class SharedLearningSession {
     if (info.ino !== this.rootIdentity.ino || info.dev !== this.rootIdentity.dev) throw new Error(message);
     const marker = await readPrivateObject(path.join(this.root, SHARED_SESSION_MARKER));
     if (marker.sessionId !== this.id || marker.root !== this.root || marker.rootDev !== info.dev || marker.rootIno !== info.ino
-      || !["launching", "running"].includes(String(marker.phase))) throw new Error(message);
+      || !["launching", "running"].includes(String(marker.phase)) || cleanupMode(marker.cleanupMode) !== this.cleanupMode) throw new Error(message);
   }
 }

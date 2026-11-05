@@ -22,6 +22,8 @@ import uuid
 
 from .platform_service import PlatformAPIError
 
+CLEANUP_MODES = frozenset({'next_start', 'on_exit'})
+
 
 def now_iso():
     return datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
@@ -62,7 +64,18 @@ class SeatRegistry:
                 last_seen_at TEXT, report_id TEXT, report_json TEXT);
                 CREATE TABLE IF NOT EXISTS seat_reports (
                 seat_id TEXT NOT NULL REFERENCES seats(seat_id), report_id TEXT NOT NULL,
-                reported_at TEXT NOT NULL, PRIMARY KEY(seat_id,report_id));''')
+                reported_at TEXT NOT NULL, PRIMARY KEY(seat_id,report_id));
+                CREATE TABLE IF NOT EXISTS seat_policy_audit (
+                sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                seat_id TEXT NOT NULL REFERENCES seats(seat_id), actor TEXT NOT NULL,
+                previous_mode TEXT NOT NULL, cleanup_mode TEXT NOT NULL, changed_at TEXT NOT NULL);''')
+            # Older registries retain their credentials, reports and revocations.
+            # Serialize the additive migration across concurrently starting services.
+            with db:
+                db.execute('BEGIN IMMEDIATE')
+                if 'cleanup_mode' not in {row['name'] for row in db.execute('PRAGMA table_info(seats)')}:
+                    db.execute("ALTER TABLE seats ADD COLUMN cleanup_mode TEXT NOT NULL DEFAULT 'next_start' "
+                               "CHECK(cleanup_mode IN ('next_start','on_exit'))")
         self.path.chmod(0o600)
         if not marker.exists():
             try:
@@ -108,6 +121,35 @@ class SeatRegistry:
                 deliver({'seat_id': seat_id, 'report_token': token})
         return {'seat_id': seat_id, 'report_token': token}
 
+    @staticmethod
+    def _authenticate(seat, token):
+        if not isinstance(token, str) or not token or len(token) > 128:
+            raise PlatformAPIError(401, 'invalid_seat_token', '기기 등록 정보를 확인하세요.')
+        supplied = hashlib.sha256(token.encode()).hexdigest()
+        if not seat or not seat['active'] or not hmac.compare_digest(seat['token_hash'], supplied):
+            raise PlatformAPIError(401, 'invalid_seat_token', '기기 등록 정보를 확인하세요.')
+
+    def policy(self, token, seat_id):
+        with closing(self._connect()) as db:
+            seat = db.execute('SELECT * FROM seats WHERE seat_id=?', (seat_id,)).fetchone()
+        self._authenticate(seat, token)
+        return {'schema': 1, 'seat_id': seat_id, 'cleanup_mode': seat['cleanup_mode']}
+
+    def set_policy(self, seat_id, cleanup_mode, *, actor='local_operator'):
+        if not isinstance(cleanup_mode, str) or cleanup_mode not in CLEANUP_MODES:
+            raise PlatformAPIError(400, 'invalid_seat_policy', '정리 시점은 다음 시작 또는 종료 시점으로 선택하세요.')
+        if not isinstance(actor, str) or not actor or len(actor) > 128:
+            raise ValueError('invalid policy actor')
+        with closing(self._connect()) as db, db:
+            db.execute('BEGIN IMMEDIATE')
+            seat = db.execute('SELECT cleanup_mode FROM seats WHERE seat_id=?', (seat_id,)).fetchone()
+            if not seat:
+                raise PlatformAPIError(404, 'seat_not_found', '등록된 좌석을 확인하세요.')
+            db.execute('UPDATE seats SET cleanup_mode=? WHERE seat_id=?', (cleanup_mode, seat_id))
+            db.execute('INSERT INTO seat_policy_audit(seat_id,actor,previous_mode,cleanup_mode,changed_at) '
+                       'VALUES(?,?,?,?,?)', (seat_id, actor, seat['cleanup_mode'], cleanup_mode, now_iso()))
+        return {'schema': 1, 'seat_id': seat_id, 'cleanup_mode': cleanup_mode}
+
     def report(self, token, payload):
         required = {'seat_id', 'report_id', 'ide_version', 'extension_version', 'platform', 'architecture', 'cleanup', 'update'}
         if (not isinstance(payload, dict) or not required <= payload.keys()
@@ -131,15 +173,11 @@ class SeatRegistry:
                 raise ValueError()
         except (ValueError, TypeError, AttributeError):
             raise PlatformAPIError(400, 'invalid_seat_report', '기기 상태 보고 형식을 확인하세요.') from None
-        if not isinstance(token, str) or len(token) > 128:
-            raise PlatformAPIError(401, 'invalid_seat_token', '기기 등록 정보를 확인하세요.')
         timestamp = now_iso()
         with closing(self._connect()) as db, db:
             db.execute('BEGIN IMMEDIATE')
             seat = db.execute('SELECT * FROM seats WHERE seat_id=?', (payload['seat_id'],)).fetchone()
-            supplied = hashlib.sha256(token.encode()).hexdigest()
-            if not seat or not seat['active'] or not hmac.compare_digest(seat['token_hash'], supplied):
-                raise PlatformAPIError(401, 'invalid_seat_token', '기기 등록 정보를 확인하세요.')
+            self._authenticate(seat, token)
             if db.execute('SELECT 1 FROM seat_reports WHERE seat_id=? AND report_id=?', (payload['seat_id'], payload['report_id'])).fetchone():
                 return {'accepted': True, 'duplicate': True}
             age = age_seconds(seat['last_seen_at'], datetime.now(timezone.utc))
@@ -157,12 +195,13 @@ class SeatRegistry:
     def list(self, *, now=None):
         now = now or datetime.now(timezone.utc)
         with closing(self._connect()) as db:
-            rows = db.execute('SELECT seat_id,label,active,last_seen_at,report_json FROM seats ORDER BY label,seat_id').fetchall()
+            rows = db.execute('SELECT seat_id,label,active,last_seen_at,report_json,cleanup_mode FROM seats ORDER BY label,seat_id').fetchall()
         result = []
         for row in rows:
             payload = json.loads(row['report_json']) if row['report_json'] else {}
             age = age_seconds(row['last_seen_at'], now)
             result.append({'seat_id': row['seat_id'], 'label': row['label'], 'active': bool(row['active']),
+                'cleanup_mode': row['cleanup_mode'],
                 'last_seen_at': row['last_seen_at'], 'age_seconds': age,
                 'presence': 'unreported' if age is None else 'recent' if age < 180 else 'stale',
                 **{key: payload.get(key, 'unknown') for key in
@@ -202,6 +241,25 @@ class OperationsService:
 
     def check_readiness(self):
         return self.readiness.start()
+
+    def get_seat_policy(self, token, seat_id):
+        try:
+            if self.seats is None:
+                raise OSError('registry unavailable')
+            return self.seats.policy(token, seat_id)
+        except (OSError, sqlite3.Error):
+            raise PlatformAPIError(503, 'seat_registry_unavailable', '기기 상태 저장소를 확인하세요.') from None
+
+    def set_seat_policy(self, seat_id, cleanup_mode, *, actor):
+        try:
+            if self.seats is None:
+                raise OSError('registry unavailable')
+            with self._lock:
+                result = self.seats.set_policy(seat_id, cleanup_mode, actor=actor)
+                self._cached = None
+            return result
+        except (OSError, sqlite3.Error):
+            raise PlatformAPIError(503, 'seat_registry_unavailable', '기기 상태 저장소를 확인하세요.') from None
 
     def _read(self):
         now = datetime.now(timezone.utc)

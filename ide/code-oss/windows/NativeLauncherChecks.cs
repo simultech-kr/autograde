@@ -41,6 +41,55 @@ namespace Autograde.NativeWindows
             ReplaceOwner(Path.Combine(session, ".native-owner.json"), owner);
             if (session == store.Current) ReplaceOwner(Path.Combine(store.Sessions, ".current-owner.json"), owner);
         }
+        private static void CheckRetention(NativeSessionStore store, string exported)
+        {
+            string session = store.CreateSession(), id = store.SessionId(session);
+            string ownerFile = Path.Combine(session, ".native-owner.json"), anchor = Path.Combine(store.Sessions, ".current-owner.json");
+            var owner = NativePaths.ReadJson(ownerFile);
+            Assert(Object.Equals(owner["cleanupMode"], NativeCleanupPolicy.NextStart) && Object.Equals(NativePaths.ReadJson(anchor)["cleanupMode"], NativeCleanupPolicy.NextStart), "Default mode was not recorded in both ownership proofs.");
+            foreach (string name in new[] { "workspace", "materials", "r", "home", "appdata", "localappdata", "tmp", "build" }) {
+                string directory = Path.Combine(session, name); NativePaths.PrivateDirectory(directory, true);
+                File.WriteAllText(Path.Combine(directory, "fixture.txt"), name == "workspace" || name == "materials" ? "synthetic learner content" : "synthetic credential/cache");
+            }
+            NativePaths.WriteJson(Path.Combine(session, ".autograde-session.json"), new { schema = 1, sessionId = id, cleanupMode = NativeCleanupPolicy.NextStart });
+            owner["cleanupMode"] = NativeCleanupPolicy.OnExit; ReplaceOwner(ownerFile, owner);
+            Assert(Blocked(() => store.FinishSession(session)) && File.Exists(Path.Combine(session, "workspace", "fixture.txt")), "Exit accepted a policy different from the parent proof.");
+            owner["cleanupMode"] = NativeCleanupPolicy.NextStart; ReplaceOwner(ownerFile, owner);
+            string pending = Path.Combine(session, ".native-launch-pending.json"); NativePaths.WriteJson(pending, new { schema = 1 });
+            Assert(Blocked(() => store.FinishSession(session)) && File.Exists(Path.Combine(session, "r", "fixture.txt")), "Retention ignored unconfirmed process containment.");
+            File.Delete(pending);
+            string junction = Path.Combine(session, "workspace", "export-junction");
+            string command = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), @"System32\cmd.exe");
+            using (var link = Process.Start(new ProcessStartInfo(command, "/d /c mklink /J " + NativePaths.Quote(junction) + " " + NativePaths.Quote(store.Exports)) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true })) {
+                Assert(link.WaitForExit(10000) && link.ExitCode == 0, "Could not create the next-start NTFS junction fixture.");
+            }
+            Assert(Blocked(() => store.FinishSession(session)) && File.Exists(Path.Combine(session, "r", "fixture.txt")) && File.ReadAllText(exported) == "synthetic export", "Next-start exit ignored a retained-workspace link or touched exports.");
+            Directory.Delete(junction, false);
+            string held = Path.Combine(session, "r", "fixture.txt");
+            using (var handle = new FileStream(held, FileMode.Open, FileAccess.Read, FileShare.None)) {
+                Assert(Blocked(() => store.FinishSession(session)) && File.Exists(ownerFile) && File.Exists(anchor), "Locked credential cleanup lost recovery evidence.");
+            }
+            store.FinishSession(session);
+            Assert(File.Exists(Path.Combine(session, "workspace", "fixture.txt")) && File.Exists(Path.Combine(session, "materials", "fixture.txt")), "Next-start exit removed learner code or materials.");
+            foreach (string name in new[] { "r", "home", "appdata", "localappdata", "tmp", "build" }) Assert(!NativePaths.Exists(Path.Combine(session, name)), "Next-start exit retained authentication/runtime/build data.");
+            Assert(File.Exists(ownerFile) && File.Exists(anchor) && File.Exists(Path.Combine(session, ".autograde-session.json")), "Next-start exit lost ownership markers.");
+            Assert(File.ReadAllText(exported) == "synthetic export", "Next-start exit altered an export.");
+            Assert(Blocked(() => store.CreateSession()), "Retained session was reused before recovery.");
+            MarkStopped(store, session); store.Recover();
+            Assert(!Directory.Exists(session) && !File.Exists(anchor) && File.ReadAllText(exported) == "synthetic export", "New-session recovery did not remove retained contents or changed exports.");
+            session = store.CreateSession();
+            Assert(store.SessionId(session) != id && !Directory.Exists(Path.Combine(session, "workspace")), "New session retained the previous identity or payload.");
+            store.Cleanup(session);
+            session = store.CreateSession(NativeCleanupPolicy.OnExit); File.WriteAllText(Path.Combine(session, "answer.c"), "synthetic learner content");
+            pending = Path.Combine(session, ".native-launch-pending.json"); NativePaths.WriteJson(pending, new { schema = 1 });
+            Assert(Blocked(() => store.FinishSession(session)) && File.Exists(Path.Combine(session, "answer.c")), "On-exit policy bypassed an unconfirmed process-containment marker.");
+            File.Delete(pending);
+            store.FinishSession(session); Assert(!Directory.Exists(session) && !File.Exists(anchor), "Operator on_exit did not remove the full session.");
+            session = store.CreateSession(); owner = NativePaths.ReadJson(Path.Combine(session, ".native-owner.json")); owner.Remove("cleanupMode");
+            ReplaceOwner(Path.Combine(session, ".native-owner.json"), owner); ReplaceOwner(anchor, owner);
+            store.FinishSession(session); Assert(!Directory.Exists(session), "Legacy missing mode did not preserve full-cleanup behavior.");
+            Console.WriteLine("PASS: default next-start retention, trusted policy, credential/cache removal, fresh next-session identity, on-exit override and unchanged exports");
+        }
         private static void CheckRecovery(NativeSessionStore store, string exported)
         {
             string anchor = Path.Combine(store.Sessions, ".current-owner.json");
@@ -123,6 +172,7 @@ namespace Autograde.NativeWindows
                     }
                     store.Cleanup(session); Assert(!Directory.Exists(session) && File.ReadAllText(exported) == "synthetic export", "Cleanup touched export or retained session.");
                     Console.WriteLine("PASS: ACL, exclusive lease, locked-file recovery marker and export preservation");
+                    CheckRetention(store, exported);
                     CheckRecovery(store, exported);
                     string marker = Path.Combine(root, "grandchild-pid.txt");
                     var env = new Dictionary<string, string>(); foreach (System.Collections.DictionaryEntry pair in Environment.GetEnvironmentVariables()) env[(string)pair.Key] = (string)pair.Value;

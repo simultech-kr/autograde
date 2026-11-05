@@ -86,6 +86,24 @@ namespace Autograde.NativeWindows
             var result = new JavaScriptSerializer { MaxJsonLength = 16384 }.DeserializeObject(File.ReadAllText(file, Encoding.UTF8)) as Dictionary<string, object>;
             if (result == null) throw new InvalidDataException("Invalid ownership marker."); return result;
         }
+        public static string ReadPrivateText(string file, int maximumBytes)
+        {
+            NoLinks(file);
+            using (var stream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.None)) {
+                FileInformation info;
+                if (!GetFileInformationByHandle(stream.SafeFileHandle, out info) || (info.Attributes & (0x10 | 0x400)) != 0 || info.Links != 1 || stream.Length > maximumBytes)
+                    throw new InvalidDataException("Invalid private operator configuration.");
+                var actual = File.GetAccessControl(file);
+                if (actual.GetOwner(typeof(SecurityIdentifier)).Value != Sid) throw new InvalidDataException("Private operator configuration owner changed.");
+                bool readable = false;
+                foreach (FileSystemAccessRule rule in actual.GetAccessRules(true, true, typeof(SecurityIdentifier))) {
+                    if (rule.AccessControlType == AccessControlType.Allow && rule.IdentityReference.Value != Sid && rule.IdentityReference.Value != "S-1-5-18") throw new InvalidDataException("Operator configuration grants another user access.");
+                    if (rule.AccessControlType == AccessControlType.Allow && rule.IdentityReference.Value == Sid && (rule.FileSystemRights & FileSystemRights.ReadData) != 0) readable = true;
+                }
+                if (!readable) throw new InvalidDataException("Private operator configuration cannot be read.");
+                using (var reader = new StreamReader(stream, new UTF8Encoding(false, true), false)) return reader.ReadToEnd();
+            }
+        }
     }
 
     public sealed class NativeJob : IDisposable
@@ -181,14 +199,15 @@ namespace Autograde.NativeWindows
             catch { lease.Dispose(); throw; }
         }
         public static string JobName(string id) { return @"Local\AutogradeNative-" + NativePaths.Sid + "-" + id; }
-        public string CreateSession()
+        public string CreateSession(string cleanupMode = NativeCleanupPolicy.NextStart)
         {
+            if (!NativeCleanupPolicy.ValidMode(cleanupMode)) throw new InvalidDataException("Invalid session cleanup policy.");
             string id = Guid.NewGuid().ToString("N").Substring(0, 24), root = Current;
             if (NativePaths.Exists(root) || NativePaths.Exists(CurrentAnchor)) throw new InvalidOperationException("Previous working directory cleanup is incomplete.");
             NativePaths.PrivateDirectory(root, true);
             using (var process = Process.GetCurrentProcess()) {
                 var owner = new { schema = 1, sid = NativePaths.Sid, sessionId = id, root, rootIdentity = NativePaths.DirectoryIdentity(root), launcherPid = process.Id,
-                    launcherStarted = process.StartTime.ToUniversalTime().Ticks.ToString(), jobName = JobName(id) };
+                    launcherStarted = process.StartTime.ToUniversalTime().Ticks.ToString(), jobName = JobName(id), cleanupMode };
                 // Parent proof outlives the payload and its last child marker.
                 NativePaths.WriteJson(CurrentAnchor, owner);
                 NativePaths.WriteJson(Path.Combine(root, ".native-owner.json"), owner);
@@ -206,6 +225,7 @@ namespace Autograde.NativeWindows
                 !Object.Equals(value["schema"], 1) || !Object.Equals(value["sid"], NativePaths.Sid) || !Object.Equals(value["root"], root) || !Object.Equals(value["jobName"], JobName(id)) ||
                 !(value["launcherPid"] is int) || (int)value["launcherPid"] <= 0 || !(value["launcherStarted"] is string) || !Regex.IsMatch((string)value["launcherStarted"], "^[0-9]{1,19}$")) throw new InvalidDataException("Session ownership changed.");
             if (name == "current" && (!value.ContainsKey("rootIdentity") || !(value["rootIdentity"] is string) || !Regex.IsMatch((string)value["rootIdentity"], "^[a-f0-9]{8}:[a-f0-9]{16}$"))) throw new InvalidDataException("Fixed working directory identity is missing.");
+            if (value.ContainsKey("cleanupMode") && !NativeCleanupPolicy.ValidMode(value["cleanupMode"])) throw new InvalidDataException("Invalid session cleanup policy.");
             return value;
         }
         private Dictionary<string, object> Owner(string root)
@@ -222,6 +242,8 @@ namespace Autograde.NativeWindows
             var value = ValidateOwner(root, NativePaths.ReadJson(marker));
             foreach (string field in new[] { "schema", "sid", "sessionId", "root", "rootIdentity", "launcherPid", "launcherStarted", "jobName" })
                 if (!Object.Equals(value[field], anchor[field])) throw new InvalidDataException("Fixed working directory marker differs from its parent proof.");
+            object childMode, anchorMode; value.TryGetValue("cleanupMode", out childMode); anchor.TryGetValue("cleanupMode", out anchorMode);
+            if (!Object.Equals(childMode, anchorMode)) throw new InvalidDataException("Fixed working directory marker differs from its parent proof.");
             return value;
         }
         private static void RequireStopped(Dictionary<string, object> owner)
@@ -256,6 +278,25 @@ namespace Autograde.NativeWindows
             Owner(root); File.Delete(Path.Combine(root, ".native-owner.json")); Directory.Delete(root, false);
             if (Directory.Exists(root)) throw new IOException("Session cleanup was not completed.");
             if (root == Current) File.Delete(CurrentAnchor);
+        }
+        // Caller must first stop and drain the contained job. The same ownership,
+        // ACL and whole-tree reparse checks apply to both exit policies.
+        public void FinishSession(string root)
+        {
+            var owner = Owner(root); object mode;
+            if (NativePaths.Exists(Path.Combine(root, ".native-launch-pending.json"))) throw new InvalidOperationException("A previous launch stopped before process containment was confirmed; operator recovery is required.");
+            // Legacy launchers had no mode and always removed their complete session.
+            if (!owner.TryGetValue("cleanupMode", out mode) || Object.Equals(mode, NativeCleanupPolicy.OnExit)) { Cleanup(root); return; }
+            CheckTree(root);
+            foreach (string item in Directory.GetFileSystemEntries(root)) {
+                string name = Path.GetFileName(item);
+                if (name == "workspace" || name == "materials" || name == ".native-owner.json" || name == ".autograde-session.json") continue;
+                NativePaths.NoLinks(item); if (Directory.Exists(item)) DeleteTree(item); else File.Delete(item);
+            }
+            // In particular r, home, appdata, localappdata and tmp (credentials,
+            // browser/storage profiles and shell state) never survive a normal exit.
+            // Retain both ownership proofs until Recover removes this directory.
+            Owner(root);
         }
         private static void CheckTree(string directory)
         {

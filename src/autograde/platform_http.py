@@ -509,6 +509,9 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
         facade = self.platform_server.facade
         if path == '/v1/operations/seats/report' and callable(getattr(facade, 'report_seat_status', None)):
             return 'seat_report', {}, frozenset({'POST'})
+        seat_policy = re.fullmatch(r'/v1/operations/seats/([a-z0-9][a-z0-9_-]{0,63})/policy', path)
+        if seat_policy and callable(getattr(facade, 'get_seat_policy', None)):
+            return 'seat_policy', {'seat_id': seat_policy[1]}, frozenset({'GET'})
         if callable(getattr(facade, "portal_request", None)) and path not in {"/healthz", "/readyz"}:
             if path in {"/", "/student", "/courses"} or path.startswith(("/courses/", "/student/")) or (
                 getattr(facade, "instructor", None) is not None
@@ -853,6 +856,10 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
                         form = self._read_form(max_bytes=1024, max_fields=1)
                         if set(form) != {'csrf'}:
                             raise PlatformHTTPError(400, 'invalid_request', 'Unexpected readiness parameter')
+                    elif re.fullmatch(r'/instructor/operations/seats/[a-z0-9][a-z0-9_-]{0,63}/policy', path):
+                        form = self._read_form(max_bytes=1024, max_fields=2)
+                        if set(form) != {'csrf', 'cleanup_mode'}:
+                            raise PlatformHTTPError(400, 'invalid_request', 'Unexpected seat policy parameter')
                     elif upload or csv_upload or membership_roster_upload or exam_upload or material_upload or content_upload or extension_upload or gradebook_upload:
                         if not facade.admin_upload_slots.acquire(blocking=False):
                             raise PlatformHTTPError(503, "upload_busy", "파일 처리 중입니다. 잠시 후 다시 시도하세요.")
@@ -910,6 +917,11 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
             if query:
                 raise PlatformHTTPError(400, 'invalid_query', 'Unexpected query parameter')
             return facade.report_seat_status(self._bearer_token(), self._read_json_object(max_bytes=4096)), 200
+        if route == 'seat_policy':
+            if query:
+                raise PlatformHTTPError(400, 'invalid_query', 'Unexpected query parameter')
+            self._ensure_no_body()
+            return facade.get_seat_policy(self._bearer_token(), parameters['seat_id']), 200
         if route == "readiness":
             self._ensure_no_body()
             check = self.platform_server.readiness_check

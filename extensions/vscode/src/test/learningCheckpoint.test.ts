@@ -52,6 +52,30 @@ test("ordinary reopened work uploads on first interval and explicit save stores 
   assert.equal(await shared.saver.saveNow(), true); assert.equal(shared.uploads.length, 1); shared.saver.dispose();
 });
 
+test("exit flush preserves an untouched shared starter and saves edited work, while explicit save still opts in", async () => {
+  const f = setup(true);
+  assert.equal(await f.saver.flushPending(), false); assert.equal(f.uploads.length, 0);
+  assert.equal(f.saver.getStatus().receipt, undefined);
+  await f.time.advance(30_000); assert.equal(f.uploads.length, 0);
+  f.setContent("b"); f.saver.recordEdit();
+  assert.equal(await f.saver.flushPending(), true); assert.equal(f.uploads.length, 1);
+  assert.equal(f.uploads[0]?.hash, "b".repeat(64)); f.saver.dispose();
+  const explicit = setup(true);
+  assert.equal(await explicit.saver.saveNow(), true); assert.equal(explicit.uploads.length, 1); explicit.saver.dispose();
+});
+
+test("exit flush saves early editor changes even when initial baseline capture was unavailable", async () => {
+  const captures: boolean[] = [], uploaded: string[] = [];
+  const saver = new LearningCheckpointAutosaver({currentScope: () => scope, baselineOnlyUntilChange: true,
+    capture: async (_scope, saveDirty) => {captures.push(saveDirty); return saveDirty ? bundle("b") : undefined;},
+    upload: async (_scope, captured) => {uploaded.push(captured.sha256); return receipt(captured.sha256);}, onStatus: () => {},
+  }, new FakeClock());
+  saver.recordEdit();
+  assert.equal(await saver.flushPending(), true);
+  assert.deepEqual(captures, [false, true]); assert.deepEqual(uploaded, ["b".repeat(64)]);
+  saver.dispose();
+});
+
 test("three failed uploads are bounded per snapshot; newer work and deliberate retry recover", async () => {
   const f = setup(); f.setUpload(async () => {throw new Error("offline");});
   f.saver.reconcile(); await settle(); await f.time.advance(1_000_000);

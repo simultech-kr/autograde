@@ -79,6 +79,11 @@ class CourseAPI:
             raise PlatformAPIError(503, 'seat_registry_unavailable', '기기 상태 저장소를 확인하세요.')
         return self.operations.seats.report(token, payload)
 
+    def get_seat_policy(self, token, seat_id):
+        if self.operations is None:
+            raise PlatformAPIError(404, 'not_found', '기기 정책 기능을 사용할 수 없습니다.')
+        return self.operations.get_seat_policy(token, seat_id)
+
     def get_material_download(self, access_token, material_id, expected_sha256):
         from .student_material_api import download_material
         return download_material(self, access_token, material_id, expected_sha256)

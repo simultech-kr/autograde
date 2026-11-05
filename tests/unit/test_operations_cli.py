@@ -38,6 +38,17 @@ def initialize(config):
     return paths
 
 
+def test_cli_sets_persistent_cleanup_policy_without_disclosing_token(configured, capsys):
+    paths = initialize(configured)
+    registry = SeatRegistry(paths.root)
+    token = registry.register('lab-01', 'A실 01번')['report_token']
+    code, payload, output = invoke(capsys, 'set-seat-policy', '--config', str(configured),
+                                  '--seat-id', 'lab-01', '--cleanup-mode', 'on_exit')
+    assert code == 0 and payload['result'] == {'schema': 1, 'seat_id': 'lab-01', 'cleanup_mode': 'on_exit'}
+    assert token not in output
+    assert SeatRegistry(paths.root).policy(token, 'lab-01')['cleanup_mode'] == 'on_exit'
+
+
 def report(seat='lab-01'):
     return {'seat_id':seat, 'report_id':str(uuid.uuid4()), 'ide_version':'0.5.21',
         'extension_version':'0.5.21', 'platform':'darwin', 'architecture':'arm64',

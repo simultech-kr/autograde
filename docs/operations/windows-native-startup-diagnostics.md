@@ -29,8 +29,13 @@ Windows 오류 번호와 조치**를 표시한다. 최초 오류 뒤 정리에�
 ## 전체 IDE를 다시 빌드하지 않고 진단 실행기 적용
 
 수정 소스를 받은 **Autograde 저장소 루트**의 Windows PowerShell에서 진행한다.
-IDE와 실행기 창을 먼저 정상 종료한다. 아래는 기존 압축 해제 패키지의 최상위 실행기 두 개만
-교체하는 로컬 진단 절차다. 학생 작업 폴더나 `editor/electron`의 Electron 실행 파일을 변경하지 않는다.
+IDE와 실행기 창을 먼저 정상 종료한다. 아래는 기존 압축 해제 패키지의 실행기 두 개와 대응하는
+`autograde/windows-native-bootstrap.mjs`를 함께 교체하는 로컬 진단 절차다. 정책 marker와 환경 변수를
+전달하는 계약이 바뀌었으므로 예전 bootstrap을 그대로 두지 않는다. 학생 작업 폴더는 변경하지 않는다.
+
+이 절차만으로 새 정리 정책 기능 전체를 배포한 것으로 보지 않는다. IDE 내부의 정책별 종료 안내·
+서버 마지막 저장·복구 안내까지 적용하려면 같은 소스 버전의 확장을 빌드하고 전체 Windows IDE
+패키지를 다시 만든다. 운영 배포에서는 그 전체 패키지를 사용한다.
 
 ```powershell
 $ErrorActionPreference = 'Stop'
@@ -45,17 +50,23 @@ $launcherBackup = Join-Path (Split-Path -Parent $packagePath) ('autograde-launch
 New-Item -ItemType Directory -Path $launcherBackup | Out-Null
 $launcherFiles = @('Autograde IDE.exe', 'Autograde Native Checks.exe')
 foreach ($name in $launcherFiles) { Copy-Item -LiteralPath (Join-Path $packagePath $name) -Destination (Join-Path $launcherBackup $name) }
+Copy-Item -LiteralPath (Join-Path $packagePath 'autograde\windows-native-bootstrap.mjs') -Destination (Join-Path $launcherBackup 'windows-native-bootstrap.mjs')
 foreach ($name in $launcherFiles) { Copy-Item -LiteralPath (Join-Path $launcherBuild $name) -Destination (Join-Path $packagePath $name) -Force }
+Copy-Item -LiteralPath '.\ide\code-oss\windows-native-bootstrap.mjs' -Destination (Join-Path $packagePath 'autograde\windows-native-bootstrap.mjs') -Force
 Write-Output "실행기 교체 완료. 이전 실행기: $launcherBackup"
 ```
 
 이후 패키지 폴더의 `Autograde IDE.exe`를 다시 실행한다. 오류가 나타나면 **실패 단계, 진단 코드,
 예외 유형, HResult, Windows 오류 번호**를 전달한다. 실제 원인을 확인하기 전에 소유 표시를
-삭제하거나 작업 폴더 권한을 무조건 넓히지 않는다. 기존의 종료 후 삭제 및 소유·프로세스 확인은 유지한다.
+삭제하거나 작업 폴더 권한을 무조건 넓히지 않는다. 소유·프로세스 확인은 유지한다. 기본 정책은
+`next_start`로서 정상 종료 때 인증·IDE 상태를 삭제하고 코드·자료는 다음 실행 전에 삭제한다.
+서버에서 `on_exit`를 확인한 실행은 코드·자료도 종료 때 삭제한다. 서버 정책을 확인하지 못하면
+실행기 화면에 기본값 경고가 나온다. 기기 설정의 전용 ACL 설치는
+[`INSTALL-NATIVE-WINDOWS.md`](../../ide/code-oss/windows/INSTALL-NATIVE-WINDOWS.md#담당자-정리-정책)를 따른다.
 
 이 절차는 배포 ZIP과 체크섬을 갱신하지 않는다. 다른 PC에 배포할 최종 ZIP은 기존 패키징
 절차로 다시 생성한다. 원래 실행기로 되돌릴 때는 IDE를 종료하고 백업의 두 파일을 원래
-패키지 최상위에 복사한다.
+패키지 최상위에 복사하고 백업의 `windows-native-bootstrap.mjs`도 패키지 `autograde` 하위에 복구한다.
 
 ## 검증 범위
 
@@ -65,3 +76,10 @@ C# 5 및 실제 .NET Framework 4.7.2 참조 API로 x64 컴파일했다.
 Windows 권한·Job Object·실제 사용자 작업 폴더 정리는 이 환경에서 실행하지 않았다.
 로그 권한·보관 개수·민감 정보 제외 검사는 Windows Native Checks에 포함되어
 `Build-NativeLauncher.ps1 -RunChecks`에서 실행된다.
+
+2026-11-05: 정책 형식·HTTPS origin·좌석/토큰 형식·주입한 요청 실패와 기본값·실행 중 스냅샷·
+비밀 없는 경고를 확인하는 77개 assertion을 macOS .NET 8에서 실행했다. 실행기와 Windows Native /
+Policy / Diagnostic Checks는 C# 5 및 실제 .NET Framework 4.7.2 참조 API로 x64 컴파일했다.
+Windows Native Checks에는 기본 next-start 보존, 인증·캐시·빌드 삭제, 다음 실행의 새 식별자,
+on-exit 전체 삭제, 정책 marker 불일치·링크·잠긴 파일 보호와 내보내기 보존 검사가 포함된다.
+Windows ACL·Job Object·TLS 요청·실제 사용자 폴더 정리는 이 환경에서 실행하지 않았다.

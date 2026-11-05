@@ -57,7 +57,7 @@ namespace Autograde.NativeWindows
             Add(result, "permissions", "실습 폴더의 사용자 접근 권한을 확인하지 못했습니다.", "담당자에게 실습 폴더의 현재 사용자 접근 권한을 확인해 달라고 요청하세요.",
                 "Session directory grants another user access.", "Session directory lacks private control.");
             Add(result, "owner-record", "이전 실습의 소유·복구 기록이 없거나 올바르지 않습니다.", "기존 자료를 보존한 상태로 담당자에게 복구 기록 확인을 요청하세요.",
-                "Invalid ownership marker.", "Fixed working directory identity is missing.", "Unexpected session directory.",
+                "Invalid ownership marker.", "Invalid session cleanup policy.", "Fixed working directory identity is missing.", "Unexpected session directory.",
                 "Unmarked working directory is not empty.", "Cannot identify the managed directory.");
             Add(result, "workspace-missing", "필요한 실습 폴더를 찾지 못했습니다.", "실습 폴더를 옮기거나 삭제한 적이 있는지 확인하고 다시 실행하세요.",
                 "Private directory is missing.");
