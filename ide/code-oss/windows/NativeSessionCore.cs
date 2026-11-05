@@ -91,20 +91,23 @@ namespace Autograde.NativeWindows
     public sealed class NativeJob : IDisposable
     {
         private IntPtr handle; private bool uncontainedProcess;
+        private static InvalidOperationException Failure(string message, int code)
+        { return new InvalidOperationException(message, new System.ComponentModel.Win32Exception(code)); }
         public NativeJob(string name)
         {
             handle = CreateJobObject(IntPtr.Zero, name);
-            if (handle == IntPtr.Zero || Marshal.GetLastWin32Error() == 183) { Dispose(); throw new InvalidOperationException("Cannot reserve a private job."); }
+            int createError = Marshal.GetLastWin32Error();
+            if (handle == IntPtr.Zero || createError == 183) { Dispose(); throw Failure("Cannot reserve a private job.", createError); }
             var limits = new ExtendedLimit(); limits.BasicLimitInformation.LimitFlags = 0x2000; // KILL_ON_JOB_CLOSE, never BREAKAWAY_OK
             int size = Marshal.SizeOf(limits); IntPtr memory = Marshal.AllocHGlobal(size);
-            try { Marshal.StructureToPtr(limits, memory, false); if (!SetInformationJobObject(handle, 9, memory, (uint)size)) throw new InvalidOperationException("Cannot contain the Windows session."); }
+            try { Marshal.StructureToPtr(limits, memory, false); if (!SetInformationJobObject(handle, 9, memory, (uint)size)) throw Failure("Cannot contain the Windows session.", Marshal.GetLastWin32Error()); }
             catch { Dispose(); throw; } finally { Marshal.FreeHGlobal(memory); }
         }
         private NativeJob(IntPtr existing) { handle = existing; }
         public static void DrainPrevious(string name)
         {
             IntPtr previous = OpenJobObject(0x0004 | 0x0008, false, name); // QUERY | TERMINATE
-            if (previous == IntPtr.Zero) { if (Marshal.GetLastWin32Error() == 2) return; throw new InvalidOperationException("Cannot inspect a previous job."); }
+            if (previous == IntPtr.Zero) { int code = Marshal.GetLastWin32Error(); if (code == 2) return; throw Failure("Cannot inspect a previous job.", code); }
             using (var job = new NativeJob(previous)) job.StopAndDrain();
         }
         public int Run(string executable, string[] arguments, string cwd, IDictionary<string, string> environment, string containmentMarker = null)
@@ -116,25 +119,26 @@ namespace Autograde.NativeWindows
             try {
                 if (containmentMarker != null) NativePaths.WriteJson(containmentMarker, new { schema = 1, phase = "process-not-yet-contained" });
                 // The child cannot run user code before the job assignment succeeds.
-                if (!CreateProcess(executable, command, IntPtr.Zero, IntPtr.Zero, false, 0x4 | 0x400 | 0x08000000, env, cwd, ref start, out process)) throw new InvalidOperationException("Cannot start the bundled runtime.");
+                if (!CreateProcess(executable, command, IntPtr.Zero, IntPtr.Zero, false, 0x4 | 0x400 | 0x08000000, env, cwd, ref start, out process)) throw Failure("Cannot start the bundled runtime.", Marshal.GetLastWin32Error());
             } finally { Marshal.FreeHGlobal(env); }
             try {
                 if (!AssignProcessToJobObject(handle, process.hProcess)) {
+                    int assignmentError = Marshal.GetLastWin32Error();
                     uncontainedProcess = true;
                     if (TerminateProcess(process.hProcess, 1) && WaitForSingleObject(process.hProcess, 30000) == 0) { uncontainedProcess = false; if (containmentMarker != null) File.Delete(containmentMarker); }
-                    throw new InvalidOperationException("Cannot supervise the Windows session.");
+                    throw Failure("Cannot supervise the Windows session.", assignmentError);
                 }
                 if (containmentMarker != null) File.Delete(containmentMarker);
-                if (ResumeThread(process.hThread) == UInt32.MaxValue) throw new InvalidOperationException("Cannot resume the contained runtime.");
-                if (WaitForSingleObject(process.hProcess, UInt32.MaxValue) != 0) throw new InvalidOperationException("Cannot wait for the session.");
-                uint code; if (!GetExitCodeProcess(process.hProcess, out code)) throw new InvalidOperationException("Cannot read the session result."); return (int)code;
+                if (ResumeThread(process.hThread) == UInt32.MaxValue) throw Failure("Cannot resume the contained runtime.", Marshal.GetLastWin32Error());
+                if (WaitForSingleObject(process.hProcess, UInt32.MaxValue) != 0) throw Failure("Cannot wait for the session.", Marshal.GetLastWin32Error());
+                uint code; if (!GetExitCodeProcess(process.hProcess, out code)) throw Failure("Cannot read the session result.", Marshal.GetLastWin32Error()); return (int)code;
             } finally { CloseHandle(process.hThread); CloseHandle(process.hProcess); }
         }
         public void StopAndDrain()
         {
             if (handle == IntPtr.Zero || uncontainedProcess) throw new InvalidOperationException("An uncontained process could still exist; operator recovery is required.");
-            if (!TerminateJobObject(handle, 1)) throw new InvalidOperationException("Cannot stop session processes.");
-            for (int i = 0; i < 300; i++) { var data = new Accounting(); uint returned; if (!QueryInformationJobObject(handle, 1, ref data, (uint)Marshal.SizeOf(data), out returned)) throw new InvalidOperationException("Cannot verify stopped processes."); if (data.ActiveProcesses == 0) return; Thread.Sleep(100); }
+            if (!TerminateJobObject(handle, 1)) throw Failure("Cannot stop session processes.", Marshal.GetLastWin32Error());
+            for (int i = 0; i < 300; i++) { var data = new Accounting(); uint returned; if (!QueryInformationJobObject(handle, 1, ref data, (uint)Marshal.SizeOf(data), out returned)) throw Failure("Cannot verify stopped processes.", Marshal.GetLastWin32Error()); if (data.ActiveProcesses == 0) return; Thread.Sleep(100); }
             throw new InvalidOperationException("Session processes are still stopping; cleanup is blocked.");
         }
         public void Dispose() { if (handle != IntPtr.Zero) { CloseHandle(handle); handle = IntPtr.Zero; } }

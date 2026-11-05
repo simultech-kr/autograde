@@ -103,6 +103,15 @@ namespace Autograde.NativeWindows
             try {
                 CheckBlockedHelper();
                 using (var store = new NativeSessionStore(root)) {
+                    string logDirectory = Path.Combine(root, "diagnostics");
+                    for (int i = 0; i < 12; i++) {
+                        string diagnostic = NativeDiagnosticLog.Write(logDirectory, new NativeStageException("session-recovery", new IOException("synthetic-student-secret")));
+                        string text = File.ReadAllText(diagnostic);
+                        Assert(!text.Contains("synthetic-student-secret") && !text.Contains(root), "Diagnostic log exposed student data or paths.");
+                        Assert(text.Contains("session-recovery") && text.Contains("IOException"), "Diagnostic log lost the failure stage or type.");
+                    }
+                    Assert(Directory.GetFiles(logDirectory, "launch-*.log").Length == 10, "Diagnostic log retention is not bounded.");
+                    Console.WriteLine("PASS: private diagnostic logs, bounded retention and no student data");
                     string exported = Path.Combine(store.Exports, "kept.txt"); File.WriteAllText(exported, "synthetic export");
                     bool blocked = false; try { using (var second = new NativeSessionStore(root)) { } } catch (IOException) { blocked = true; }
                     Assert(blocked, "A second launcher acquired the active lease.");

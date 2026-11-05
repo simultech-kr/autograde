@@ -55,3 +55,12 @@ IDE의 마지막 저장 성공·실패 표시를 확인한다. 종료나 다음 
 report에 기록한다. 다른 OS에서 C# 컴파일 또는 PE 형식 검사만 한 결과를 Windows 실행 성공으로
 표기하지 않는다. 기관 PC에서 아이콘 실행, MSVC C/C++ 컴파일, 인증·과제·제출·내보내기,
 종료/강제 종료/재부팅 후 정리, 다른 사용자 접근, 교수자 확장 설치 정책 및 서명 배포를 승인해야 한다.
+
+## 시작·정리 오류 확인
+
+오류 창에 실패 단계와 진단 코드, 예외 유형, HResult 및 확인 가능한 Windows 오류 번호를
+표시한다. 진단 로그 위치는 `%LOCALAPPDATA%\AutogradeNativeDiagnostics`이며 창에도 나온다.
+로그에는 학생 코드·학번·인증 값·전체 경로·스택을 남기지 않는다. 종료·복구 보호는 그대로 유지한다.
+`Autograde Native Checks.exe`가 모두 PASS여도 실제 설치 경로와 기존 작업 공간은 별도로
+확인해야 한다. 실행기만 갱신하는 절차는 저장소의
+`docs/operations/windows-native-startup-diagnostics.md`를 따른다.
