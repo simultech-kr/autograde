@@ -5,10 +5,13 @@ import { contentErrorMessage, exportContent, syncContent, type ContentCollection
 import { shouldDiscardTokensAfterRefreshError } from "./authPolicy";
 import { learningExportDirectory } from "./learningExport";
 import { confirmExportPrivacy } from "./exportPrivacy";
+import { sharedSessionCleanupNotice, type SharedSessionCleanupMode } from "./sharedLearningSession";
 
 export const CONTENT_SYNC_COMMAND = "autograde.syncContent";
 export interface ContentSyncViewOptions {
+  readonly cleanupMode?: SharedSessionCleanupMode;
   readonly cacheRoot: () => string;
+  readonly validateCacheRoot?: () => Promise<void>;
   readonly defaultDirectory?: () => vscode.Uri | undefined;
   readonly assignmentDirectories?: () => readonly string[];
   /** Managed temporary sessions must never be offered as a persistent export destination. */
@@ -84,7 +87,7 @@ export class ContentSyncView implements vscode.Disposable {
       }
       const total = manifest.files.reduce((sum, file) => sum + file.size_bytes, 0);
       const choice = await pick([
-        {label: "변경된 파일만 받기", description: shared ? "공용 실습 공간에 임시 수신 · 실습 종료 시 삭제" : "학생별 임시 캐시에 저장 · 내보내기는 나중에", action: "sync"},
+        {label: "변경된 파일만 받기", description: shared ? `공용 실습 공간에 임시 수신 · ${this.options.cleanupMode === "next_start" ? "다음 IDE 실행 시" : "IDE 종료 시"} 삭제` : "학생별 임시 캐시에 저장 · 내보내기는 나중에", action: "sync"},
         {label: "내 폴더에 저장", description: shared ? "임시 학습 공간 밖으로 내보내기 · 실습 종료 후에도 보존" : "최신 자료를 확인하고 새 폴더에 복사 · 기존 파일 보존", action: "export"},
       ], {title: `${plain(manifest.title)} · 파일 ${manifest.files.length}개 · ${(total / 1048576).toFixed(1)} MiB`,
         placeHolder: "캐시·내 폴더 모두 실제 파일을 받습니다. ZIP은 자동 압축 해제하지 않습니다."});
@@ -102,6 +105,7 @@ export class ContentSyncView implements vscode.Disposable {
       }
       const assignments = [...(this.options.assignmentDirectories?.() ?? []),
         ...(vscode.workspace.workspaceFolders ?? []).filter(folder => folder.uri.scheme === "file").map(folder => folder.uri.fsPath)];
+      await this.options.validateCacheRoot?.(); writeGuard();
       const options: ContentSyncOptions = {root: this.options.cacheRoot(), origin, context, assertCurrent: writeGuard,
         assignmentDirectories: assignments, signal: controller.signal};
       await vscode.window.withProgress({location: vscode.ProgressLocation.Notification, title: "강의자료 변경분 확인·수신", cancellable: true},
@@ -109,6 +113,7 @@ export class ContentSyncView implements vscode.Disposable {
           const subscription = cancellation.onCancellationRequested(() => controller.abort());
           try {
             if (cancellation.isCancellationRequested) controller.abort();
+            await this.options.validateCacheRoot?.(); writeGuard();
             const result = await syncContent(this.api, manifest, {...options,
               onProgress: (completed, count) => progress.report({message: `${completed}/${count} 파일 검증`})});
             guard();
@@ -119,7 +124,7 @@ export class ContentSyncView implements vscode.Disposable {
             void vscode.window.showInformationMessage(`강의자료 v${manifest.generation}: 변경 파일 ${result.downloadedFiles}개 수신, ${result.reusedFiles}개 재사용.` +
               (exported ? `\n저장 위치: ${exported}\n기존 파일은 덮어쓰지 않았으며 자동으로 열거나 실행하지 않습니다.${shared ? " 내보낸 파일은 실습 종료 후에도 보존됩니다." : ""}`
                 : "\n학생별 캐시에 보관했습니다. ‘강의자료 업데이트 → 내 폴더에 저장’으로 나중에 복사하세요. 내보내기에는 서버 연결이 필요합니다." +
-                  (shared ? "\n임시로 받은 자료는 실습 종료 시 삭제됩니다. 보존하려면 종료 전에 내보내세요." : "")));
+                  (shared ? `\n${sharedSessionCleanupNotice(this.options.cleanupMode)} 보존하려면 종료 전에 내보내세요.` : "")));
           } finally { subscription.dispose(); }
         });
       guard();

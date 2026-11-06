@@ -75,9 +75,7 @@ class CourseAPI:
     def report_seat_status(self, token, payload):
         if self.operations is None:
             raise PlatformAPIError(404, 'not_found', '기기 보고 기능을 사용할 수 없습니다.')
-        if self.operations.seats is None:
-            raise PlatformAPIError(503, 'seat_registry_unavailable', '기기 상태 저장소를 확인하세요.')
-        return self.operations.seats.report(token, payload)
+        return self.operations.report_seat_status(token, payload)
 
     def get_seat_policy(self, token, seat_id):
         if self.operations is None:

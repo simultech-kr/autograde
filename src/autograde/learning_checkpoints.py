@@ -25,6 +25,8 @@ import threading
 
 from .platform_bundle import BundleStore, BundleStorageError, BundleLimitError
 from .course_file_guard import course_file_guard, CourseFileBusy, CourseFilesDeleted
+from .privacy_file_guard import PrivacyFileBusy
+from .platform_state import PlatformConflict
 
 
 class CheckpointError(RuntimeError):
@@ -114,24 +116,79 @@ class LearningCheckpointStore:
             os.close(descriptor)
 
     @staticmethod
-    def _ledger(owner):
+    def _validate_ledger(value, assignment_id):
+        """Validate the persisted contract before any ref/archive reclamation.
+
+        Expired idempotency references remain valid: they deliberately return
+        410, rather than accidentally recreating an older save as a new version.
+        """
+        def integer(number, minimum=0):
+            return type(number) is int and minimum <= number <= 2**53 - 1
+
+        def matches(pattern, text):
+            return isinstance(text, str) and re.fullmatch(pattern, text) is not None
+
+        if (not isinstance(value, dict) or set(value) != {"version", "checkpoints", "keys"}
+                or not integer(value["version"]) or not isinstance(value["checkpoints"], list)
+                or not isinstance(value["keys"], list)):
+            raise ValueError("invalid checkpoint ledger")
+        fields = {"checkpoint_id", "assignment_id", "archive_sha256", "content_sha256", "created_at",
+                  "file_count", "source_bytes", "compressed_bytes", "version", "git_commit"}
+        ids, last_version = set(), value["version"] + 1
+        for item in value["checkpoints"]:
+            if (not isinstance(item, dict) or set(item) != fields
+                    or not matches(r"lcp_[a-f0-9]{32}", item["checkpoint_id"])
+                    or item["checkpoint_id"] in ids or item["assignment_id"] != assignment_id
+                    or not matches(r"[a-f0-9]{64}", item["archive_sha256"])
+                    or not matches(r"[a-f0-9]{64}", item["content_sha256"])
+                    or not matches(r"[a-f0-9]{40}", item["git_commit"])
+                    or not all(integer(item[field]) for field in ("file_count", "source_bytes"))
+                    or not integer(item["compressed_bytes"], 1) or not integer(item["version"], 1)
+                    or item["version"] >= last_version
+                    or not isinstance(item["created_at"], str) or len(item["created_at"]) > 64):
+                raise ValueError("invalid checkpoint item")
+            created = datetime.fromisoformat(item["created_at"])
+            if created.tzinfo is None or created.utcoffset() is None:
+                raise ValueError("checkpoint time must be timezone-aware")
+            ids.add(item["checkpoint_id"])
+            last_version = item["version"]
+        if ((value["checkpoints"] and value["checkpoints"][0]["version"] != value["version"])
+                or (not value["checkpoints"] and (value["version"] != 0 or value["keys"]))):
+            raise ValueError("checkpoint version differs from its history")
+        keys = set()
+        for item in value["keys"]:
+            if (not isinstance(item, dict) or set(item) != {"key", "digest", "checkpoint_id"}
+                    or not matches(r"[a-f0-9]{64}", item["key"]) or item["key"] in keys
+                    or not matches(r"[a-f0-9]{64}", item["digest"])
+                    or not matches(r"lcp_[a-f0-9]{32}", item["checkpoint_id"])):
+                raise ValueError("invalid checkpoint replay key")
+            keys.add(item["key"])
+        return value
+
+    @staticmethod
+    def _ledger(owner, assignment_id):
         path = owner / "index.json"
         try:
-            descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+            descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
         except FileNotFoundError:
             return {"version": 0, "checkpoints": [], "keys": []}
         with os.fdopen(descriptor, "rb") as source:
-            if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):
+            info = os.fstat(source.fileno())
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
                 raise BundleStorageError("checkpoint index is not a regular file")
             content = source.read(1024 * 1024 + 1)
         if len(content) > 1024 * 1024:
             raise BundleStorageError("checkpoint index is too large")
         try:
-            value = json.loads(content)
-            if not isinstance(value["version"], int) or not isinstance(value["checkpoints"], list) or not isinstance(value["keys"], list):
-                raise ValueError()
-            return value
-        except (ValueError, KeyError, TypeError) as exc:
+            def unique_object(pairs):
+                result = {}
+                for key, value in pairs:
+                    if key in result:
+                        raise ValueError("duplicate checkpoint metadata key")
+                    result[key] = value
+                return result
+            return LearningCheckpointStore._validate_ledger(json.loads(content, object_pairs_hook=unique_object), assignment_id)
+        except (ValueError, KeyError, TypeError, OverflowError, RecursionError) as exc:
             raise BundleStorageError("checkpoint index is corrupt") from exc
 
     @staticmethod
@@ -239,16 +296,66 @@ class LearningCheckpointStore:
             raise BundleStorageError("checkpoint archive is corrupt")
         return path
 
+    @staticmethod
+    def _has_packed_objects(repo):
+        objects = repo / "objects"
+        if objects.is_symlink():
+            raise BundleStorageError("checkpoint object directory is unsafe")
+        try:
+            descriptor = os.open(objects / "pack", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        except FileNotFoundError:
+            return False
+        try:
+            packed = False
+            for name in os.listdir(descriptor):
+                if not name.endswith(".pack"):
+                    continue
+                info = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
+                if (not re.fullmatch(r"pack-[a-f0-9]{40}\.pack", name)
+                        or not stat.S_ISREG(info.st_mode) or info.st_nlink != 1):
+                    raise BundleStorageError("checkpoint object pack is unsafe")
+                packed = True
+            return packed
+        finally:
+            os.close(descriptor)
+
     def _reclaim(self, owner, ledger):
         """Recover interrupted writes and prune expired snapshots under the lock."""
         keep = {item["checkpoint_id"] for item in ledger["checkpoints"]}
         repo = owner / "source.git"
         if (repo / "HEAD").exists():
             refs = self._git(repo, "for-each-ref", "--format=%(refname)", "refs/checkpoints/").decode().splitlines()
-            for ref in refs:
-                if ref.rsplit("/", 1)[-1] not in keep:
-                    self._git(repo, "update-ref", "-d", ref)
+            expired = [ref for ref in refs if ref.rsplit("/", 1)[-1] not in keep]
+            pending = owner / ".git-reclaim-pending"
+            # Normal saves only create loose objects. Do not create a pack just
+            # to prune them, especially once every autosave expires an old ref.
+            if expired and not os.path.lexists(pending) and self._has_packed_objects(repo):
+                descriptor = os.open(pending, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
+                with os.fdopen(descriptor, "wb") as output:
+                    output.write(b"1\n")
+                    output.flush()
+                    os.fsync(output.fileno())
+                self._sync_directory(owner)
+            packed_cleanup = os.path.lexists(pending)
+            if packed_cleanup:
+                descriptor = os.open(pending, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+                with os.fdopen(descriptor, "rb") as source:
+                    info = os.fstat(source.fileno())
+                    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or source.read(3) != b"1\n":
+                        raise BundleStorageError("checkpoint reclamation marker is unsafe")
+            for ref in expired:
+                self._git(repo, "update-ref", "-d", ref)
+            if expired or packed_cleanup:
+                self._git(repo, "reflog", "expire", "--expire=now", "--all")
+            if packed_cleanup:
+                # prune alone only removes loose objects. A backed-up/repacked
+                # repository can otherwise retain expired student code in packs.
+                # The durable marker survives failures after deleting the refs.
+                self._git(repo, "repack", "-Ad")
             self._git(repo, "prune", "--expire=now")
+            if packed_cleanup:
+                pending.unlink()
+                self._sync_directory(owner)
         archives = self._directory(owner / "archives")
         digests = {item["archive_sha256"] for item in ledger["checkpoints"]}
         for path in archives.iterdir():
@@ -271,10 +378,13 @@ class LearningCheckpointStore:
         try:
             with course_file_guard(self.root.parent, course_key):
                 yield
-        except CourseFileBusy as exc:
+        except (CourseFileBusy, PrivacyFileBusy) as exc:
             raise CheckpointError(429, "checkpoint_busy", str(exc), retry_after=2) from exc
         except CourseFilesDeleted as exc:
             raise CheckpointError(410, "course_deleted", str(exc)) from exc
+        except PlatformConflict as exc:
+            # Invalid roots/lock metadata are not temporary contention.
+            raise BundleStorageError("checkpoint publication guard is unavailable") from exc
 
     def save(self, *, course_key, student_identity, assignment_id, idempotency_key, source, content_length, clock, authorize):
         with self._course_guard(course_key):
@@ -289,7 +399,7 @@ class LearningCheckpointStore:
         try:
             owner = self._owner(course_key, student_identity, assignment_id)
             with self._locked(owner):
-                ledger = self._ledger(owner)
+                ledger = self._ledger(owner, assignment_id)
                 self._reclaim(owner, ledger)
                 with tempfile.TemporaryDirectory(prefix=".incoming-", dir=owner) as directory:
                     temporary = Path(directory)
@@ -361,7 +471,7 @@ class LearningCheckpointStore:
     def _history_guarded(self, *, course_key, student_identity, assignment_id):
         owner = self._owner(course_key, student_identity, assignment_id)
         with self._locked(owner):
-            items = [self._public(item) for item in self._ledger(owner)["checkpoints"]]
+            items = [self._public(item) for item in self._ledger(owner, assignment_id)["checkpoints"]]
         return {"checkpoints": items, "latest": items[0] if items else None,
                 "retention": {"max_versions": self.MAX_VERSIONS, "max_source_bytes": self.MAX_SOURCE_BYTES}}
 
@@ -373,7 +483,7 @@ class LearningCheckpointStore:
     def _download_guarded(self, *, course_key, student_identity, assignment_id, checkpoint_id):
         owner = self._owner(course_key, student_identity, assignment_id)
         with self._locked(owner):
-            item = next((item for item in self._ledger(owner)["checkpoints"] if item["checkpoint_id"] == checkpoint_id), None)
+            item = next((item for item in self._ledger(owner, assignment_id)["checkpoints"] if item["checkpoint_id"] == checkpoint_id), None)
             if item is None:
                 raise CheckpointError(404, "not_found", "저장된 학습내용을 찾을 수 없습니다.")
             path = self._verify_archive(owner, item)

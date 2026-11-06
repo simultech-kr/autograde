@@ -57,7 +57,8 @@ for (const ending of ['cleanup', 'stale recovery']) test(`bundled service addres
   assert.equal(settings['autograde.serviceBaseUrl'], serviceAddress);
   assert.equal(settings['autograde.studentPortalBaseUrl'], 'https://ai.cbchoi.info:20010');
 
-  const privateFiles = ['workspace/answer.cpp', 'materials/slides.pdf',
+  const privateFiles = ['workspace/20211001/assignment/answer.cpp', 'materials/20211001/slides.pdf',
+    '.autograde-auth-used',
     'r/user-data/User/globalStorage/autograde/session.json', 'r/user-data/Backups/unsaved-code'];
   for (const relative of privateFiles) {
     const file = path.join(a.root, relative);
@@ -100,10 +101,11 @@ test('session environment resets inherited ownership and exposes only this sessi
   cleanupSharedSession(a);
 });
 
-test('cleanup removes code, materials, editor history, cache and logs; external export survives', t => {
+test('cleanup removes student folders, identity, editor history, cache and logs; external export survives', t => {
   const f = fixture(t), a = prepareSharedSession(f.layout(), defaults);
   const outside = path.join(f.root, 'my-export.zip'); fs.writeFileSync(outside, 'fixture exported bytes');
-  for (const relative of ['workspace/main.cpp', 'materials/slides.pdf', 'materials/.content/objects/a',
+  for (const relative of ['workspace/20211001/assignment/main.cpp', 'materials/20211001/slides.pdf', 'materials/20211001/.content/objects/a',
+    '.autograde-auth-used',
     'r/user-data/Backups/c', 'r/user-data/User/History/d', 'r/user-data/logs/x.log']) {
     const file = path.join(a.root, relative); fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, 'private');
   }
@@ -272,13 +274,21 @@ test('cleanup refuses a recorded live process and an unrecorded spawn outcome', 
 test('the real child completion deletes the owned session only after process close', async t => {
   if (process.platform === 'win32') return t.skip('Shared launcher currently targets macOS/Linux/WSL2');
   const f = fixture(t), a = prepareSharedSession(f.layout(), defaults);
-  fs.writeFileSync(path.join(a.workspace, 'main.c'), 'private'); markSessionLaunching(a);
+  const studentWorkspace = path.join(a.workspace, '20211001');
+  const studentMaterials = path.join(a.materials, '20211001');
+  fs.mkdirSync(studentWorkspace, {mode: 0o700}); fs.mkdirSync(studentMaterials, {mode: 0o700});
+  fs.writeFileSync(path.join(studentWorkspace, 'main.c'), 'private');
+  fs.writeFileSync(path.join(studentMaterials, 'slides.pdf'), 'private materials');
+  json(path.join(a.root, '.autograde-auth-used'), {schema: 2, sessionId: a.sessionId, authenticated: true, studentKey: '20211001'});
+  const exported = path.join(f.root, '20211001-export.zip'); fs.writeFileSync(exported, 'exported work');
+  markSessionLaunching(a);
   const child = spawn(process.execPath, ['-e', 'setTimeout(() => process.exit(0), 150)'], { detached: true, stdio: 'ignore' });
   const completion = superviseSharedChild(child, a);
   recordSessionProcess(a, child.pid);
   assert.equal(fs.existsSync(a.root), true);
   assert.equal((await completion).code, 0);
   assert.equal(fs.existsSync(a.root), false);
+  assert.equal(fs.readFileSync(exported, 'utf8'), 'exported work');
 });
 
 test('failed executable spawn cleans a known nonstarted session without leaving credentials', async t => {

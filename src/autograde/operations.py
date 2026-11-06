@@ -23,6 +23,10 @@ import uuid
 from .platform_service import PlatformAPIError
 
 CLEANUP_MODES = frozenset({'next_start', 'on_exit'})
+DEFAULT_CLEANUP_MODE = 'on_exit'
+# Tolerate only a small backwards clock adjustment, never treat a distant
+# future receipt/backup timestamp as fresh or throttle a device indefinitely.
+CLOCK_SKEW_SECONDS = 5
 
 
 def now_iso():
@@ -30,14 +34,15 @@ def now_iso():
 
 
 def age_seconds(value, now):
-    if not value:
+    if not isinstance(value, str) or not value:
         return None
     try:
         parsed = datetime.fromisoformat(value.replace('Z', '+00:00'))
         if parsed.tzinfo is None:
             return None
-        return max(0, int((now - parsed).total_seconds()))
-    except (ValueError, TypeError):
+        elapsed = (now - parsed).total_seconds()
+        return None if elapsed < -CLOCK_SKEW_SECONDS else max(0, int(elapsed))
+    except (ValueError, TypeError, OverflowError):
         return None
 
 
@@ -74,7 +79,7 @@ class SeatRegistry:
             with db:
                 db.execute('BEGIN IMMEDIATE')
                 if 'cleanup_mode' not in {row['name'] for row in db.execute('PRAGMA table_info(seats)')}:
-                    db.execute("ALTER TABLE seats ADD COLUMN cleanup_mode TEXT NOT NULL DEFAULT 'next_start' "
+                    db.execute("ALTER TABLE seats ADD COLUMN cleanup_mode TEXT NOT NULL DEFAULT 'on_exit' "
                                "CHECK(cleanup_mode IN ('next_start','on_exit'))")
         self.path.chmod(0o600)
         if not marker.exists():
@@ -99,8 +104,10 @@ class SeatRegistry:
         with closing(self._connect()) as db, db:
             if db.execute('SELECT COUNT(*) FROM seats').fetchone()[0] >= 10000:
                 raise ValueError('seat registry limit reached')
-            db.execute('INSERT INTO seats(seat_id,label,token_hash,registered_at) VALUES(?,?,?,?)',
-                       (seat_id, label.strip(), hashlib.sha256(token.encode()).hexdigest(), now_iso()))
+            # Older databases keep their original column default and every stored
+            # operator choice. New seats use the current policy explicitly.
+            db.execute('INSERT INTO seats(seat_id,label,token_hash,registered_at,cleanup_mode) VALUES(?,?,?,?,?)',
+                       (seat_id, label.strip(), hashlib.sha256(token.encode()).hexdigest(), now_iso(), DEFAULT_CLEANUP_MODE))
             if deliver is not None:
                 deliver({'seat_id': seat_id, 'report_token': token})
         return {'seat_id': seat_id, 'report_token': token}
@@ -150,10 +157,11 @@ class SeatRegistry:
                        'VALUES(?,?,?,?,?)', (seat_id, actor, seat['cleanup_mode'], cleanup_mode, now_iso()))
         return {'schema': 1, 'seat_id': seat_id, 'cleanup_mode': cleanup_mode}
 
-    def report(self, token, payload):
+    @staticmethod
+    def _validate_report(payload):
         required = {'seat_id', 'report_id', 'ide_version', 'extension_version', 'platform', 'architecture', 'cleanup', 'update'}
         if (not isinstance(payload, dict) or not required <= payload.keys()
-                or set(payload) - required - {'package_sha256'}):
+                or set(payload) - required - {'package_sha256', 'cleanup_mode'}):
             raise PlatformAPIError(400, 'invalid_seat_report', '기기 상태 보고 형식을 확인하세요.')
         if any(not isinstance(value, str) for value in payload.values()):
             raise PlatformAPIError(400, 'invalid_seat_report', '기기 상태 보고 형식을 확인하세요.')
@@ -171,8 +179,13 @@ class SeatRegistry:
                 raise ValueError()
             if 'package_sha256' in payload and not re.fullmatch('[0-9a-f]{64}', payload['package_sha256']):
                 raise ValueError()
+            if 'cleanup_mode' in payload and payload['cleanup_mode'] not in CLEANUP_MODES:
+                raise ValueError()
         except (ValueError, TypeError, AttributeError):
             raise PlatformAPIError(400, 'invalid_seat_report', '기기 상태 보고 형식을 확인하세요.') from None
+
+    def report(self, token, payload):
+        self._validate_report(payload)
         timestamp = now_iso()
         with closing(self._connect()) as db, db:
             db.execute('BEGIN IMMEDIATE')
@@ -198,12 +211,44 @@ class SeatRegistry:
             rows = db.execute('SELECT seat_id,label,active,last_seen_at,report_json,cleanup_mode FROM seats ORDER BY label,seat_id').fetchall()
         result = []
         for row in rows:
-            payload = json.loads(row['report_json']) if row['report_json'] else {}
-            age = age_seconds(row['last_seen_at'], now)
+            payload, report_state = {}, 'unreported'
+            raw = row['report_json']
+            if raw is not None:
+                try:
+                    # Retained data may predate validation or come from a damaged
+                    # backup. Isolate that seat rather than hide every device.
+                    if not isinstance(raw, str) or len(raw) > 8192:
+                        raise ValueError('invalid retained report')
+                    candidate = json.loads(raw)
+                    self._validate_report(candidate)
+                    if candidate['seat_id'] != row['seat_id']:
+                        raise ValueError('retained report belongs to another seat')
+                    payload, report_state = candidate, 'valid'
+                except (ValueError, TypeError, RecursionError, PlatformAPIError):
+                    report_state = 'invalid'
+            timestamp = row['last_seen_at'] if isinstance(row['last_seen_at'], str) else None
+            age = age_seconds(timestamp, now)
+            if age is None:
+                timestamp = None
+            presence = 'unreported' if age is None else 'recent' if age < 180 else 'stale'
+            reported_mode = payload.get('cleanup_mode')
+            # This is a comparison of the device's current-session self-report,
+            # never evidence that file cleanup happened or that its result was OK.
+            if not row['active']:
+                policy_state = 'inactive'
+            elif presence != 'recent' or report_state != 'valid':
+                policy_state = 'unknown'
+            elif payload['platform'] != 'win32':
+                policy_state = 'not_applicable'
+            elif reported_mode is None:
+                policy_state = 'unknown'
+            else:
+                policy_state = 'matched' if reported_mode == row['cleanup_mode'] else 'pending_restart'
             result.append({'seat_id': row['seat_id'], 'label': row['label'], 'active': bool(row['active']),
                 'cleanup_mode': row['cleanup_mode'],
-                'last_seen_at': row['last_seen_at'], 'age_seconds': age,
-                'presence': 'unreported' if age is None else 'recent' if age < 180 else 'stale',
+                'reported_cleanup_mode': reported_mode, 'policy_state': policy_state,
+                'last_seen_at': timestamp, 'age_seconds': age, 'report_state': report_state,
+                'presence': presence,
                 **{key: payload.get(key, 'unknown') for key in
                    ('ide_version', 'extension_version', 'platform', 'architecture', 'cleanup', 'update', 'package_sha256')}})
         return result
@@ -248,7 +293,22 @@ class OperationsService:
                 raise OSError('registry unavailable')
             return self.seats.policy(token, seat_id)
         except (OSError, sqlite3.Error):
-            raise PlatformAPIError(503, 'seat_registry_unavailable', '기기 상태 저장소를 확인하세요.') from None
+            raise PlatformAPIError(503, 'seat_registry_unavailable', '기기 상태 저장소를 확인하세요. 잠시 후 다시 시도하세요.',
+                                   headers={'Retry-After': '2'}) from None
+
+    def report_seat_status(self, token, payload):
+        try:
+            if self.seats is None:
+                raise OSError('registry unavailable')
+            # Use the same lock order as snapshot/policy updates: service lock,
+            # then a bounded SQLite operation. Never call snapshot while locked.
+            with self._lock:
+                result = self.seats.report(token, payload)
+                self._cached = None
+            return result
+        except (OSError, sqlite3.Error):
+            raise PlatformAPIError(503, 'seat_registry_unavailable', '기기 상태 저장소를 확인하세요. 잠시 후 다시 시도하세요.',
+                                   headers={'Retry-After': '2'}) from None
 
     def set_seat_policy(self, seat_id, cleanup_mode, *, actor):
         try:
@@ -259,7 +319,8 @@ class OperationsService:
                 self._cached = None
             return result
         except (OSError, sqlite3.Error):
-            raise PlatformAPIError(503, 'seat_registry_unavailable', '기기 상태 저장소를 확인하세요.') from None
+            raise PlatformAPIError(503, 'seat_registry_unavailable', '기기 상태 저장소를 확인하세요. 잠시 후 다시 시도하세요.',
+                                   headers={'Retry-After': '2'}) from None
 
     def _read(self):
         now = datetime.now(timezone.utc)
@@ -333,8 +394,16 @@ class OperationsService:
         except (OSError, sqlite3.Error, ValueError, TypeError):
             report['seats'] = []
             report['alerts'].append('seat_registry_unavailable')
-        if any(s['active'] and (s['cleanup'] == 'failed' or s['update'] == 'failed') for s in report['seats']):
+        active_seats = [seat for seat in report['seats'] if seat['active']]
+        if any(s['presence'] != 'recent' or s['report_state'] != 'valid' for s in active_seats):
+            report['alerts'].append('seat_reporting_attention')
+        if any(s['presence'] == 'recent' and s['report_state'] == 'valid'
+               and (s['cleanup'] == 'unknown' or s['update'] == 'unknown') for s in active_seats):
+            report['alerts'].append('seat_state_unknown')
+        if any(s['cleanup'] == 'failed' or s['update'] == 'failed' for s in active_seats):
             report['alerts'].append('seat_attention')
+        if any(s['policy_state'] == 'pending_restart' for s in active_seats):
+            report['alerts'].append('seat_policy_pending')
         report['status'] = 'attention' if report['alerts'] else 'ok'
         return report
 

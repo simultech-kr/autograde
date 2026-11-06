@@ -18,6 +18,8 @@ export interface LearningExportViewOptions {
   readonly currentWorkspace: () => ExportWorkspace | undefined;
   readonly assignments: () => readonly Assignment[];
   readonly cacheRoot: () => string;
+  readonly validateCacheRoot?: () => Promise<void>;
+  readonly validateWorkspace?: (root: string) => Promise<void>;
   readonly excludedDestinations: () => readonly string[];
   readonly cleanupMode?: SharedSessionCleanupMode;
 }
@@ -126,6 +128,7 @@ export class LearningExportView implements vscode.Disposable {
         if (mustRemainSaved && scopedDirty().length) throw new Error("저장 후에도 현재 과제에 미저장 변경이 남아 있습니다. 편집을 잠시 멈추고 모든 파일을 저장한 뒤 다시 내보내세요.");
       };
       if (chosen.has("current") && workspace) {
+        await this.options.validateWorkspace?.(workspace.rootPath); guard();
         const untitled = vscode.workspace.textDocuments.filter(document => document.isDirty && document.uri.scheme === "untitled");
         if (untitled.length) {
           const answer = await vscode.window.showWarningMessage(`이름 없는 문서 ${untitled.length}개는 내보내기에 포함되지 않습니다.`,
@@ -138,7 +141,7 @@ export class LearningExportView implements vscode.Disposable {
             {modal: true, detail: "저장된 파일만 내보냅니다. 이름 없는 새 편집기 문서는 먼저 코드 폴더에 저장하세요."}, "저장하고 내보내기", "디스크에 저장된 내용만"); guard();
           if (!answer) return;
           if (answer === "저장하고 내보내기") {
-            for (const document of dirty) {guard(); if (!await document.save()) throw new Error("저장하지 못한 파일이 있어 내보내기를 중단했습니다."); guard();}
+            for (const document of dirty) {guard(); await this.options.validateWorkspace?.(workspace.rootPath); guard(); if (!await document.save()) throw new Error("저장하지 못한 파일이 있어 내보내기를 중단했습니다."); guard();}
           } else if (answer === "디스크에 저장된 내용만") {mustRemainSaved = false; skippedEditors += dirty.length;}
           else return;
         }
@@ -156,26 +159,32 @@ export class LearningExportView implements vscode.Disposable {
             groups.push(group);
           };
           if (chosen.has("current") && workspace) {
+            await this.options.validateWorkspace?.(workspace.rootPath); assertSavedCode();
             const code = await collectLearningCode(workspace.rootPath, assertSavedCode); assertSavedCode(); skipped += code.skipped;
             addGroup({directory: "current-code", title: workspace.title ?? "작성 중인 코드", files: code.files, skipped: code.skipped + skippedEditors});
           }
           if (versions.length || manifests.length) {
+            await this.options.validateCacheRoot?.(); guard();
             const cache = this.options.cacheRoot(); await mkdir(cache, {recursive: true, mode: 0o700}); guard();
             if ((await lstat(cache)).isSymbolicLink()) throw new Error("내보내기 임시 저장 경로가 올바르지 않습니다.");
+            await this.options.validateCacheRoot?.(); guard();
             staging = await mkdtemp(path.join(cache, "export-stage-")); stagingIdentity = await lstat(staging);
           }
           for (const {assignment, version} of versions) {
             progress.report({message: "제출본 확인·수신"}); guard();
             const bytes = await this.client.getSubmissionSource(version, controller.signal); guard();
+            await this.options.validateCacheRoot?.(); guard();
             const target = path.join(staging!, safeId(version.id)); await extractSubmissionBundle(bytes, target); guard();
             const code = await collectLearningCode(target, guard); skipped += code.skipped;
             addGroup({directory: `submissions/${safeId(assignment.id)}/${safeId(version.id)}`, title: `${assignment.title} · ${version.receivedAt}`, files: code.files, skipped: code.skipped});
           }
           for (const manifest of manifests) {
             progress.report({message: "강의자료 변경분 수신·검증"}); guard();
+            await this.options.validateCacheRoot?.(); guard();
             const options = {root: this.options.cacheRoot(), origin, context: contentContext!, assertCurrent: guard,
               assignmentDirectories: workspaceKey ? [workspaceKey] : [], signal: controller.signal};
             await syncContent(this.content, manifest, options); guard();
+            await this.options.validateCacheRoot?.(); guard();
             const target = await exportContent(this.content, manifest, options, staging!); guard();
             const files = await collectLearningCode(target, guard, false);
             addGroup({directory: `course-materials/${manifest.collection_id}-v${manifest.generation}`, title: manifest.title, files: files.files});
@@ -197,7 +206,14 @@ export class LearningExportView implements vscode.Disposable {
         ? "서버 자료를 받으려면 유효한 학생 인증이 필요합니다. 현재 코드는 로그인 없이 내보낼 수 있습니다. 공용 실습에서는 먼저 코드를 내보내고 실습 종료 후 새로 실행하세요."
         : error instanceof Error ? error.message : "내보내기에 실패했습니다. 저장 위치와 연결을 확인하세요.");
     } finally {
-      if (staging && stagingIdentity) {const info = await lstat(staging).catch(() => undefined); if (info?.ino === stagingIdentity.ino && info.dev === stagingIdentity.dev) await rm(staging, {recursive: true, force: true});}
+      if (staging && stagingIdentity) {
+        // If the managed parent changed, leave cleanup to the launcher instead of following an alias.
+        try {
+          await this.options.validateCacheRoot?.();
+          const info = await lstat(staging).catch(() => undefined);
+          if (info?.isDirectory() && !info.isSymbolicLink() && info.ino === stagingIdentity.ino && info.dev === stagingIdentity.dev) await rm(staging, {recursive: true, force: true});
+        } catch { /* The next launcher recovery checks ownership before deleting any remainder. */ }
+      }
       if (this.operation === controller) this.operation = undefined;
     }
   }

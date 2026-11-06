@@ -820,3 +820,42 @@ test("remote API rejects wrong result versions, unverified cleanup and invalid r
   await assert.rejects(client.closeLearningRuntime(scope,"../other","cp_1",signal));
   assert.equal(transport.calls.length,2);
 });
+
+test("student workspace identity is read from authenticated /v1/me rather than claim contents", async () => {
+  const transport = new FakeTransport([{student_key: "20211001", course_key: "come2201", session: {id: "private-session"}}]);
+  const tokens = new TokenManager(transport);
+  await tokens.storeSession({access_token: "access", refresh_token: "refresh", expires_in: 3600}, transport.baseUrl);
+  assert.equal(await new AutogradeClient(transport, tokens).getAuthenticatedStudentKey(), "20211001");
+  assert.equal(transport.calls[0]?.endpoint, "/v1/me");
+  assert.equal(transport.calls[0]?.bearerToken, "access");
+  assert.equal(transport.calls[0]?.options?.expectedBaseUrl, transport.baseUrl);
+});
+
+test("missing or unsafe server student identity never becomes a workspace path", async () => {
+  for (const response of [{}, [], null, {student: {student_key: "20211001"}}, {student_key: "../../outside"},
+    {student_key: "CON"}, {student_key: "CON.txt"}, {student_key: "student."}, {student_key: "C:\\outside"}, {student_key: 20211001}, {student_key: "20211001 "}]) {
+    const transport = new FakeTransport([response]);
+    const tokens = new TokenManager(transport);
+    await tokens.storeSession({access_token: "access", refresh_token: "refresh", expires_in: 3600}, transport.baseUrl);
+    await assert.rejects(new AutogradeClient(transport, tokens).getAuthenticatedStudentKey(), /학번/);
+  }
+});
+
+test("student workspace identity request rejects a login changed while the server responds", async () => {
+  const transport = new FakeTransport([{student_key: "20211001"}]);
+  const tokens = new TokenManager(transport);
+  await tokens.storeSession({access_token: "access", refresh_token: "refresh", expires_in: 3600}, transport.baseUrl);
+  const request = transport.request.bind(transport);
+  transport.request = async <T>(...args: Parameters<typeof request>) => {const result = await request<T>(...args); await tokens.clear(); return result;};
+  await assert.rejects(new AutogradeClient(transport, tokens).getAuthenticatedStudentKey(), /로그인 또는 서버가 변경/);
+});
+
+
+test("authenticated student identity accepts dotted and long server roster keys without rewriting them", async () => {
+  for (const studentKey of ["s.01", "s".repeat(65), "s".repeat(128)]) {
+    const transport = new FakeTransport([{student_key: studentKey}]);
+    const tokens = new TokenManager(transport);
+    await tokens.storeSession({access_token: "access", refresh_token: "refresh", expires_in: 3600}, transport.baseUrl);
+    assert.equal(await new AutogradeClient(transport, tokens).getAuthenticatedStudentKey(), studentKey);
+  }
+});

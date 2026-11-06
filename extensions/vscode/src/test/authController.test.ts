@@ -81,7 +81,7 @@ test("offline sign-out can explicitly clear only local credentials", async () =>
   const controller = new AuthenticationController(
     client,
     "0.1.0",
-    (authenticated) => authenticationChanges.push(authenticated),
+    (authenticated) => { authenticationChanges.push(authenticated); },
   );
 
   await controller.signOut();
@@ -104,7 +104,7 @@ test("explicit sign-out revokes the current server session", async () => {
   const controller = new AuthenticationController(
     client,
     "0.1.0",
-    (authenticated) => authenticationChanges.push(authenticated),
+    (authenticated) => { authenticationChanges.push(authenticated); },
   );
 
   await controller.signOut();
@@ -128,7 +128,7 @@ test("sign-out clears student UI state even after the in-memory session was alre
   const controller = new AuthenticationController(
     client,
     "0.1.0",
-    (authenticated) => authenticationChanges.push(authenticated),
+    (authenticated) => { authenticationChanges.push(authenticated); },
   );
 
   await controller.signOut();
@@ -195,7 +195,7 @@ test("repeated sign-in revokes the current session before creating a new authori
   const controller = new AuthenticationController(
     client,
     "0.1.0",
-    (authenticated) => authenticationChanges.push(authenticated),
+    (authenticated) => { authenticationChanges.push(authenticated); },
   );
 
   await controller.signIn();
@@ -275,7 +275,7 @@ test("sign-in cannot install returned tokens if the origin flips at the store bo
   const controller = new AuthenticationController(
     client,
     "0.2.1",
-    (authenticated) => authenticationChanges.push(authenticated),
+    (authenticated) => { authenticationChanges.push(authenticated); },
     async () => returnedTokens,
   );
 

@@ -18,7 +18,7 @@ export class AuthenticationController {
   public constructor(
     private readonly client: AutogradeClient,
     private readonly extensionVersion: string,
-    private readonly onAuthenticationChanged: (authenticated: boolean) => void,
+    private readonly onAuthenticationChanged: (authenticated: boolean) => void | Promise<void>,
     private readonly tokenPoller: DeviceTokenPoller = pollForDeviceToken,
   ) {}
 
@@ -147,7 +147,7 @@ export class AuthenticationController {
       throw new Error("로그인 중 Autograde 서비스 주소가 변경되었습니다. 다시 시도하세요.");
     }
     await this.client.tokens.storeSession(tokens, serviceBaseUrl);
-    this.onAuthenticationChanged(true);
+    await this.onAuthenticationChanged(true);
     void vscode.window.showInformationMessage("Autograde에 연결되었습니다.");
   }
 
@@ -156,7 +156,7 @@ export class AuthenticationController {
       // Even a guest may have a claim exchange in flight. Advance its identity
       // boundary so the late token response cannot sign the student back in.
       await this.client.tokens.clear();
-      this.onAuthenticationChanged(false);
+      await this.onAuthenticationChanged(false);
       void vscode.window.showInformationMessage(
         "현재 Autograde 로그인 세션이 없습니다. 진행 중인 수령 연결을 중단하고 남아 있던 채점 화면을 지웠습니다.",
       );
@@ -177,13 +177,13 @@ export class AuthenticationController {
         return false;
       }
       await this.client.tokens.clear();
-      this.onAuthenticationChanged(false);
+      await this.onAuthenticationChanged(false);
       void vscode.window.showWarningMessage(
         "이 기기의 로그인 정보와 채점 화면은 지웠지만 서버 세션 폐기는 확인하지 못했습니다. 공용 PC의 작업 파일은 자동 삭제되지 않습니다.",
       );
       return true;
     }
-    this.onAuthenticationChanged(false);
+    await this.onAuthenticationChanged(false);
     void vscode.window.showInformationMessage(
       "Autograde에서 로그아웃하고 채점 화면을 지웠습니다. 공용 PC의 작업 파일은 자동 삭제되지 않습니다.",
     );
@@ -193,7 +193,7 @@ export class AuthenticationController {
   private async endExistingSessionForReplacement(): Promise<boolean> {
     try {
       await this.client.revokeCurrentSession();
-      this.onAuthenticationChanged(false);
+      await this.onAuthenticationChanged(false);
       return true;
     } catch {
       const reset = await vscode.window.showWarningMessage(
@@ -208,7 +208,7 @@ export class AuthenticationController {
         return false;
       }
       await this.client.tokens.clear();
-      this.onAuthenticationChanged(false);
+      await this.onAuthenticationChanged(false);
       return true;
     }
   }

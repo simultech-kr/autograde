@@ -56,7 +56,7 @@ test("unknown, inconsistent and changed cleanup policies fail closed", async () 
     const session = (await f.read())!;
     await writeFile(path.join(f.root, SHARED_SESSION_MARKER), JSON.stringify({...f.marker, cleanupMode: "next_start"}), {mode: 0o600});
     await assert.rejects(session.assertWorkspacePath(f.workspace), /공용 실습/);
-    await assert.rejects(session.markAuthenticated(), /공용 실습/);
+    await assert.rejects(session.markAuthenticated("20211001"), /공용 실습/);
   } finally { await f.dispose(); }
 });
 
@@ -65,13 +65,23 @@ test("first authentication is remembered without tokens, subsequent login and ho
   try {
     const session = (await f.read())!;
     assert.equal(session.authenticationUsed, false); session.assertCanAuthenticate();
-    await session.markAuthenticated();
+    await session.markAuthenticated("20211001");
     assert.equal(session.authenticationUsed, true);
-    assert.deepEqual(JSON.parse(await readFile(path.join(f.root, SHARED_AUTH_USED), "utf8")), {schema: 1, sessionId: f.id, authenticated: true});
+    const marker = JSON.parse(await readFile(path.join(f.root, SHARED_AUTH_USED), "utf8"));
+    assert.equal(marker.schema, 2); assert.equal(marker.sessionId, f.id); assert.equal(marker.authenticated, true);
+    assert.equal(marker.studentKey, "20211001");
+    assert.equal(session.initialWorkspace, f.workspace);
+    assert.equal(session.workspace, path.join(f.workspace, "20211001"));
+    assert.equal(session.materials, path.join(f.materials, "20211001"));
+    await session.assertWorkspacePath(session.workspace); await session.assertMaterialsDirectory();
+    assert.equal((await lstat(session.workspace)).ino, marker.workspaceIdentity.ino);
     assert.throws(() => session.assertCanAuthenticate(), /새 IDE 세션/);
-    await assert.rejects(session.markAuthenticated(), /새 IDE 세션/);
+    await assert.rejects(session.markAuthenticated("20211001"), /새 IDE 세션/);
     const reloaded = (await f.read())!;
     assert.equal(reloaded.authenticationUsed, true);
+    assert.equal(reloaded.studentKey, "20211001");
+    assert.equal(reloaded.workspace, session.workspace); assert.equal(reloaded.materials, session.materials);
+    await reloaded.assertWorkspacePath(reloaded.workspace);
     assert.throws(() => reloaded.assertCanAuthenticate(), /새 IDE 세션/);
   } finally { await f.dispose(); }
 });
@@ -162,7 +172,7 @@ test("root replacement after activation cannot receive authentication marker or 
   try {
     const session = (await f.read())!;
     await rename(f.root, `${f.root}-old`); await mkdir(f.root, {mode: 0o700}); await mkdir(f.workspace, {mode: 0o700});
-    await assert.rejects(session.markAuthenticated(), /공용 실습/);
+    await assert.rejects(session.markAuthenticated("20211001"), /공용 실습/);
     await assert.rejects(session.assertWorkspacePath(f.workspace), /공용 실습/);
     await assert.rejects(readFile(path.join(f.root, SHARED_AUTH_USED)), {code: "ENOENT"});
   } finally { await f.dispose(); }
@@ -183,7 +193,7 @@ test("a fixed path cannot reuse an old activated session identity", async () => 
     const session = (await f.read())!;
     await writeFile(path.join(f.root, SHARED_SESSION_MARKER), JSON.stringify({...f.marker, sessionId: "a".repeat(24)}), {mode: 0o600});
     await assert.rejects(session.assertWorkspacePath(f.workspace), /공용 실습/);
-    await assert.rejects(session.markAuthenticated(), /공용 실습/);
+    await assert.rejects(session.markAuthenticated("20211001"), /공용 실습/);
   } finally { await f.dispose(); }
 });
 
@@ -192,3 +202,112 @@ test("legacy session roots remain readable during launcher migration", async () 
   try { await (await f.read())!.assertWorkspacePath(f.workspace); }
   finally { await f.dispose(); }
 });
+
+
+test("server student key scopes work and materials; siblings and the initial parent are no longer work roots", async () => {
+  const f = await fixture();
+  try {
+    const session = (await f.read())!;
+    assert.throws(() => session.materials, /학생 인증/);
+    await session.markAuthenticated("20211001");
+    const assignment = path.join(session.workspace, "problem-01"); await mkdir(assignment, {mode: 0o700});
+    await session.assertWorkspacePath(assignment);
+    for (const candidate of [f.workspace, f.materials, session.materials, path.join(f.workspace, "20211002")]) {
+      await assert.rejects(session.assertWorkspacePath(candidate), /이번 세션/);
+    }
+    await assert.rejects(session.markAuthenticated("20211002"), /새 IDE 세션/);
+    if (process.platform !== "win32") {
+      assert.equal((await lstat(session.workspace)).mode & 0o777, 0o700);
+      assert.equal((await lstat(session.materials)).mode & 0o777, 0o700);
+    }
+  } finally {await f.dispose();}
+});
+
+for (const studentKey of ["", "../outside", "a/b", "a\\b", ".", "..", "C:drive", "student.", " CON", "CON", "lpt1", "CON.txt", "Lpt9.cpp", "com1.data", "x".repeat(129), "student\n"]) {
+  test(`nonportable student folder identity is rejected: ${JSON.stringify(studentKey)}`, async () => {
+    const f = await fixture();
+    try {
+      const session = (await f.read())!;
+      await assert.rejects(session.markAuthenticated(studentKey), /학번/);
+      assert.equal(session.authenticationUsed, false);
+      await assert.rejects(readFile(path.join(f.root, SHARED_AUTH_USED)), {code: "ENOENT"});
+    } finally {await f.dispose();}
+  });
+}
+
+for (const base of ["workspace", "materials"] as const) {
+  test(`an unexpected existing ${base} student folder is never adopted or overwritten`, async () => {
+    const f = await fixture();
+    try {
+      const existing = path.join(f[base], "20211001"); await mkdir(existing, {mode: 0o700});
+      await writeFile(path.join(existing, "keep.txt"), "existing work");
+      const session = (await f.read())!;
+      await assert.rejects(session.markAuthenticated("20211001"), {code: "EEXIST"});
+      assert.equal(await readFile(path.join(existing, "keep.txt"), "utf8"), "existing work");
+      assert.equal(session.authenticationUsed, true);
+      await assert.rejects(f.read()); // An incomplete binding requires a new launcher session.
+    } finally {await f.dispose();}
+  });
+
+  test(`a replaced student ${base} directory cannot be reused after authentication or host reload`, async () => {
+    const f = await fixture();
+    try {
+      const session = (await f.read())!; await session.markAuthenticated("20211001");
+      const target = session[base]; await rename(target, `${target}-old`); await mkdir(target, {mode: 0o700});
+      await assert.rejects(session.assertWorkspacePath(session.workspace), /공용 실습/);
+      await assert.rejects(session.assertMaterialsDirectory(), /공용 실습/);
+      await assert.rejects(f.read(), /공용 실습/);
+    } finally {await f.dispose();}
+  });
+}
+
+test("student marker mutation and string schemas cannot rebind a session", async () => {
+  const f = await fixture();
+  try {
+    const session = (await f.read())!; await session.markAuthenticated("20211001");
+    const file = path.join(f.root, SHARED_AUTH_USED), flag = JSON.parse(await readFile(file, "utf8"));
+    await writeFile(file, JSON.stringify({...flag, studentKey: "20211002"}), {mode: 0o600});
+    await assert.rejects(session.assertWorkspacePath(session.workspace), /공용 실습/);
+    await assert.rejects(f.read());
+    await writeFile(file, JSON.stringify({...flag, schema: "2"}), {mode: 0o600});
+    await assert.rejects(f.read(), /공용 실습/);
+  } finally {await f.dispose();}
+});
+
+test("stale authentication cannot create or reuse a student binding", async () => {
+  const f = await fixture();
+  try {
+    const session = (await f.read())!;
+    await assert.rejects(session.markAuthenticated("20211001", () => {throw new Error("stale authentication");}), /stale authentication/);
+    assert.equal(session.authenticationUsed, false);
+    await assert.rejects(lstat(path.join(f.workspace, "20211001")), {code: "ENOENT"});
+  } finally {await f.dispose();}
+});
+
+
+test("a linked materials parent cannot receive student files even if its student leaf is a directory", async () => {
+  const f = await fixture();
+  try {
+    const session = (await f.read())!; await session.markAuthenticated("20211001");
+    const old = path.join(f.parent, "moved-materials"); await rename(f.materials, old);
+    await symlinkDirectory(old, f.materials);
+    assert.equal((await lstat(path.join(f.materials, "20211001"))).isDirectory(), true);
+    await assert.rejects(session.assertMaterialsDirectory(), /공용 실습/);
+    await assert.rejects(f.read(), /공용 실습/);
+  } finally {await f.dispose();}
+});
+
+
+for (const studentKey of ["s.01", "s".repeat(65), "s".repeat(128)]) {
+  test(`server-compatible student keys remain unchanged as folder names (${studentKey.length} chars)`, async () => {
+    const f = await fixture();
+    try {
+      const session = (await f.read())!; await session.markAuthenticated(studentKey);
+      assert.equal(session.workspace, path.join(f.workspace, studentKey));
+      assert.equal(session.materials, path.join(f.materials, studentKey));
+      await session.assertWorkspacePath(session.workspace); await session.assertMaterialsDirectory();
+      const reloaded = (await f.read())!;
+      assert.equal(reloaded.studentKey, studentKey); assert.equal(reloaded.workspace, session.workspace);
+    } finally {await f.dispose();}
+  });
+}

@@ -26,6 +26,7 @@ from .instructor_browser import SCRIPT_TAG
 from .instructor_portal import STYLE as PORTAL_STYLE, navigation, portal_home, course_workflows, course_summary, environment_page
 from .instructor_design import STYLE as DESIGN_STYLE
 from .instructor_students_style import STYLE as STUDENTS_STYLE
+from .operations_seats_view import STYLE as SEATS_STYLE
 
 
 _COOKIE = "autograde_instructor_web"
@@ -171,11 +172,11 @@ class InstructorWeb:
     def matches(path):
         return path == "/instructor" or path.startswith("/instructor/") or bool(_COURSE_PATH.fullmatch(path))
 
-    def _session(self, cookies, *, required):
+    def _session(self, cookies, *, required, touch=True):
         from .instructor_account_web import enabled
         if enabled(self):
             from .instructor_sessions import COOKIE
-            session = self.identities.prepare_browser_auth().session(cookies.get(COOKIE, ''))
+            session = self.identities.prepare_browser_auth().session(cookies.get(COOKIE, ''), touch=touch)
             if self.principal is None or session['principal'].session_binding != self.principal.session_binding:
                 raise PlatformAPIError(403, 'instructor_csrf', '교수자 계정이 변경되었습니다. 다시 로그인하세요.')
             return session, None
@@ -198,12 +199,13 @@ class InstructorWeb:
                 session['identity'] = self.principal.session_binding
             return session, sign_browser_value(self.secret, "instructor-web", session, lifetime_seconds=3600)
 
-    def _scoped(self, authorization):
+    def _scoped(self, authorization, *, touch_session=True):
         if self.identities is None:
             self.authorize(authorization)
             return self
         from .instructor_identity import ScopedCourses
-        principal = self.identities.authenticate(authorization)
+        principal = (self.identities.authenticate(authorization) if touch_session else
+                     self.identities.authenticate(authorization, touch_session=False))
         scoped = copy(self)
         scoped.principal = principal
         scoped.courses = ScopedCourses(self.courses, principal)
@@ -250,9 +252,9 @@ class InstructorWeb:
                     return self._redirect('/instructor/account')
             return response
         try:
-            scoped = self._scoped(authorization)
+            scoped = self._scoped(authorization, touch_session=not self._background_read(path))
         except PlatformAPIError as exc:
-            background_status = path == '/instructor/operations/readiness/status'
+            background_status = path in {'/instructor/operations/readiness/status', '/instructor/operations/seats/status'}
             if not background_status and instructor_account_web.enabled(self) and method == 'GET' and exc.status == 401:
                 return self._redirect('/instructor/login')
             if not background_status and instructor_account_web.enabled(self) and method == 'GET' and exc.code == 'instructor_mfa_enrollment_required':
@@ -262,12 +264,16 @@ class InstructorWeb:
             raise PlatformAPIError(403, 'instructor_read_only', '조회 전용 계정은 변경 작업을 할 수 없습니다.')
         return scoped._authenticated_request(method, path, form, cookies, origin, authorization)
 
+    @staticmethod
+    def _background_read(path):
+        return (path in {'/instructor/operations/readiness/status', '/instructor/operations/seats/status'} or
+                bool(re.fullmatch(r'/courses/[a-z0-9_-]{1,96}/instructor/(?:checks/[a-zA-Z0-9_-]+/status|submissions/live)', path)))
+
     def _authenticated_request(self, method, path, form, cookies, origin, authorization):
-        polling = (path == '/instructor/operations/readiness/status' or
-                   bool(re.fullmatch(r'/courses/[a-z0-9_-]{1,96}/instructor/(?:checks/[a-zA-Z0-9_-]+/status|submissions/live)', path)))
+        polling = self._background_read(path)
         if polling and method != 'GET':
             raise PlatformAPIError(405, 'method_not_allowed', '조회만 가능한 경로입니다.')
-        session, cookie = self._session(cookies, required=method == "POST" or polling)
+        session, cookie = self._session(cookies, required=method == "POST" or polling, touch=not polling)
         if polling:
             cookie = None  # Error pages must not refresh a background reader's cookie either.
         if method == "POST":
@@ -354,7 +360,7 @@ class InstructorWeb:
             breadcrumb += f'<span aria-hidden="true">/</span><a href="{self._base(course)}">{_e(course.get("name") or course["code"])}</a>'
         breadcrumb += '<span aria-hidden="true">/</span><span>' + _e(title) + '</span>'
         document = ('<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
-                    f'<title>{_e(title)} · Autograde</title><style>{_STYLE}{THEME_CSS}{RESPONSIVE_CSS}{PORTAL_STYLE}{DESIGN_STYLE}{STUDENTS_STYLE}</style></head><body class="responsive-instructor{" readonly-view" if read_only else ""}"><a class="skip-link" href="#main-content">본문으로 건너뛰기</a><header class="instructor-header"><a class="instructor-brand" href="/instructor"><span class="instructor-brand-mark" aria-hidden="true">A</span><div><h1>Autograde 교수자 포털</h1><small>{_e(identity_caption)}</small></div></a>{switch}</header>'
+                    f'<title>{_e(title)} · Autograde</title><style>{_STYLE}{THEME_CSS}{RESPONSIVE_CSS}{PORTAL_STYLE}{DESIGN_STYLE}{STUDENTS_STYLE}{SEATS_STYLE}</style></head><body class="responsive-instructor{" readonly-view" if read_only else ""}"><a class="skip-link" href="#main-content">본문으로 건너뛰기</a><header class="instructor-header"><a class="instructor-brand" href="/instructor"><span class="instructor-brand-mark" aria-hidden="true">A</span><div><h1>Autograde 교수자 포털</h1><small>{_e(identity_caption)}</small></div></a>{switch}</header>'
                     f'<div class="shell"><details class="portal-menu" open><summary>교수자 메뉴 · {_e(title)}</summary><nav class="portal-navigation" aria-label="교수자 메뉴">{nav}</nav></details><main id="main-content" tabindex="-1" data-audience="instructor"><div class="page-heading"><nav class="page-breadcrumb" aria-label="현재 위치">{breadcrumb}</nav><h2>{_e(title)}</h2></div>{body}'
                     '<p class="hint account-notice">' + account_hint +
                     'pilot-local 실행은 보안 격리가 아닙니다.</p></main></div>' + SCRIPT_TAG + '</body></html>')

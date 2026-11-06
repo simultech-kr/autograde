@@ -28,11 +28,15 @@ export function loadSeatConfig(file = seatConfigPath(), platform = process.platf
 
 export function createSeatReporter({ configFile, version = 'unknown', extensionVersion = version,
   platform = process.platform, architecture = process.arch, send = globalThis.fetch,
-  onWarning = () => {}, intervalMilliseconds = 60000 } = {}) {
+  cleanupMode, onWarning = () => {}, intervalMilliseconds = 60000 } = {}) {
   let config;
   try { config = loadSeatConfig(configFile, platform); }
   catch { onWarning('device_config_invalid'); }
   if (!config) return { event() {}, async close() {} };
+  // This is a launch-time policy snapshot supplied by the validated launcher,
+  // never a student setting, environment override or proof of successful cleanup.
+  const selectedCleanupMode = ['on_exit', 'next_start'].includes(cleanupMode) ? cleanupMode : undefined;
+  if (cleanupMode !== undefined && selectedCleanupMode === undefined) onWarning('device_report_mode_invalid');
   let cleanup = 'unknown', stopped = false, queue = Promise.resolve(), pending = 0;
   const report = () => {
     if (pending >= 2) return queue; // Never accumulate unbounded offline reports.
@@ -43,7 +47,8 @@ export function createSeatReporter({ configFile, version = 'unknown', extensionV
           method: 'POST', redirect: 'error', signal: AbortSignal.timeout(3000),
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${config.reportToken}` },
           body: JSON.stringify({ seat_id: config.seatId, report_id: randomUUID(), ide_version: version,
-            extension_version: extensionVersion, platform, architecture, cleanup, update: 'unknown' }),
+            extension_version: extensionVersion, platform, architecture, cleanup, update: 'unknown',
+            ...(selectedCleanupMode === undefined ? {} : { cleanup_mode: selectedCleanupMode }) }),
         });
         // A rate-limited quick exit remains unknown; never claim a failed report succeeded.
         await response.body?.cancel();

@@ -19,7 +19,9 @@ const ui = {choice: undefined as string | undefined, quits: 0, exports: 0, signi
   revoked: 0, warnings: [] as string[], warningDetails: [] as string[], information: [] as string[], errors: [] as string[], workspace: "", exportRoot: "",
   failRevoke: false, assignments: [] as Assignment[], inspected: "", serverOrigin: "https://test.invalid", homeForms: [] as unknown[],
   configuration: {} as Record<string, {defaultValue?: unknown; globalValue?: unknown; workspaceValue?: unknown}>,
-  configurationReads: [] as string[], scannedProfiles: [] as actualDiscovery.TrustedDiscoveryServer[][]};
+  configurationReads: [] as string[], scannedProfiles: [] as actualDiscovery.TrustedDiscoveryServer[][],
+  studentKey: "20211001", identityReads: 0, identityError: false,
+  materialRoot: undefined as (() => string) | undefined, contentRoot: undefined as (() => string) | undefined};
 let homeInputs: {claim(code: string, expectedServer: string): Promise<void>; configureServer(address: string): Promise<void>};
 class Tokens {
   public loggedIn = false; public generation = 0;
@@ -32,6 +34,7 @@ class Client {
   constructor(public transport: {getBaseUrl(): string}, public tokens: Tokens) { }
   public getBaseUrl = () => this.transport.getBaseUrl();
   public getAssignments = async () => ui.assignments;
+  public getAuthenticatedStudentKey = async () => {ui.identityReads++; if (ui.identityError) throw new Error("identity unavailable"); return ui.studentKey;};
   public revokeCurrentSession = async () => {ui.revoked++; if (ui.failRevoke) throw new Error("offline"); await this.tokens.clear();};
 }
 class View {
@@ -85,9 +88,9 @@ const replacements: Record<string, unknown> = {
     }
   }},
   "./auth": {AuthenticationController: class {
-    constructor(private client: Client, _version: string, private changed: (value: boolean) => void) {}
-    async signIn() {ui.signins++; this.client.tokens.loggedIn = true; this.client.tokens.generation++; this.changed(true);}
-    async signOut() {await this.client.tokens.clear(); this.changed(false); return true;}
+    constructor(private client: Client, _version: string, private changed: (value: boolean) => void | Promise<void>) {}
+    async signIn() {ui.signins++; this.client.tokens.loggedIn = true; this.client.tokens.generation++; await this.changed(true);}
+    async signOut() {await this.client.tokens.clear(); await this.changed(false); return true;}
   }},
   "./assignmentClaim": {AssignmentClaimController: class {
     constructor(private client: Client, _version: string, private redeemed: (id?: string) => Promise<void>) {}
@@ -98,8 +101,12 @@ const replacements: Record<string, unknown> = {
   "./connectionMonitor": {CHECK_SERVER_CONNECTION_COMMAND: "autograde.checkServerConnection", ServerConnectionMonitor: View},
   "./assignmentDocumentView": {ASSIGNMENT_DOCUMENT_SCHEME: "autograde-assignment", AssignmentDocumentView: View},
   "./submissionResultMonitor": {SubmissionResultMonitor: View},
-  "./examModeView": {ExamModeView: View}, "./studentMaterialsView": {StudentMaterialsView: View},
-  "./contentSyncView": {CONTENT_SYNC_COMMAND: "autograde.syncContent", ContentSyncView: View},
+  "./examModeView": {ExamModeView: View}, "./studentMaterialsView": {StudentMaterialsView: class extends View {
+    constructor(_client: unknown, options: {managedDirectory: () => string}) {super(); ui.materialRoot = options.managedDirectory;}
+  }},
+  "./contentSyncView": {CONTENT_SYNC_COMMAND: "autograde.syncContent", ContentSyncView: class extends View {
+    constructor(_client: unknown, options: {cacheRoot: () => string}) {super(); ui.contentRoot = options.cacheRoot;}
+  }},
   "./learningHomeView": {LearningHomeView: class extends View {
     constructor(_state: unknown, callbacks: typeof homeInputs) {super(); homeInputs = callbacks;}
     override show = async (form?: unknown) => {ui.homeForms.push(form);};
@@ -121,7 +128,7 @@ loader._load = originalLoad;
 
 async function fixture(used = false, cleanupMode: "on_exit" | "next_start" = "on_exit") {
   commands.clear(); Object.assign(ui, {choice: undefined, choices: [], quits: 0, exports: 0, signins: 0, claims: 0, revoked: 0, warnings: [], warningDetails: [], information: [], errors: [], failRevoke: false, assignments: [], inspected: "", serverOrigin: "https://test.invalid", homeForms: [],
-    configuration: {"discovery.enabled": {defaultValue: false}}, configurationReads: [], scannedProfiles: []});
+    configuration: {"discovery.enabled": {defaultValue: false}}, configurationReads: [], scannedProfiles: [], studentKey: "20211001", identityReads: 0, identityError: false, materialRoot: undefined, contentRoot: undefined});
   const parent = await mkdtemp(path.join(await realpath(os.tmpdir()), "ag-lifecycle-test-"));
   const id = randomBytes(12).toString("hex"), root = path.join(parent, `e-${id}`), workspace = path.join(root, "workspace");
   await mkdir(root, {mode: 0o700}); await mkdir(workspace, {mode: 0o700}); await mkdir(path.join(root, "materials"), {mode: 0o700});
@@ -160,7 +167,12 @@ test("actual claim success locks reauthentication and account/address replacemen
     assert.ok(ui.homeForms.includes("claim"));
     await homeInputs.claim("AK1-2345-6789-ABCD", ui.serverOrigin); assert.equal(ui.claims, 1);
     assert.deepEqual(ui.errors, []);
-    assert.equal(JSON.parse(await readFile(path.join(f.root, SHARED_AUTH_USED), "utf8")).authenticated, true);
+    const binding = JSON.parse(await readFile(path.join(f.root, SHARED_AUTH_USED), "utf8"));
+    assert.equal(binding.authenticated, true); assert.equal(binding.studentKey, "20211001");
+    assert.equal(ui.identityReads, 1);
+    assert.equal(ui.materialRoot?.(), path.join(f.root, "materials", "20211001"));
+    assert.equal(ui.contentRoot?.(), path.join(f.root, "materials", "20211001"));
+    await f.command("autograde.exportLearning"); assert.equal(ui.exportRoot, path.join(f.workspace, "20211001"));
     await f.command("autograde.redeemAssignmentClaim"); await f.command("autograde.signIn"); await f.command("autograde.configureServiceAddress");
     await assert.rejects(homeInputs.configureServer("https://other.invalid"), /새 IDE 세션/);
     assert.equal(ui.claims, 1); assert.equal(ui.signins, 0); assert.match(ui.errors.join(" "), /새 IDE 세션/);
@@ -203,7 +215,7 @@ test("shared Git claim and submit use the selected child repository, not the out
     ui.assignments = [{id: "git-1", title: "Git 과제", repository: {ready: true, name: "student-repo", cloneUrl: "https://github.com/example/student-repo.git"}}];
     await f.command("autograde.redeemAssignmentClaim");
     await homeInputs.claim("AK1-2345-6789-ABCD", ui.serverOrigin); assert.deepEqual(ui.errors, []);
-    const repository = path.join(f.workspace, "student-repo"); assert.equal((await lstat(repository)).isDirectory(), true);
+    const repository = path.join(f.workspace, "20211001", "student-repo"); assert.equal((await lstat(repository)).isDirectory(), true);
     await f.command("autograde.submitCurrentCommit");
     assert.equal(ui.inspected, repository); assert.match(ui.errors.join(" "), /synthetic inspection stop/);
   } finally {await f.dispose();}
@@ -254,3 +266,30 @@ test("discovery consumes installed/global institution trust and ignores a worksp
     assert.ok(ui.configurationReads.includes("discovery.trustedServers"));
   } finally {await f.dispose();}
 });
+
+
+test("device authentication binds the same student directory before enabling student actions", async () => {
+  const f = await fixture();
+  try {
+    await f.command("autograde.signIn");
+    assert.equal(ui.signins, 1); assert.equal(ui.identityReads, 1); assert.deepEqual(ui.errors, []);
+    assert.equal((await lstat(path.join(f.workspace, "20211001"))).isDirectory(), true);
+    assert.equal(ui.contentRoot?.(), path.join(f.root, "materials", "20211001"));
+    await f.command("autograde.exportLearning"); assert.equal(ui.exportRoot, path.join(f.workspace, "20211001"));
+  } finally {await f.dispose();}
+});
+
+for (const failure of ["missing identity", "unsafe identity"] as const) {
+  test(`claim with ${failure} does not download, expose student actions or fall back to the shared parent`, async () => {
+    const f = await fixture();
+    try {
+      ui.identityError = failure === "missing identity"; ui.studentKey = failure === "unsafe identity" ? "../outside" : "20211001";
+      ui.assignments = [{id: "git-1", title: "Git 과제", repository: {ready: true, name: "student-repo", cloneUrl: "https://github.com/example/student-repo.git"}}];
+      await assert.rejects(homeInputs.claim("AK1-2345-6789-ABCD", ui.serverOrigin));
+      assert.equal(tokens.loggedIn, false);
+      await assert.rejects(lstat(path.join(f.workspace, "student-repo")), {code: "ENOENT"});
+      await assert.rejects(lstat(path.join(f.workspace, "20211001")), {code: "ENOENT"});
+      assert.throws(() => ui.materialRoot?.(), /학생 인증/);
+    } finally {await f.dispose();}
+  });
+}

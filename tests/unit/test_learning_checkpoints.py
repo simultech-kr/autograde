@@ -14,6 +14,8 @@ from autograde.platform_bundle import BundleStorageError
 from autograde.platform_service import PlatformAPIError, StudentPlatformService
 from autograde.platform_portal import CourseAPI
 from autograde.platform_http import PlatformRequestHandler
+from autograde.privacy_file_guard import privacy_file_guard
+from autograde.course_file_guard import course_file_guard, mark_course_files_deleted
 
 from test_platform_service_bundle import bundle_platform, COURSE, NOW
 from test_platform_http_bundle import running_server, request
@@ -363,3 +365,188 @@ def test_http_retention_after_open_keeps_pinned_descriptor_and_closes_it(checkpo
     assert len(opened) == 1
     with pytest.raises(OSError):
         os.fstat(opened[0])
+
+
+def test_http_privacy_cleanup_contention_is_retryable_and_recovers(checkpoints):
+    state, _store, service, token, _notifications, payload = checkpoints
+    checkpoint = save(service, token, payload)["checkpoint"]
+    facade = CourseAPI({COURSE: service}, b"s" * 32)
+    route = f"/v1/assignments/{ASSIGNMENT}/learning-checkpoints"
+    download = route + f"/{checkpoint['checkpoint_id']}/bundle"
+    auth = {"Authorization": "Bearer " + token}
+    upload = {**auth, "Content-Type": "application/gzip", "Idempotency-Key": "privacy-busy-save"}
+    with running_server(facade) as server:
+        # Request handlers use another thread and must contend for this lease.
+        with privacy_file_guard(state.database.parent, exclusive=True):
+            for method, target, data, headers in [
+                ("GET", route, None, auth), ("GET", download, None, auth),
+                ("POST", route, payload, upload),
+            ]:
+                status, response_headers, body = request(server, method, target, body=data, headers=headers)
+                assert status == 429 and response_headers["retry-after"] == "2"
+                assert json.loads(body)["error"]["code"] == "checkpoint_busy"
+        assert request(server, "GET", route, headers=auth)[0] == 200
+        assert request(server, "GET", download, headers=auth)[2] == payload
+        status, _, body = request(server, "POST", route, body=payload, headers=upload)
+        assert status == 200 and json.loads(body)["checkpoint"] == checkpoint
+
+
+def test_guard_corruption_is_storage_failure_not_contention(checkpoints):
+    state, _store, service, token, _notifications, payload = checkpoints
+    save(service, token, payload)
+    lock = state.database.parent / ".privacy-files.lock"
+    alias = state.database.parent / "unsafe-privacy-lock-alias"
+    os.link(lock, alias)
+    with pytest.raises(PlatformAPIError) as error:
+        service.list_learning_checkpoints(token, ASSIGNMENT)
+    assert error.value.status == 503
+    assert error.value.code == "checkpoint_storage_unavailable"
+    alias.unlink()
+    with course_file_guard(state.database.parent, COURSE, exclusive=True):
+        mark_course_files_deleted(state.database.parent, COURSE)
+    with pytest.raises(PlatformAPIError) as deleted:
+        service.list_learning_checkpoints(token, ASSIGNMENT)
+    assert deleted.value.status == 410 and deleted.value.code == "course_deleted"
+
+
+@pytest.mark.parametrize("mutation", [
+    lambda ledger: ledger.update(version=True),
+    lambda ledger: ledger.update(checkpoints=[{}]),
+    lambda ledger: ledger.update(checkpoints=[]),
+    lambda ledger: ledger["checkpoints"][0].update(assignment_id="another-assignment"),
+    lambda ledger: ledger["checkpoints"][0].update(archive_sha256="../outside"),
+    lambda ledger: ledger["checkpoints"][0].update(content_sha256=None),
+    lambda ledger: ledger["checkpoints"][0].update(created_at="not-a-date"),
+    lambda ledger: ledger["checkpoints"][0].update(created_at="2026-11-06T10:00:00"),
+    lambda ledger: ledger["checkpoints"][0].update(compressed_bytes=True),
+    lambda ledger: ledger["checkpoints"][0].update(source_bytes=-1),
+    lambda ledger: ledger["checkpoints"].append(dict(ledger["checkpoints"][0])),
+    lambda ledger: ledger.update(keys=[{}]),
+    lambda ledger: ledger["keys"][0].update(digest="unvalidated"),
+    lambda ledger: ledger["keys"].append(dict(ledger["keys"][0])),
+])
+def test_corrupt_ledger_is_rejected_before_reclamation_without_changing_files(checkpoints, monkeypatch, mutation):
+    _state, _store, service, token, _notifications, payload = checkpoints
+    checkpoint = save(service, token, payload)["checkpoint"]
+    store = service._checkpoint_store()
+    owner = next(store.root.iterdir())
+    index = owner / "index.json"
+    ledger = json.loads(index.read_text())
+    mutation(ledger)
+    index.write_text(json.dumps(ledger))
+    def snapshot():
+        return {str(file.relative_to(owner)): file.read_bytes() for file in owner.rglob("*") if file.is_file()}
+    before = snapshot()
+    def no_reclaim(*_args):
+        pytest.fail("Corrupt metadata reached destructive reclamation")
+    monkeypatch.setattr(store, "_reclaim", no_reclaim)
+    for operation in (lambda: service.list_learning_checkpoints(token, ASSIGNMENT),
+                      lambda: service.get_learning_checkpoint_bundle(token, ASSIGNMENT, checkpoint["checkpoint_id"]),
+                      lambda: save(service, token, payload)):
+        with pytest.raises(PlatformAPIError) as error:
+            operation()
+        assert error.value.status == 503 and error.value.code == "checkpoint_storage_unavailable"
+    assert snapshot() == before
+
+
+def test_http_corrupt_ledger_is_safe_storage_error_and_repair_restores_access(checkpoints):
+    _state, _store, service, token, _notifications, payload = checkpoints
+    checkpoint = save(service, token, payload)["checkpoint"]
+    owner = next(service._checkpoint_store().root.iterdir())
+    index = owner / "index.json"
+    original = index.read_bytes()
+    value = json.loads(original)
+    value["checkpoints"][0]["assignment_id"] = "private-corruption-detail"
+    index.write_text(json.dumps(value))
+    facade = CourseAPI({COURSE: service}, b"s" * 32)
+    route = f"/v1/assignments/{ASSIGNMENT}/learning-checkpoints"
+    auth = {"Authorization": "Bearer " + token}
+    with running_server(facade) as server:
+        for method, target, data, headers in [
+            ("GET", route, None, auth),
+            ("GET", route + f"/{checkpoint['checkpoint_id']}/bundle", None, auth),
+            ("POST", route, payload, {**auth, "Content-Type": "application/gzip", "Idempotency-Key": "repair-test"}),
+        ]:
+            status, response_headers, body = request(server, method, target, body=data, headers=headers)
+            assert status == 503 and response_headers["retry-after"] == "10"
+            assert json.loads(body)["error"]["code"] == "checkpoint_storage_unavailable"
+            assert b"private-corruption-detail" not in body and token.encode() not in body
+        # Valid pre-change ledgers use this same unversioned shape.
+        index.write_bytes(original)
+        status, _, body = request(server, "GET", route, headers=auth)
+        assert status == 200 and json.loads(body)["latest"] == checkpoint
+    assert save(service, token, payload)["checkpoint"] == checkpoint
+
+
+def test_duplicate_ledger_json_keys_are_not_silently_accepted(checkpoints):
+    _state, _store, service, token, _notifications, payload = checkpoints
+    save(service, token, payload)
+    index = next(service._checkpoint_store().root.iterdir()) / "index.json"
+    content = index.read_text()
+    index.write_text(content.replace('"version":1', '"version":0,"version":1', 1))
+    with pytest.raises(PlatformAPIError) as error:
+        service.list_learning_checkpoints(token, ASSIGNMENT)
+    assert error.value.status == 503
+
+
+@pytest.mark.parametrize("interrupt_repack", [False, True])
+def test_retention_removes_packed_expired_code_and_retries_interrupted_reclamation(checkpoints, monkeypatch, interrupt_repack):
+    _state, bundles, service, token, _notifications, payload = checkpoints
+    monkeypatch.setattr(LearningCheckpointStore, "MAX_VERSIONS", 1)
+    first = save(service, token, payload)["checkpoint"]
+    store = service._checkpoint_store()
+    owner = next(store.root.iterdir())
+    repo = owner / "source.git"
+    store._git(repo, "repack", "-ad")
+    second_payload = changed_payload(bundles, 2)
+    service._now = lambda: NOW + timedelta(seconds=30)
+    original_git = store._git
+    repack_calls = []
+    def git(repository, *args, **kwargs):
+        if args[0] == "repack":
+            repack_calls.append(args)
+            if interrupt_repack and len(repack_calls) == 1:
+                raise BundleStorageError("synthetic interrupted packed reclamation")
+        return original_git(repository, *args, **kwargs)
+    monkeypatch.setattr(store, "_git", git)
+    if interrupt_repack:
+        with pytest.raises(PlatformAPIError) as error:
+            save(service, token, second_payload, "packed-second")
+        assert error.value.status == 503
+        assert (owner / ".git-reclaim-pending").exists()
+        assert first["checkpoint_id"] not in original_git(repo, "for-each-ref", "--format=%(refname)").decode()
+    second = save(service, token, second_payload, "packed-second")["checkpoint"]
+    assert second["version"] == 2
+    with pytest.raises(BundleStorageError):
+        original_git(repo, "cat-file", "-e", first["git_commit"])
+    assert not (owner / "archives" / (first["archive_sha256"] + ".tar.gz")).exists()
+    assert not (owner / ".git-reclaim-pending").exists()
+    assert service.get_learning_checkpoint_bundle(token, ASSIGNMENT, second["checkpoint_id"]).path.read_bytes() == second_payload
+    assert original_git(repo, "show", second["git_commit"] + ":main.cpp") == b"int main() { return 2; }\n"
+    assert service.list_learning_checkpoints(token, ASSIGNMENT)["checkpoints"] == [second]
+    count = len(repack_calls)
+    assert count == (2 if interrupt_repack else 1)
+    assert save(service, token, second_payload, "packed-second")["checkpoint"] == second
+    assert save(service, token, second_payload, "packed-same-content")["checkpoint"] == second
+    assert len(repack_calls) == count  # Ordinary periodic/replayed saves never repack.
+
+
+def test_unpacked_retention_does_not_create_packs_or_run_expensive_gc(checkpoints, monkeypatch):
+    _state, bundles, service, token, _notifications, payload = checkpoints
+    monkeypatch.setattr(LearningCheckpointStore, "MAX_VERSIONS", 1)
+    first = save(service, token, payload)["checkpoint"]
+    store = service._checkpoint_store()
+    owner = next(store.root.iterdir())
+    original_git = store._git
+    def git(repository, *args, **kwargs):
+        assert args[0] not in {"repack", "gc"}, "Loose-object retention must not create packs"
+        return original_git(repository, *args, **kwargs)
+    monkeypatch.setattr(store, "_git", git)
+    for version in (2, 3):
+        service._now = lambda version=version: NOW + timedelta(seconds=30 * version)
+        current = save(service, token, changed_payload(bundles, version), f"unpacked-{version}")["checkpoint"]
+        assert current["version"] == version
+    assert not list((owner / "source.git" / "objects" / "pack").glob("*.pack"))
+    assert not (owner / ".git-reclaim-pending").exists()
+    with pytest.raises(BundleStorageError):
+        original_git(owner / "source.git", "cat-file", "-e", first["git_commit"])

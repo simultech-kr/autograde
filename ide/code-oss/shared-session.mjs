@@ -16,6 +16,7 @@ export const sharedSettings = Object.freeze({
   'workbench.localHistory.enabled': false,
   'window.restoreWindows': 'none',
   'window.restoreFullscreen': false,
+  'window.confirmBeforeClose': 'always',
 });
 
 function present(target) {

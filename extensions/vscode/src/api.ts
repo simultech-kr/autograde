@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { studentWorkspaceKey } from "./studentWorkspaceKey";
 import {
   isInsecureHttpPilotUrl,
   normalizeAssignments,
@@ -732,6 +733,13 @@ export class AutogradeClient {
       }),
     }, undefined, { signal, expectedBaseUrl });
     return normalizeAssignmentClaim(payload);
+  }
+
+  /** Read the authenticated student identity; never infer a directory from a claim code or token. */
+  public async getAuthenticatedStudentKey(): Promise<string> {
+    const response = await this.authorizedRequest<unknown>("/v1/me", {method: "GET"});
+    if (!response || typeof response !== "object" || Array.isArray(response)) return studentWorkspaceKey(undefined);
+    return studentWorkspaceKey((response as Record<string, unknown>).student_key);
   }
 
   public async getAssignments(): Promise<Assignment[]> {

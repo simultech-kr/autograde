@@ -73,9 +73,20 @@ export function prepareWindowsSession(bundle, sessionRoot, launcherPid, { parent
   return { root: sessionRoot, workspace, materials, runtime, id, cleanupMode };
 }
 
-export function windowsLaunchSpec(bundle, layout, inherited = process.env) {
+function nativeCleanupMode(layout) {
   const cleanupMode = layout.cleanupMode === undefined ? 'on_exit' : layout.cleanupMode;
   if (!['next_start', 'on_exit'].includes(cleanupMode)) throw new Error('Invalid native cleanup mode');
+  return cleanupMode;
+}
+
+/** Caller must obtain layout from prepareWindowsSession's matching ownership proofs. */
+export function windowsSeatReporterOptions(bundle, layout) {
+  return { version: bundle.manifest.version, extensionVersion: bundle.manifest.extensionVersion,
+    platform: 'win32', architecture: 'x64', cleanupMode: nativeCleanupMode(layout) };
+}
+
+export function windowsLaunchSpec(bundle, layout, inherited = process.env) {
+  const cleanupMode = nativeCleanupMode(layout);
   const env = Object.fromEntries(Object.entries(inherited).filter(([key]) => !/^(NODE_|ELECTRON_|VSCODE_|AUTOGRADE_)/i.test(key)));
   Object.assign(env, { USERPROFILE: path.join(layout.root, 'home'), HOME: path.join(layout.root, 'home'),
     APPDATA: path.join(layout.root, 'appdata'), LOCALAPPDATA: path.join(layout.root, 'localappdata'),
@@ -96,8 +107,8 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   try {
     if (process.argv.length !== 4) throw new Error('Native supervisor arguments required');
     const bundle = loadWindowsPackage(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'));
-    seatReporter = createSeatReporter({ version: bundle.manifest.version, extensionVersion: bundle.manifest.extensionVersion });
     const layout = prepareWindowsSession(bundle, process.argv[2], Number(process.argv[3]));
+    seatReporter = createSeatReporter(windowsSeatReporterOptions(bundle, layout));
     const spec = windowsLaunchSpec(bundle, layout);
     const child = spawn(spec.executable, spec.args, spec.options);
     seatReporter.event({ event: 'ide-started' });

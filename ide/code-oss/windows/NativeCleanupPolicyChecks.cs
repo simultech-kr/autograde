@@ -17,8 +17,8 @@ namespace Autograde.NativeWindows
         { try { action(); return false; } catch (InvalidDataException) { return true; } }
         private static void Defaulted(NativeCleanupPolicy policy, string source)
         {
-            Assert(policy.Mode == NativeCleanupPolicy.NextStart && policy.Source == source, "Fallback did not choose the explicit next_start default.");
-            Assert(policy.StartupMessage.Contains("주의") && policy.StartupMessage.Contains("기본값") && policy.StartupMessage.Contains("다음 IDE 실행"), "Fallback warning was not explicit.");
+            Assert(policy.Mode == NativeCleanupPolicy.OnExit && policy.Source == source, "Fallback did not choose the explicit on_exit default.");
+            Assert(policy.StartupMessage.Contains("주의") && policy.StartupMessage.Contains("기본값") && policy.StartupMessage.Contains("종료할 때 삭제") && policy.StartupMessage.Contains("다음 IDE 실행"), "Fallback warning did not explain exit cleanup and startup retry.");
         }
         private static int Main()
         {

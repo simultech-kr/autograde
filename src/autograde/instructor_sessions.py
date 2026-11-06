@@ -108,7 +108,7 @@ class InstructorBrowserAuth:
                    (_digest(token), principal.user_id, principal.revision, csrf, level, now, now+lifetime, now))
         return token
 
-    def _session(self, db, token, *, allow_enrollment=False):
+    def _session(self, db, token, *, allow_enrollment=False, touch=True):
         if not isinstance(token, str) or not TOKEN.fullmatch(token):
             raise self._denied()
         row = db.execute('SELECT * FROM instructor_browser_sessions WHERE digest=?', (_digest(token),)).fetchone()
@@ -120,14 +120,14 @@ class InstructorBrowserAuth:
             raise self._denied()
         if row['level'] != 'full' and not allow_enrollment:
             raise PlatformAPIError(403, 'instructor_mfa_enrollment_required', '관리자 2단계 인증 등록을 완료하세요.')
-        if row['touched'] <= now-60:
+        if touch and row['touched'] <= now-60:
             db.execute('UPDATE instructor_browser_sessions SET touched=? WHERE digest=?', (now, row['digest']))
         return {'principal': self.identities._principal(db, account), 'csrf': row['csrf'], 'level': row['level'], 'sid': row['digest']}
 
-    def session(self, token, *, allow_enrollment=False):
+    def session(self, token, *, allow_enrollment=False, touch=True):
         try:
             with self.identities._connect() as db:
-                return self._session(db, token, allow_enrollment=allow_enrollment)
+                return self._session(db, token, allow_enrollment=allow_enrollment, touch=touch)
         except (sqlite3.Error, OSError, ValueError):
             raise PlatformAPIError(503, 'instructor_identity_unavailable', '교수자 인증 저장소를 확인하세요.') from None
 

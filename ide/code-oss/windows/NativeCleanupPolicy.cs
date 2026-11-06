@@ -22,13 +22,13 @@ namespace Autograde.NativeWindows
         public readonly string Mode, Source;
         private NativeCleanupPolicy(string mode, string source) { Mode = mode; Source = source; }
         public static bool ValidMode(object value) { return Object.Equals(value, NextStart) || Object.Equals(value, OnExit); }
-        public static NativeCleanupPolicy Default(string source) { return new NativeCleanupPolicy(NextStart, source); }
+        public static NativeCleanupPolicy Default(string source) { return new NativeCleanupPolicy(OnExit, source); }
         public string StartupMessage {
             get {
                 if (Source == "server") return Mode == OnExit
                     ? "서버 담당자 정책 확인: 종료할 때 실습 코드·자료를 삭제합니다."
                     : "서버 담당자 정책 확인: 다음 IDE 실행 전에 실습 코드·자료를 삭제합니다.";
-                return "주의: 서버 정리 정책을 확인하지 못해 기본값을 적용합니다.\n실습 코드·자료는 다음 IDE 실행 전에 삭제합니다.";
+                return "주의: 서버 정리 정책을 확인하지 못해 기본값을 적용합니다.\n실습 코드·자료는 종료할 때 삭제합니다. 정리하지 못한 자료는 다음 IDE 실행 전에 다시 정리합니다.";
             }
         }
         public string RemovalMessage {
@@ -54,7 +54,7 @@ namespace Autograde.NativeWindows
             return (string)mode;
         }
         // Resolve once at launch; an operator change cannot alter a running session.
-        // A missing, unreadable, offline or invalid response explicitly uses next_start.
+        // A missing, unreadable, offline or invalid response explicitly uses on_exit.
         public static NativeCleanupPolicy Resolve(Func<NativeSeatConfig> readConfig, Func<NativeSeatConfig, IDictionary<string, object>> fetch)
         {
             NativeSeatConfig config;

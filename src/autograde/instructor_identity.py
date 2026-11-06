@@ -283,11 +283,11 @@ class InstructorIdentityStore:
             self._verified.pop(fingerprint, None)
         return None
 
-    def authenticate(self, authorization):
+    def authenticate(self, authorization, *, touch_session=True):
         if self.browser_auth:
             if not isinstance(authorization, str) or not authorization.startswith('InstructorSession '):
                 raise PlatformAPIError(401, 'instructor_login_required', '교수자 웹에 다시 로그인하세요.')
-            return self.prepare_browser_auth().session(authorization[18:])['principal']
+            return self.prepare_browser_auth().session(authorization[18:], touch=touch_session)['principal']
         return self._authenticate_basic(authorization)
 
     def _authenticate_basic(self, authorization):

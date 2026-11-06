@@ -199,7 +199,7 @@ namespace Autograde.NativeWindows
             catch { lease.Dispose(); throw; }
         }
         public static string JobName(string id) { return @"Local\AutogradeNative-" + NativePaths.Sid + "-" + id; }
-        public string CreateSession(string cleanupMode = NativeCleanupPolicy.NextStart)
+        public string CreateSession(string cleanupMode = NativeCleanupPolicy.OnExit)
         {
             if (!NativeCleanupPolicy.ValidMode(cleanupMode)) throw new InvalidDataException("Invalid session cleanup policy.");
             string id = Guid.NewGuid().ToString("N").Substring(0, 24), root = Current;

@@ -72,7 +72,7 @@ async function fixture(cleanupMode?: "on_exit" | "next_start") {
   const bundle = await createSubmissionBundle(submitted);
   const assignment = {id: "assignment-1", title: "실습", deliveryMode: "bundle"};
   const version = {id: "bsub_previous", assignmentId: assignment.id, state: "published", receivedAt: "2026-10-01T00:00:00Z", sourceDigest: bundle.sha256, sourceSize: bundle.archive.length};
-  const state = {base: "https://test.invalid", generation: 1, loggedIn: true, authFailure: false, workspace: currentCode as string | undefined, reads: 0, histories: 0, verifies: 0, unsupported: false, afterRead: () => {}};
+  const state = {base: "https://test.invalid", generation: 1, loggedIn: true, authFailure: false, workspace: currentCode as string | undefined, reads: 0, histories: 0, verifies: 0, unsupported: false, afterRead: () => {}, cacheValid: true, workspaceValid: true, cacheChecks: 0, workspaceChecks: 0};
   const client = {
     getBaseUrl: () => state.base, tokens: {getSessionGeneration: () => state.generation, hasSession: async () => {if (state.authFailure) throw new Error("offline"); return state.loggedIn;}},
     getSubmissionHistory: async () => {state.histories++; return {submissions: [version], hasMore: false};},
@@ -81,7 +81,10 @@ async function fixture(cleanupMode?: "on_exit" | "next_start") {
     getStudentMaterialFile: async () => {state.reads++; state.afterRead(); return pdf;},
   } as unknown as AutogradeClient;
   const view = new LearningExportView(client, {currentWorkspace: () => state.workspace ? {rootPath: state.workspace, title: "실습 코드"} : undefined,
-    assignments: () => [assignment], cacheRoot: () => cache, excludedDestinations: () => [session], cleanupMode});
+    assignments: () => [assignment], cacheRoot: () => cache,
+    validateCacheRoot: async () => {state.cacheChecks++; if (!state.cacheValid) throw new Error("student cache changed");},
+    validateWorkspace: async () => {state.workspaceChecks++; if (!state.workspaceValid) throw new Error("student workspace changed");},
+    excludedDestinations: () => [session], cleanupMode});
   Object.assign((view as unknown as {content: object}).content, {
     context: async () => context,
     catalog: async () => ({...context, collections: state.unsupported ? [] : [manifest]}),
@@ -287,5 +290,43 @@ test("editing current code while remote items download cancels the combined expo
     selectedCategories = ["current", "personal"];
     f.state.afterRead = () => {documents.push({isDirty: true, uri: {scheme: "file", fsPath: path.join(f.currentCode, "main.cpp")}, save: async () => true});};
     await f.view.show(); assert.deepEqual(await readdir(f.output), []); assert.match(messages.join(" "), /미저장 변경이 남아/);
+  } finally {await f.close();}
+});
+
+
+for (const category of ["submissions", "content"]) {
+  test(`export checks the bound student cache before staging ${category}`, async () => {
+    const f = await fixture();
+    try {
+      selectedCategories = [category]; f.state.cacheValid = false;
+      await f.view.show();
+      assert.equal(f.state.reads, 0); assert.ok(f.state.cacheChecks > 0);
+      assert.deepEqual(await readdir(f.output), []);
+      assert.match(messages.join(" "), /student cache changed/);
+    } finally {await f.close();}
+  });
+}
+
+test("export rechecks the student cache after a submission download before extracting it", async () => {
+  const f = await fixture();
+  try {
+    selectedCategories = ["submissions"]; f.state.afterRead = () => {f.state.cacheValid = false;};
+    await f.view.show();
+    assert.equal(f.state.reads, 1); assert.ok(f.state.cacheChecks >= 3);
+    assert.deepEqual(await readdir(f.output), []);
+    assert.match(messages.join(" "), /student cache changed/);
+    const stage = (await readdir(f.cache)).find(name => name.startsWith("export-stage-"))!;
+    assert.deepEqual(await readdir(path.join(f.cache, stage)), []);
+  } finally {await f.close();}
+});
+
+test("export refuses a changed student workspace before saving dirty documents or collecting code", async () => {
+  const f = await fixture(); let saves = 0;
+  try {
+    f.state.workspaceValid = false;
+    documents = [{isDirty: true, uri: {scheme: "file", fsPath: path.join(f.currentCode, "main.cpp")}, save: async () => {saves++; return true;}}];
+    await f.view.show();
+    assert.equal(saves, 0); assert.deepEqual(await readdir(f.output), []);
+    assert.match(messages.join(" "), /student workspace changed/);
   } finally {await f.close();}
 });

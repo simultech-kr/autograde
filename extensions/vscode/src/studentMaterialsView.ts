@@ -5,12 +5,15 @@ import { ApiError, AutogradeClient, RequestCancelledError } from "./api";
 import { shouldDiscardTokensAfterRefreshError } from "./authPolicy";
 import { materialDirectory, materialErrorMessage, saveStudentMaterial, type StudentMaterial } from "./studentMaterials";
 import { confirmExportPrivacy } from "./exportPrivacy";
+import { sharedSessionCleanupNotice, type SharedSessionCleanupMode } from "./sharedLearningSession";
 
 export interface StudentMaterialsViewOptions {
+  readonly cleanupMode?: SharedSessionCleanupMode;
   /** Optional per-student material directory; it is a suggestion, never selected or opened automatically. */
   readonly defaultDirectory?: () => Promise<vscode.Uri | undefined>;
   /** In a shared lab session ordinary receipt stays in this disposable directory. */
   readonly managedDirectory?: () => string | undefined;
+  readonly validateManagedDirectory?: () => Promise<void>;
   /** All known assignment roots, in addition to the IDE's currently open folders. */
   readonly assignmentDirectories?: () => readonly string[];
   readonly onDidSave?: (material: StudentMaterial, filename: string) => void;
@@ -78,7 +81,7 @@ export class StudentMaterialsView implements vscode.Disposable {
             (material.instructions ? ` · ${plain(material.instructions).slice(0, 300)}` : ""), material,
         })), {title: `${catalog.courseKey} · 내 배포 자료`,
           placeHolder: isManaged
-            ? "자료를 임시로 받습니다. 실습 종료 시 삭제되며 보존하려면 ‘내 학습내용 내보내기’를 사용하세요."
+            ? `자료를 임시로 받습니다. ${sharedSessionCleanupNotice(this.options.cleanupMode)} 보존하려면 ‘내 학습내용 내보내기’를 사용하세요.`
             : "다운로드할 자료를 선택하세요. PDF·ZIP은 저장만 하며 자동으로 열거나 압축 해제하지 않습니다.", matchOnDescription: true}, cancellation.token);
         cancellation.dispose();
         if (this.pickerCancellation === cancellation) this.pickerCancellation = undefined;
@@ -99,6 +102,7 @@ export class StudentMaterialsView implements vscode.Disposable {
       }
       const checkManagedDirectory = async (): Promise<string> => {
         assertCurrent();
+        await this.options.validateManagedDirectory?.(); assertCurrent();
         if (!managed || !path.isAbsolute(managed)) throw new Error("공용 실습 자료 폴더를 확인할 수 없습니다. 실습을 끝내고 다시 시작하세요.");
         const info = await lstat(managed), canonical = await realpath(managed); assertCurrent();
         if (!info.isDirectory() || info.isSymbolicLink() || canonical !== path.resolve(managed)) {
@@ -148,7 +152,7 @@ export class StudentMaterialsView implements vscode.Disposable {
       const savedInfo = await lstat(saved); assertCurrent();
       const offerLocation = async (): Promise<void> => {
         const action = await vscode.window.showInformationMessage(`자료를 저장했습니다: ${saved}\n과제 코드와 별도로 저장했습니다. ZIP은 자동 압축 해제하지 않았습니다.` +
-          (isManaged ? "\n공용 실습 공간에 임시로 받았습니다. 실습 종료 시 삭제됩니다. 가져갈 자료는 ‘내 학습내용 내보내기’로 저장하세요." : ""), "저장 위치 보기");
+          (isManaged ? `\n공용 실습 공간에 임시로 받았습니다. ${sharedSessionCleanupNotice(this.options.cleanupMode)} 가져갈 자료는 ‘내 학습내용 내보내기’로 저장하세요.` : ""), "저장 위치 보기");
         if (action !== "저장 위치 보기") return;
         assertCurrent();
         if (!vscode.workspace.isTrusted) throw new RequestCancelledError();

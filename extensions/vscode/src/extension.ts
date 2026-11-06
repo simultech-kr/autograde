@@ -193,8 +193,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const examMode = new ExamModeView(examScope);
   const environment = learningEnvironment(vscode.env.appName, process.env);
   const studentMaterials = new StudentMaterialsView(client, {
+    cleanupMode: sharedSession?.cleanupMode,
     defaultDirectory: async () => environment.materialsDirectory ? vscode.Uri.file(environment.materialsDirectory) : undefined,
     managedDirectory: () => sharedSession?.materials,
+    validateManagedDirectory: () => sharedSession?.assertMaterialsDirectory() ?? Promise.resolve(),
     assignmentDirectories: () => [
       ...Array.from(assignmentWorkspaces.attached.values()).filter(uri => uri.scheme === "file").map(uri => uri.fsPath),
       ...(assignmentWorkspaces.selected ? [assignmentWorkspaces.selected.rootPath] : []),
@@ -205,7 +207,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     },
   });
   const contentSync = new ContentSyncView(client, {
-    cacheRoot: () => environment.materialsDirectory ?? path.join(context.globalStorageUri.fsPath, "learning-materials"),
+    cleanupMode: sharedSession?.cleanupMode,
+    cacheRoot: () => sharedSession?.materials ?? environment.materialsDirectory ?? path.join(context.globalStorageUri.fsPath, "learning-materials"),
+    validateCacheRoot: () => sharedSession?.assertMaterialsDirectory() ?? Promise.resolve(),
     defaultDirectory: () => environment.materialsDirectory ? vscode.Uri.file(environment.materialsDirectory) : undefined,
     excludedExportDirectories: () => sharedSession ? [sharedSession.root] : [],
     assignmentDirectories: () => [
@@ -219,6 +223,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   });
   const learningExport = new LearningExportView(client, {
     cleanupMode: sharedSession?.cleanupMode,
+    validateWorkspace: root => sharedSession?.assertExportWorkspacePath(root) ?? Promise.resolve(),
+    validateCacheRoot: () => sharedSession?.assertMaterialsDirectory() ?? Promise.resolve(),
     currentWorkspace: () => {
       const selected = assignmentWorkspaces.selected;
       if (selected) return {rootPath: selected.rootPath, assignmentId: selected.assignment.id, title: selected.assignment.title};
@@ -390,7 +396,26 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     return assignments;
   };
 
-  const auth = new AuthenticationController(client, extensionVersion, (authenticated) => {
+  const bindSharedStudent = async (): Promise<void> => {
+    if (!sharedSession) return;
+    const origin = transport.getBaseUrl(), generation = tokens.getSessionGeneration();
+    const assertCurrent = () => {
+      if (origin !== transport.getBaseUrl() || generation !== tokens.getSessionGeneration()) {
+        throw new Error("학생 인증 또는 서버가 변경되어 학번별 실습폴더 준비를 중단했습니다. 새 실습을 시작하세요.");
+      }
+    };
+    try {
+      const studentKey = await client.getAuthenticatedStudentKey(); assertCurrent();
+      await sharedSession.markAuthenticated(studentKey, assertCurrent); assertCurrent();
+    } catch (error) {
+      // Preserve newer credentials if an unrelated authentication already replaced this request.
+      if (origin === transport.getBaseUrl() && generation === tokens.getSessionGeneration()) await tokens.clear();
+      await updateAuthenticationUI(false); throw error;
+    }
+  };
+
+  const auth = new AuthenticationController(client, extensionVersion, async (authenticated) => {
+    if (authenticated) await bindSharedStudent();
     learningExport.clear();
     clearWorkspaceSelection(true);
     studentMaterials.clear();
@@ -409,10 +434,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   });
   const assignmentClaims = new AssignmentClaimController(client, extensionVersion, async (assignmentId) => {
     learningExport.clear();
-    if (sharedSession) {
-      try { await sharedSession.markAuthenticated(); }
-      catch (error) { await tokens.clear(); await updateAuthenticationUI(false); throw error; }
-    }
+    await bindSharedStudent();
     studentMaterials.clear();
     contentSync.clear();
     const origin = transport.getBaseUrl();
@@ -676,7 +698,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     ensureSupportedWorkspacePlatform("수령 코드 입력 및 다운로드");
     if (sharedSession) {
       await sharedSession.assertWorkspacePath(sharedSession.workspace);
-      if (!(vscode.workspace.workspaceFolders ?? []).some(folder => path.resolve(folder.uri.fsPath) === sharedSession.workspace)) {
+      if (!(vscode.workspace.workspaceFolders ?? []).some(folder => path.resolve(folder.uri.fsPath) === sharedSession.initialWorkspace)) {
         throw new Error("공용 실습의 기본 작업 폴더가 닫혔습니다. IDE를 종료하고 실행기로 새 실습 세션을 시작하세요.");
       }
     } else if (!await prepareClaimWorkspace(context.globalState)) throw new OperationCancelledError();
@@ -826,10 +848,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       sharedSession?.assertCanAuthenticate();
       studentMaterials.clear(); contentSync.clear(); examMode.clear();
       await auth.signIn();
-      if (sharedSession && await tokens.hasSession()) {
-        try { await sharedSession.markAuthenticated(); learningHome.refresh(); }
-        catch (error) { await tokens.clear(); await updateAuthenticationUI(false); throw error; }
-      }
+      learningHome.refresh();
     })),
     vscode.commands.registerCommand("autograde.signOut", () => sharedSession ? runCommand(endSharedSession)
       : runCommand(() => { studentMaterials.clear(); contentSync.clear(); examMode.clear(); return auth.signOut(); })),
@@ -1391,6 +1410,7 @@ async function cloneAssignment(
     throw new Error("과제를 다운로드하거나 clone하려면 현재 workspace를 신뢰해야 합니다.");
   }
   ensureSupportedWorkspacePlatform("과제 다운로드");
+  workspaces?.sharedSession?.assertStudentBound();
   const origin = client.transport.getBaseUrl();
   const generation = client.tokens.getSessionGeneration?.();
   const current = () => origin === client.transport.getBaseUrl() && generation === client.tokens.getSessionGeneration?.();

@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { windowsManifest } from './package-windows.mjs';
-import { loadWindowsPackage, packagePath, prepareWindowsSession, windowsLaunchSpec } from './windows-native-bootstrap.mjs';
+import { loadWindowsPackage, packagePath, prepareWindowsSession, windowsLaunchSpec, windowsSeatReporterOptions } from './windows-native-bootstrap.mjs';
 
 function fixture(t) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'autograde-native-bootstrap-')));
@@ -35,6 +35,8 @@ test('session marker uses real inode/device, parent supervisor and policy-compat
   assert.equal(marker.rootDev, stat.dev); assert.equal(marker.rootIno, stat.ino); assert.equal(marker.policy, 'standard');
   assert.equal(marker.sessionId, 'a'.repeat(24)); assert.equal(path.basename(layout.root), 'current');
   assert.equal(marker.cleanupMode, 'on_exit'); assert.equal(layout.cleanupMode, 'on_exit');
+  assert.deepEqual(windowsSeatReporterOptions(bundle, layout), {version: bundle.manifest.version,
+    extensionVersion: bundle.manifest.extensionVersion, platform: 'win32', architecture: 'x64', cleanupMode: 'on_exit'});
   assert.equal(layout.workspace, path.join(session, 'workspace'));
   assert.equal(layout.runtime, path.join(session, 'r'));
   const tasks = JSON.parse(fs.readFileSync(path.join(layout.runtime, 'user-data/User/tasks.json'), 'utf8')).tasks;
@@ -45,7 +47,7 @@ test('session marker uses real inode/device, parent supervisor and policy-compat
   assert.equal(JSON.parse(fs.readFileSync(path.join(layout.runtime, 'user-data/User/settings.json'), 'utf8'))['window.confirmBeforeClose'], 'always');
 });
 
-test('the supervisor cleanup snapshot reaches both the session marker and IDE environment', t => {
+test('the supervisor cleanup snapshot reaches the session marker, IDE environment and machine reporter', t => {
   const { bundle, session, pid, write, owner } = fixture(t);
   const updated = {...owner, cleanupMode: 'next_start'};
   write('sessions/current/.native-owner.json', updated);
@@ -55,6 +57,12 @@ test('the supervisor cleanup snapshot reaches both the session marker and IDE en
   const spec = windowsLaunchSpec(bundle, layout, {AUTOGRADE_SESSION_CLEANUP_MODE: 'on_exit'});
   assert.equal(marker.cleanupMode, 'next_start');
   assert.equal(spec.options.env.AUTOGRADE_SESSION_CLEANUP_MODE, 'next_start');
+  const reporting = windowsSeatReporterOptions(bundle, layout);
+  assert.equal(reporting.cleanupMode, 'next_start');
+  assert.equal(reporting.cleanupMode, spec.options.env.AUTOGRADE_SESSION_CLEANUP_MODE);
+  assert.equal('cleanup' in reporting, false);
+  assert.equal('id' in reporting, false);
+  assert.equal('root' in reporting, false);
 });
 
 test('unknown or mismatched cleanup snapshots fail before creating student runtime files', t => {
@@ -66,6 +74,7 @@ test('unknown or mismatched cleanup snapshots fail before creating student runti
     assert.equal(fs.existsSync(path.join(session, 'workspace')), false);
   }
   assert.throws(() => windowsLaunchSpec(bundle, {cleanupMode: 'forever'}), /cleanup mode/);
+  assert.throws(() => windowsSeatReporterOptions(bundle, {cleanupMode: 'forever'}), /cleanup mode/);
 });
 
 test('new native launches use the fixed current path and must match parent ownership proof', t => {

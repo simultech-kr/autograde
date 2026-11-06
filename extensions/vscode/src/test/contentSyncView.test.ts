@@ -175,7 +175,7 @@ test("shared content sync stays temporary while explicit export must be outside 
   const view = new ContentSyncView(f.client, {cacheRoot: () => cache, excludedExportDirectories: () => [session]});
   try {
     assert.equal(await view.show(), "synced"); assert.equal(f.state.reads, 1);
-    assert.match(messages.join(" "), /임시로 받은 자료는 실습 종료 시 삭제/);
+    assert.match(messages.join(" "), /IDE를 완전히 종료하면/);
     action = "export"; directory = cache; messages.length = 0;
     assert.equal(await view.show(), "failed");
     assert.match(messages.join(" "), /학습 공간 밖에 저장/);
@@ -258,4 +258,26 @@ test("targeted course download preserves trust, cancellation and catalog-session
       }
     } finally {await f.close();}
   }
+});
+
+
+test("content sync refuses a changed bound student cache before downloading file contents", async () => {
+  const f = await fixture(), cache = path.join(f.root, "materials", "20211001");
+  const view = new ContentSyncView(f.client, {cacheRoot: () => cache,
+    validateCacheRoot: async () => {throw new Error("student cache changed");}, excludedExportDirectories: () => [f.root]});
+  try {
+    assert.equal(await view.show(), "failed"); assert.equal(f.state.reads, 0);
+    assert.match(messages.join(" "), /student cache changed/);
+    assert.deepEqual(await readdir(f.root), []);
+  } finally {view.dispose(); await f.close();}
+});
+
+test("deferred cleanup policy is shown honestly in content sync notices", async () => {
+  const f = await fixture(), cache = path.join(f.root, "materials", "20211001");
+  const view = new ContentSyncView(f.client, {cacheRoot: () => cache, cleanupMode: "next_start", excludedExportDirectories: () => [f.root]});
+  try {
+    assert.equal(await view.show(), "synced");
+    assert.match(messages.join(" "), /코드·자료는 다음 IDE 실행 시 정리/);
+    assert.doesNotMatch(messages.join(" "), /실습 종료 시 삭제|IDE를 완전히 종료하면/);
+  } finally {view.dispose(); await f.close();}
 });

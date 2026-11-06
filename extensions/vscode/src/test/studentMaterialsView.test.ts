@@ -211,7 +211,7 @@ test("shared ordinary material receipt uses only the managed temporary folder an
     assert.equal(privacyNotices, 0);
     assert.equal(path.dirname(saved), managed); assert.deepEqual(await readFile(saved), pdf);
     assert.deepEqual(await readdir(outside), []);
-    assert.match(messages.join(" "), /실습 종료 시 삭제/); assert.match(messages.join(" "), /내 학습내용 내보내기/);
+    assert.match(messages.join(" "), /IDE를 완전히 종료하면/); assert.match(messages.join(" "), /내 학습내용 내보내기/);
     messages.length = 0; await view.show();
     assert.match(messages.join(" "), /이미 임시로 받았습니다/);
     assert.doesNotMatch(messages.join(" "), /다른 폴더를 선택/);
@@ -313,4 +313,28 @@ test("save location is optional, nonblocking and scoped; reveal errors do not tu
       assert.equal(state.reads, 1); view.dispose();
     }
   } finally {await rm(root, {recursive: true, force: true});}
+});
+
+
+test("material receipt validates the bound student directory before fetching a file", async () => {
+  const root = await realpath(await mkdtemp(path.join(tmpdir(), "autograde-shared-material-identity-")));
+  const {state, client} = fixture();
+  const view = new StudentMaterialsView(client, {managedDirectory: () => root,
+    validateManagedDirectory: async () => {throw new Error("student directory changed");}});
+  try {
+    assert.equal(await view.show(), "failed"); assert.equal(state.reads, 0);
+    assert.deepEqual(await readdir(root), []);
+  } finally {view.dispose(); await rm(root, {recursive: true, force: true});}
+});
+
+test("deferred cleanup policy is shown honestly after receiving student materials", async () => {
+  const root = await realpath(await mkdtemp(path.join(tmpdir(), "autograde-shared-material-policy-")));
+  const {client} = fixture();
+  const view = new StudentMaterialsView(client, {managedDirectory: () => root, cleanupMode: "next_start"});
+  try {
+    assert.equal(await view.show(), "saved");
+    await new Promise(resolve => setImmediate(resolve));
+    assert.match(messages.join(" "), /코드·자료는 다음 IDE 실행 시 정리/);
+    assert.doesNotMatch(messages.join(" "), /실습 종료 시 삭제|IDE를 완전히 종료하면/);
+  } finally {view.dispose(); await rm(root, {recursive: true, force: true});}
 });

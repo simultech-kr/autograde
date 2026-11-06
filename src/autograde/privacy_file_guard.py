@@ -16,6 +16,10 @@ from .platform_state import PlatformConflict
 _local = threading.local()
 
 
+class PrivacyFileBusy(PlatformConflict):
+    """A valid privacy lease is temporarily held by another operation."""
+
+
 @contextmanager
 def privacy_file_guard(root, *, exclusive=False):
     root = Path(root).absolute()
@@ -39,7 +43,7 @@ def privacy_file_guard(root, *, exclusive=False):
         try:
             fcntl.flock(descriptor, (fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH) | fcntl.LOCK_NB)
         except BlockingIOError as exc:
-            raise PlatformConflict('파일 저장·다운로드 또는 수업 개인정보 정리가 진행 중입니다. 잠시 후 다시 시도하세요.') from exc
+            raise PrivacyFileBusy('파일 저장·다운로드 또는 수업 개인정보 정리가 진행 중입니다. 잠시 후 다시 시도하세요.') from exc
         leases[key] = exclusive
         try:
             yield
