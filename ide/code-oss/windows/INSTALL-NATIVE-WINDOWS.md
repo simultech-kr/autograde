@@ -1,8 +1,41 @@
 # Windows 네이티브 Autograde IDE 후보
 
-이 패키지는 WSL 없이 Windows x64에서 실행한다. 전체 폴더를 로컬 디스크에 풀고
+이 패키지의 기본 IDE는 WSL 없이 Windows x64에서 실행한다. 전체 폴더를 로컬 디스크에 풀고
 `Autograde IDE.exe`를 실행한다. 기관 담당자는 이 EXE의 바탕 화면 바로가기를 만든다.
 학생은 Node 설치나 시작 명령 입력 없이 아이콘으로 연다. 파일 일부만 옮기지 않는다.
+
+## 함께 제공하는 WSL 실행기
+
+일반 빌드와 빠른 빌드 모두 `wsl` 폴더에 WSL용 실행기와 설치 파일을 함께 제공한다.
+Windows 실습은 패키지 최상위 `Autograde IDE.exe`, Linux 실습은 담당자가 설정한
+**Autograde IDE (WSL2)** 바로가기를 사용한다. `windows-package.json`의 `requires.wsl: false`는
+기본 Windows IDE의 실행 조건이며, 별도 `wsl` 항목이 Linux 실습 실행 경로를 설명한다.
+
+WSL 실행기만으로 Linux 실습 환경이 완성되지는 않는다. 담당자는 WSL2·WSLg와 일반 사용자
+계정을 먼저 준비하고, **같은 확장 버전으로 Linux에서 빌드한 WSL용 `.tar.gz` 실행 패키지**를
+해당 사용자의 Linux 파일 시스템에 별도로 설치한다. Windows의 `node.exe`와 Electron을 Linux에서
+재사용하지 않는다. 이 패키지는 WSL이나 Linux 배포판을 자동 설치하지 않는다.
+
+WSL 실행 패키지 설치를 마친 뒤 Windows PowerShell에서, 압축 해제한 Windows 패키지의
+최상위 폴더를 기준으로 다음 명령을 실행한다. 배포판·Linux 사용자·설치 경로는 실제 값으로 바꾼다.
+
+```powershell
+.\wsl\Install-Shortcut.ps1 `
+  -Distribution Ubuntu-24.04 `
+  -User student `
+  -LinuxInstallRoot /opt/autograde-ide
+```
+
+설치기는 포함된 소스로 Windows 실행기를 빌드하고 자체 검사를 실행한다. 선택한 WSL 사용자와
+런타임·GUI·sandbox 확인이 통과해야 바로가기를 만든다. 학생은 이후 바로가기만 클릭한다.
+설치 시 버전은 패키지의 `wsl/launcher-version.json`을 사용한다. 근처에 다른 버전의 Git
+작업 폴더가 있어도 그 버전으로 바꾸지 않는다. 이 파일이 손상되면 설치를 중단하므로 같은
+버전의 패키지 전체를 다시 준비한다.
+`wsl/launcher.example.json`은 설정 예시이며 실제 `launcher.json`을 대신하지 않는다.
+WSL 실습의 코드·자료·인증 정리는 별도 Linux 실행 패키지가 담당하므로, Windows 실행기만
+갱신해도 Linux 쪽 확장이 갱신된 것으로 간주하지 않는다. WSL 패키지도 같은 버전으로 갱신한다.
+
+## Windows 기본 IDE 준비
 
 담당자가 미리 준비할 항목:
 

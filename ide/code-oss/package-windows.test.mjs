@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { peArchitecture, windowsRelative, windowsElectronPlan, validateWindowsNativeModules, windowsManifest, assembleWindowsPackage, packageWindows } from './package-windows.mjs';
+import { peArchitecture, windowsRelative, windowsElectronPlan, validateWindowsNativeModules, windowsManifest,
+  windowsWslSupport, windowsWslInstallerFiles, bundleWindowsWslLauncher, assembleWindowsPackage, packageWindows } from './package-windows.mjs';
 
 function fixture(t) { const root = fs.mkdtempSync(path.join(os.tmpdir(), 'autograde-win-package-')); t.after(() => fs.rmSync(root, { recursive: true, force: true })); return root; }
 function write(root, name, bytes) { const file = path.join(root, name); fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, bytes); return file; }
@@ -44,9 +45,91 @@ test('Windows assembly materializes aliases and bundles only explicit runtime in
   const alias = path.join(destination, 'editor/app/node_modules/alias');
   assert.equal(fs.lstatSync(alias).isSymbolicLink(), false); assert.equal(fs.readFileSync(path.join(alias, 'index.js'), 'utf8'), 'runtime');
   assert.equal(fs.existsSync(path.join(destination, 'editor/app/.env')), false);
-  assert.equal(JSON.parse(fs.readFileSync(path.join(destination, 'windows-package.json'), 'utf8')).requires.wsl, false);
+  const manifest = JSON.parse(fs.readFileSync(path.join(destination, 'windows-package.json'), 'utf8'));
+  assert.equal(manifest.requires.wsl, false);
+  assert.deepEqual(manifest.wsl, {launcher: 'wsl/Autograde IDE.exe', installer: 'wsl/Install-Shortcut.ps1',
+    runtime: 'separate-linux-payload', requires: ['WSL2', 'WSLg']});
   assert.throws(() => assembleWindowsPackage({ source, node, nodeLicense, editorPlan: plan, electronRoot: electron, electronFiles: [], destination, manifest: {} }), /new Windows package/);
 });
+
+function wslFixture(t) {
+  const root = fixture(t), destination = path.join(root, 'payload'), stage = path.join(root, 'stage'), launcherRoot = path.join(root, 'inputs');
+  fs.mkdirSync(destination); fs.mkdirSync(stage);
+  write(destination, 'Autograde IDE.exe', 'native launcher');
+  for (const name of windowsWslInstallerFiles) write(launcherRoot, `windows/${name}`, `installer input: ${name}`);
+  const calls = [];
+  const options = {destination, stage, launcherRoot, extensionVersion: metadata.extensionVersion, powershell: 'powershell.exe',
+    run(command, args, spawnOptions) {
+      calls.push({command, args, spawnOptions});
+      const output = args[args.indexOf('-OutputDirectory') + 1];
+      write(output, 'Autograde IDE.exe', 'managed WSL launcher');
+      write(output, 'Autograde Launcher Checks.exe', 'managed WSL checks');
+      write(output, 'launcher-version.json', JSON.stringify({schema: 1, extensionVersion: metadata.extensionVersion,
+        assemblyVersion: `${metadata.extensionVersion}.0`}));
+      write(output, 'AssemblyInfo.cs', 'build-only');
+      write(output, 'launcher.json', 'private operator settings');
+    }};
+  return {root, options, calls};
+}
+
+test('Windows packages always build and check a matching WSL launcher with only explicit installer inputs', t => {
+  const {options, calls} = wslFixture(t);
+  write(options.launcherRoot, 'windows/device.json', 'private token');
+  assert.deepEqual(bundleWindowsWslLauncher(options), windowsWslSupport());
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].command, 'powershell.exe');
+  assert.deepEqual(calls[0].args, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File',
+    path.join(options.launcherRoot, 'windows/Build-Launcher.ps1'), '-OutputDirectory', path.join(options.stage, 'wsl-launcher'),
+    '-ExtensionVersion', metadata.extensionVersion, '-RunChecks']);
+  assert.deepEqual(calls[0].spawnOptions, {stdio: 'inherit'});
+  assert.deepEqual(fs.readdirSync(path.join(options.destination, 'wsl')).sort(),
+    [...windowsWslInstallerFiles, 'Autograde IDE.exe', 'Autograde Launcher Checks.exe', 'launcher-version.json'].sort());
+  assert.equal(fs.readFileSync(path.join(options.destination, 'Autograde IDE.exe'), 'utf8'), 'native launcher');
+  assert.equal(fs.readFileSync(path.join(options.destination, 'wsl/Autograde IDE.exe'), 'utf8'), 'managed WSL launcher');
+  const version = JSON.parse(fs.readFileSync(path.join(options.destination, 'wsl/launcher-version.json'), 'utf8'));
+  assert.equal(version.assemblyVersion, `${metadata.extensionVersion}.0`);
+  assert.equal(fs.existsSync(path.join(options.destination, 'wsl/launcher.json')), false);
+});
+
+test('WSL compiler or lifecycle-check failure preserves staged output without publishing a launcher', t => {
+  const {options} = wslFixture(t);
+  options.run = (_command, args) => {
+    write(args[args.indexOf('-OutputDirectory') + 1], 'compile-error.log', 'failed');
+    throw new Error('WSL launcher checks failed');
+  };
+  assert.throws(() => bundleWindowsWslLauncher(options), /checks failed/);
+  assert.equal(fs.existsSync(path.join(options.destination, 'wsl')), false);
+  assert.equal(fs.readFileSync(path.join(options.stage, 'wsl-launcher/compile-error.log'), 'utf8'), 'failed');
+  assert.equal(fs.readFileSync(path.join(options.destination, 'Autograde IDE.exe'), 'utf8'), 'native launcher');
+});
+
+test('missing artifacts and mismatched WSL versions prevent packaging', async t => {
+  for (const failure of ['missing-checks', 'wrong-version']) await t.test(failure, t => {
+    const {options} = wslFixture(t), original = options.run;
+    options.run = (...args) => {
+      original(...args);
+      const compiled = path.join(options.stage, 'wsl-launcher');
+      if (failure === 'missing-checks') fs.unlinkSync(path.join(compiled, 'Autograde Launcher Checks.exe'));
+      else write(compiled, 'launcher-version.json', JSON.stringify({schema: 1, extensionVersion: '0.0.1', assemblyVersion: '0.0.1.0'}));
+    };
+    assert.throws(() => bundleWindowsWslLauncher(options), failure === 'missing-checks' ? /ENOENT/ : /version/);
+    assert.equal(fs.existsSync(path.join(options.destination, 'wsl')), false);
+  });
+});
+
+test('WSL packaging never overwrites previous outputs or builds without complete installer sources', async t => {
+  for (const failure of ['destination-exists', 'build-exists', 'installer-missing']) await t.test(failure, t => {
+    const {options, calls} = wslFixture(t);
+    let previous;
+    if (failure === 'destination-exists') previous = write(options.destination, 'wsl/keep.txt', 'preserved');
+    else if (failure === 'build-exists') previous = write(options.stage, 'wsl-launcher/keep.txt', 'preserved');
+    else fs.unlinkSync(path.join(options.launcherRoot, 'windows/Install-Shortcut.ps1'));
+    assert.throws(() => bundleWindowsWslLauncher(options));
+    assert.equal(calls.length, 0);
+    if (previous) assert.equal(fs.readFileSync(previous, 'utf8'), 'preserved');
+  });
+});
+
 test('public Windows packaging refuses non-Windows build hosts', { skip: process.platform === 'win32' }, () => {
   assert.throws(() => packageWindows({}), /Windows x64/);
 });

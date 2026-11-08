@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       include_wsl:
-        description: Also build the optional Windows WSL2 payload and launcher
+        description: Also publish a standalone WSL launcher ZIP (WSL support is always built)
         type: boolean
         required: false
         default: false
@@ -120,11 +120,8 @@ jobs:
         shell: bash
         env:
           BUILD_TARGET: ${{ matrix.target }}
-          INCLUDE_WSL: ${{ inputs.include_wsl }}
         run: |
-          optional=()
-          if [ "$BUILD_TARGET" = linux-x64 ] && [ "$INCLUDE_WSL" = true ]; then optional+=(--include-wsl); fi
-          node scripts/ide/build-runtime.mjs --target "$BUILD_TARGET" --source "$RUNNER_TEMP/code-oss-$BUILD_TARGET" --output "$RUNNER_TEMP/ide-artifacts" "${optional[@]}"
+          node scripts/ide/build-runtime.mjs --target "$BUILD_TARGET" --source "$RUNNER_TEMP/code-oss-$BUILD_TARGET" --output "$RUNNER_TEMP/ide-artifacts"
       - name: Retain candidate build outputs (repository visibility applies)
         uses: actions/upload-artifact@v4
         with:
@@ -194,4 +191,4 @@ jobs:
           retention-days: 14
       - name: Record the release-candidate limitation
         run: |
-          echo 'Release candidate only. Native packages and build checks passed; institutional desktop teaching workflows and production signing remain pending. Windows native is the default; WSL2 is optional. Artifact access follows repository visibility.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Release candidate only. Native packages and build checks passed; institutional desktop teaching workflows and production signing remain pending. Windows native is the default; its package includes a WSL launcher and the Linux build provides the separate WSL payload. WSL2 and WSLg require installation on the classroom PC. Artifact access follows repository visibility.' >> "$GITHUB_STEP_SUMMARY"

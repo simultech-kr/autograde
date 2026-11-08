@@ -8,8 +8,8 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { prepareNodeCompatibility, verifyNodeCompatibility } from '../../ide/code-oss/node-compatibility.mjs';
 import { verify as verifyOverlay } from '../../ide/code-oss/manage.mjs';
-import { openBuildJournal } from './build-resume.mjs';
-import { inputFingerprint, snapshotPaths, snapshotMatches, dependencyPaths, assertReusableSource } from './build-inputs.mjs';
+import { openBuildJournal, buildStateFilename } from './build-resume.mjs';
+import { inputFingerprint, runtimeCoreFingerprint, snapshotPaths, snapshotMatches, dependencyPaths, assertReusableSource } from './build-inputs.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const read = file => JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -31,6 +31,9 @@ export function parseOptions(args) {
     result[key] = args[++i];
   }
   if (!['macos-arm64', 'linux-x64', 'windows-x64'].includes(result.target) || !result.source || !result.output) throw new Error('Specify a native target, a source directory and an output directory');
+  // Retain the old flag as accepted syntax; Linux always supplies the WSL
+  // runtime, while Windows packaging always supplies its launcher separately.
+  result.includeWsl = result.target === 'linux-x64';
   return result;
 }
 
@@ -86,6 +89,28 @@ const digest = value => createHash('sha256').update(JSON.stringify(value)).diges
 const exists = file => { try { return fs.lstatSync(file); } catch (error) { if (error.code === 'ENOENT') return undefined; throw error; } };
 const regular = file => { const info = fs.lstatSync(file); if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1) throw new Error(`A regular build file is required: ${file}`); return info; };
 
+export function runtimeWslPolicy({target, output, resume = false}) {
+  const includeWsl = target === 'linux-x64';
+  let checkpointIncludeWsl = includeWsl;
+  if (includeWsl && resume) {
+    const directory = exists(output);
+    if (directory && (!directory.isDirectory() || directory.isSymbolicLink())) throw new Error('Build output must be a regular directory');
+    const file = path.join(output, buildStateFilename);
+    if (exists(file)) {
+      regular(file);
+      const previous = read(file);
+      // This legacy identity field selected packaging, never compilation. Keep
+      // its historical boolean so adding WSL does not discard valid compiler
+      // checkpoints. openBuildJournal still verifies the complete identity,
+      // source/output paths and checkpoint structure while holding the locks.
+      if (previous.identity?.target === target && typeof previous.identity.includeWsl === 'boolean') {
+        checkpointIncludeWsl = previous.identity.includeWsl;
+      }
+    }
+  }
+  return {includeWsl, checkpointIncludeWsl};
+}
+
 export function validateArtifact(output, artifact) {
   try {
     if (!artifact || typeof artifact.file !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]+$/.test(artifact.file)) return false;
@@ -93,6 +118,16 @@ export function validateArtifact(output, artifact) {
     return regular(archive).size === artifact.bytes && sha256(archive) === artifact.sha256
       && regular(`${archive}.sha256`) && fs.readFileSync(`${archive}.sha256`, 'utf8').trim() === `${artifact.sha256}  ${artifact.file}`;
   } catch { return false; }
+}
+
+/** A newly completed full build replaces the evidence used by quick reuse. */
+export function preserveQuickRuntimeProof(output) {
+  const previous = path.join(output, '.autograde-quick-runtime.json');
+  if (!exists(previous)) return undefined;
+  regular(previous);
+  const destination = path.join(output, `.previous-quick-runtime-${randomUUID()}.json`);
+  fs.renameSync(previous, destination);
+  return destination;
 }
 
 /** Unique publication names preserve older packages and unowned output files. */
@@ -153,6 +188,7 @@ function sourceMapPaths(directory, relative = 'out') {
 }
 
 export function buildRuntime({ target, source, output, includeWsl = false, local = false, resume = false }) {
+  if (typeof includeWsl !== 'boolean') throw new Error('Legacy include-wsl option must be a boolean');
   const pin = read(path.join(root, 'ide/code-oss/upstream.json'));
   assertBuildHost(target, pin);
   const provenance = readBuildSource(root, { local });
@@ -174,8 +210,10 @@ export function buildRuntime({ target, source, output, includeWsl = false, local
     ide: inputFingerprint(root, ['ide/code-oss']),
     pipeline: inputFingerprint(root, ['scripts/ide']),
     compatibility: inputFingerprint(root, ['ide/code-oss/node-compatibility.mjs']),
+    runtimeCore: runtimeCoreFingerprint(root),
   };
-  const identity = {target, hostname: os.hostname(), platform: process.platform, architecture: process.arch, node: pin.node, upstream: pin, local, includeWsl: target === 'linux-x64' && includeWsl};
+  const wsl = runtimeWslPolicy({target, output, resume});
+  const identity = {target, hostname: os.hostname(), platform: process.platform, architecture: process.arch, node: pin.node, upstream: pin, local, includeWsl: wsl.checkpointIncludeWsl};
   const journal = openBuildJournal({source, output, identity, resume});
   source = journal.source; output = journal.output;
   try {
@@ -190,7 +228,7 @@ export function buildRuntime({ target, source, output, includeWsl = false, local
     const npmCli = [path.join(path.dirname(node), 'node_modules/npm/bin/npm-cli.js'), path.resolve(path.dirname(node), '../lib/node_modules/npm/bin/npm-cli.js')].find(file => fs.existsSync(file));
     if (!npmCli) throw new Error('Cannot find npm in the official Node distribution');
     const npm = (args, cwd) => run(node, [npmCli, '--ignore-scripts=false', ...args], cwd);
-    const report = {schema: 1, ...provenance, buildTarget: target, includeWsl: identity.includeWsl, upstream: pin,
+    const report = {schema: 1, ...provenance, buildTarget: target, includeWsl: wsl.includeWsl, upstream: pin,
       extensionVersion: read(path.join(root, 'extensions/vscode/package.json')).version,
       host: {platform: process.platform, architecture: process.arch, node: process.versions.node, heapMiB: heap},
       buildInputs: inputs, checks: [], artifacts: [], acceptance: {institution: 'not-tested', windowsWsl2: 'not-tested', productionReady: false}};
@@ -272,7 +310,8 @@ export function buildRuntime({ target, source, output, includeWsl = false, local
     const packageTarget = (kind, basename, suffix) => {
       const name = `package-${kind}`;
       const value = journal.step(name, {key: {basename, suffix, pipeline: inputs.pipeline, ide: inputs.ide}, deps: ['overlay-verification', 'launcher-and-policy-tests'],
-        validate: previous => validateArtifact(output, previous.artifact)}, () => {
+        validate: previous => validateArtifact(output, previous.artifact)
+          && (kind !== 'windows' || previous.checks?.includes('windows-wsl2-launcher-checks'))}, () => {
         // Keep failed package trees outside the artifact directory: candidate
         // finalization must not traverse partial apps or their runtime links.
         const attempt = fs.mkdtempSync(path.join(path.dirname(output), `.${path.basename(output)}.package-attempt-`)), directory = path.join(attempt, basename);
@@ -285,7 +324,7 @@ export function buildRuntime({ target, source, output, includeWsl = false, local
           run(electron, [path.join(app, 'out/cli.js'), app, '--version'], app, {env: {...env, ELECTRON_RUN_AS_NODE: '1'}});
           checks.push(`${kind}-packaged-cli-version`);
         }
-        if (kind === 'windows') checks.push('windows-native-job-acl-msvc-checks');
+        if (kind === 'windows') checks.push('windows-native-job-acl-msvc-checks', 'windows-wsl2-launcher-checks');
         const artifact = publishArchive(`${directory}${suffix}`, output,
           kind === 'macos' ? 'macos-native' : kind === 'wsl' ? 'windows-wsl2-payload' : kind === 'windows' ? 'windows-native' : 'linux-native');
         // This uniquely created attempt belongs to this invocation. Failed attempts
@@ -301,14 +340,18 @@ export function buildRuntime({ target, source, output, includeWsl = false, local
     else if (target === 'windows-x64') packageTarget('windows', `Autograde-IDE-${version}-windows-native-x64`, '.zip');
     else {
       packageTarget('linux', `Autograde-IDE-${version}-linux-x64`, '.tar.gz');
-      if (includeWsl) packageTarget('wsl', `Autograde-IDE-${version}-windows-wsl2-linux-x64`, '.tar.gz');
+      packageTarget('wsl', `Autograde-IDE-${version}-windows-wsl2-linux-x64`, '.tar.gz');
     }
     // Do not attach current provenance to outputs built while the source changed.
     for (const [key, pathspecs] of Object.entries({extension: ['extensions/vscode'], ide: ['ide/code-oss'], pipeline: ['scripts/ide']})) {
       if (inputFingerprint(root, pathspecs) !== inputs[key]) throw new Error('Autograde build inputs changed during the build; rerun with --resume');
     }
+    if (runtimeCoreFingerprint(root) !== inputs.runtimeCore) throw new Error('Editor core inputs changed during the build; rerun with --resume');
     if (JSON.stringify(readBuildSource(root, {local})) !== JSON.stringify(provenance)) throw new Error('Autograde revision changed during the build; rerun with --resume');
     assertReusableSource(source, pin); verifyOverlay(source);
+    // Preserve the prior proof only after every full-build check passed. Keeping
+    // it active would make quick reuse reject this new report/checkpoint forever.
+    preserveQuickRuntimeProof(output);
     const destination = path.join(output, `build-${target}.json`);
     // Preserve any prior report; only the newly completed build receives the
     // canonical final report name. Never leave partial JSON at that name.

@@ -17,7 +17,7 @@ $source = Join-Path $repo 'ide/code-oss/windows'
 $null = & (Join-Path $source 'Build-Launcher.ps1') -OutputDirectory $bundle -RunChecks -ExtensionVersion $version
 # Include installer inputs because the existing installer validates and builds
 # its own private installation directory before creating the desktop shortcut.
-foreach ($name in @('Build-Launcher.ps1', 'Install-Shortcut.ps1', 'LauncherCore.cs', 'LauncherChecks.cs', 'AutogradeWslLauncher.cs', 'launcher.example.json')) {
+foreach ($name in @('Build-Launcher.ps1', 'Install-Shortcut.ps1', 'LauncherCore.cs', 'LauncherChecks.cs', 'AutogradeWslLauncher.cs', 'launcher.example.json', 'Resolve-LauncherVersion.ps1', 'LauncherVersionChecks.ps1')) {
     Copy-Item -LiteralPath (Join-Path $source $name) -Destination $bundle
 }
 $archive = Join-Path $target ('Autograde-IDE-' + $version + '-windows-wsl2-launcher.zip')

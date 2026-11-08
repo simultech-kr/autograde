@@ -11,14 +11,9 @@ if (Test-Path -LiteralPath $target) { throw '기존 출력 폴더를 덮어쓰�
 $compiler = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
 if (-not (Test-Path -LiteralPath $compiler -PathType Leaf)) { $compiler = Join-Path $env:WINDIR 'Microsoft.NET\Framework\v4.0.30319\csc.exe' }
 if (-not (Test-Path -LiteralPath $compiler -PathType Leaf)) { throw 'Windows의 .NET Framework 컴파일러를 찾을 수 없습니다. 담당자가 .NET Framework 설치 상태를 확인해 주세요.' }
-if ([string]::IsNullOrEmpty($ExtensionVersion)) {
-    $package = Join-Path $PSScriptRoot '../../../extensions/vscode/package.json'
-    $versionFile = Join-Path $PSScriptRoot 'launcher-version.json'
-    if (Test-Path -LiteralPath $package -PathType Leaf) { $ExtensionVersion = (Get-Content -LiteralPath $package -Raw -Encoding UTF8 | ConvertFrom-Json).version }
-    elseif (Test-Path -LiteralPath $versionFile -PathType Leaf) { $ExtensionVersion = (Get-Content -LiteralPath $versionFile -Raw -Encoding UTF8 | ConvertFrom-Json).extensionVersion }
-    else { throw '실행기 버전 정보가 없습니다. ExtensionVersion을 지정해 주세요.' }
-}
-if ($ExtensionVersion -notmatch '^\d+\.\d+\.\d+$') { throw 'ExtensionVersion은 major.minor.patch 숫자 형식이어야 합니다.' }
+. (Join-Path $PSScriptRoot 'Resolve-LauncherVersion.ps1')
+$ExtensionVersion = Resolve-AutogradeLauncherVersion -LauncherRoot $PSScriptRoot -ExtensionVersion $ExtensionVersion
+if ($RunChecks) { & (Join-Path $PSScriptRoot 'LauncherVersionChecks.ps1') }
 $assemblyVersion = $ExtensionVersion + '.0'
 New-Item -ItemType Directory -Path $target | Out-Null
 $versionSource = Join-Path $target 'AssemblyInfo.cs'

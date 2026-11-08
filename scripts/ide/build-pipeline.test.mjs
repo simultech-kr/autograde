@@ -9,18 +9,18 @@ import { verifyReports, buildTargets } from './finalize-artifacts.mjs';
 const expected = { sourceRevision: 'a'.repeat(40), extensionVersion: '0.5.14',
   upstream: { repository: 'https://github.com/microsoft/vscode.git', tag: '1.143.0', commit: 'b'.repeat(40), node: '26.13.0', sourceNode: '24.18.0' } };
 
-function fixture(t, includeWsl = true) {
+function fixture(t, standaloneLauncher = true) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'autograde-build-inventory-'));
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   for (const [target, definition] of Object.entries(buildTargets)) {
-    if (target === 'windows-launcher' && !includeWsl) continue;
+    if (target === 'windows-launcher' && !standaloneLauncher) continue;
     const folder = path.join(directory, target); fs.mkdirSync(folder);
     const report = { schema: 1, status: 'release-candidate', sourceDirty: false, buildTarget: target, ...expected,
       host: { platform: definition.platform, architecture: definition.architecture, node: expected.upstream.node },
-      includeWsl: target === 'linux-x64' && includeWsl,
-      checks: [...definition.checks, ...(target === 'linux-x64' && includeWsl ? ['package-wsl', 'wsl-packaged-cli-version'] : [])].map(name => ({ name, result: 'passed' })),
+      includeWsl: target === 'linux-x64',
+      checks: [...definition.checks, ...(target === 'windows-x64' && !standaloneLauncher ? ['windows-wsl2-launcher-checks'] : [])].map(name => ({ name, result: 'passed' })),
       acceptance: { productionReady: false, institution: 'not-tested', windowsWsl2: 'not-tested' }, artifacts: [] };
-    for (const kind of [...definition.artifacts, ...(target === 'linux-x64' && includeWsl ? ['windows-wsl2-payload'] : [])]) {
+    for (const kind of definition.artifacts) {
       const name = `Autograde-IDE-0.5.14-${kind}.zip`, file = path.join(folder, name);
       fs.writeFileSync(file, `synthetic archive for ${kind}`);
       const digest = sha256(file);
@@ -79,23 +79,47 @@ test('uncommitted source cannot be attested as a candidate', t => {
   assert.throws(() => verifyReports(input, expected), /clean committed source/);
 });
 
-test('complete inventory contains all native platforms and optional paired WSL2', t => {
+test('complete inventory accepts all native platforms and a separately verified WSL2 launcher', t => {
   const builds = verifyReports(fixture(t), expected);
   assert.equal(builds.length, 4);
   assert.equal(builds.flatMap(build => build.report.artifacts).length, 5);
 });
-test('native Windows is required while WSL2 can be omitted entirely', t => {
+test('bundled Windows launcher replaces the standalone report while the WSL runtime remains mandatory', t => {
   const input = fixture(t, false), builds = verifyReports(input, expected);
   assert.equal(builds.length, 3);
-  assert.equal(builds.flatMap(build => build.report.artifacts).length, 3);
+  assert.equal(builds.flatMap(build => build.report.artifacts).length, 4);
+  assert.ok(builds.some(build => build.report.artifacts.some(artifact => artifact.target === 'windows-wsl2-payload')));
   fs.rmSync(path.join(input, 'windows-x64'), { recursive: true });
   assert.throws(() => verifyReports(input, expected), /three native platform/);
 });
 
-test('pairing rejects a missing Windows launcher', t => {
+test('pairing rejects a missing Windows launcher or an unsuccessful bundled launcher check', t => {
   const input = fixture(t);
   fs.rmSync(path.join(input, 'windows-launcher'), { recursive: true });
-  assert.throws(() => verifyReports(input, expected), /both the Linux payload and Windows launcher/);
+  assert.throws(() => verifyReports(input, expected), /checked bundled Windows launcher|separate Windows launcher/);
+  editReport(input, 'windows-x64', report => {report.checks.push({name:'windows-wsl2-launcher-checks', result:'failed'});});
+  assert.throws(() => verifyReports(input, expected), /checked bundled Windows launcher|separate Windows launcher/);
+  editReport(input, 'windows-x64', report => {report.checks.at(-1).result = 'passed';});
+  assert.equal(verifyReports(input, expected).length, 3);
+});
+
+test('Linux reports cannot omit the WSL runtime, its packaging check or its CLI verification', t => {
+  for (const change of [report => {report.includeWsl = false;}, report => {delete report.includeWsl;},
+    report => {report.artifacts = report.artifacts.filter(artifact => artifact.target !== 'windows-wsl2-payload');},
+    report => {report.checks = report.checks.filter(check => check.name !== 'package-wsl');},
+    report => {report.checks = report.checks.filter(check => check.name !== 'wsl-packaged-cli-version');}]) {
+    const input = fixture(t, false);
+    editReport(input, 'linux-x64', change);
+    assert.throws(() => verifyReports(input, expected), /WSL2 runtime payload|Missing or duplicate platform artifact|Missing required build check/);
+  }
+});
+
+test('a supplied standalone launcher must still validate even when the native bundle includes one', t => {
+  const input = fixture(t);
+  editReport(input, 'windows-x64', report => {report.checks.push({name:'windows-wsl2-launcher-checks', result:'passed'});});
+  assert.equal(verifyReports(input, expected).length, 4);
+  editReport(input, 'windows-launcher', report => {report.extensionVersion = 'old-version';});
+  assert.throws(() => verifyReports(input, expected), /same Autograde revision and extension version/);
 });
 
 test('pairing rejects version skew or missing policy compilation', t => {

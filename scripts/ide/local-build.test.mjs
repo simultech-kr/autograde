@@ -44,9 +44,9 @@ function snapshot({ directory, git }) {
 
 const requiredOptions = ['--target', 'linux-x64', '--source', '/new/source', '--output', '/new/output'];
 
-test('candidate remains the CLI default and local mode composes with optional WSL packaging', () => {
+test('candidate remains the CLI default and local mode retains mandatory WSL packaging', () => {
   assert.deepEqual(parseOptions(requiredOptions), {
-    target: 'linux-x64', source: '/new/source', output: '/new/output', includeWsl: false, local: false, resume: false,
+    target: 'linux-x64', source: '/new/source', output: '/new/output', includeWsl: true, local: false, resume: false,
   });
   assert.deepEqual(parseOptions(['--local', ...requiredOptions, '--include-wsl']), {
     target: 'linux-x64', source: '/new/source', output: '/new/output', includeWsl: true, local: true, resume: false,
@@ -142,9 +142,9 @@ function inventory(t) {
     const folder = path.join(directory, target);
     fs.mkdirSync(folder);
     const report = { schema: 1, status: 'release-candidate', buildMode: 'candidate', sourceDirty: false,
-      buildTarget: target, ...expected, includeWsl: false,
+      buildTarget: target, ...expected, includeWsl: target === 'linux-x64',
       host: { platform: definition.platform, architecture: definition.architecture, node: expected.upstream.node },
-      checks: definition.checks.map(name => ({ name, result: 'passed' })),
+      checks: [...definition.checks, ...(target === 'windows-x64' ? ['windows-wsl2-launcher-checks'] : [])].map(name => ({ name, result: 'passed' })),
       acceptance: { productionReady: false, institution: 'not-tested', windowsWsl2: 'not-tested' }, artifacts: [] };
     for (const artifactTarget of definition.artifacts) {
       const file = `Autograde-IDE-${expected.extensionVersion}-${artifactTarget}.zip`, archive = path.join(folder, file);

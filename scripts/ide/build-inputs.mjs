@@ -7,6 +7,13 @@ import { nodeCompatibilityMarker } from '../../ide/code-oss/node-compatibility.m
 
 const gitFiles = (root, args) => execFileSync('git', ['-C', root, 'ls-files', '-z', ...args],
   { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 }).split('\0').filter(Boolean);
+// Inputs that can change the compiled editor/policy contract. Launcher and
+// student extension sources are rebuilt separately by the quick Windows path.
+export const runtimeCoreConfigurationPaths = Object.freeze([
+  'ide/code-oss/upstream.json', 'ide/code-oss/product.json', 'ide/code-oss/profile',
+  'ide/code-oss/extension-install-policy.mjs', 'ide/code-oss/policy-runtime.mjs',
+  'ide/code-oss/node-compatibility.mjs',
+]);
 const present = file => {
   try { return fs.lstatSync(file); }
   catch (error) { if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return undefined; throw error; }
@@ -69,6 +76,10 @@ function fingerprint(root, paths, exclude, recursive) {
 export function inputFingerprint(repository, pathspecs) {
   const files = relativePaths(gitFiles(repository, ['--cached', '--others', '--exclude-standard', '--', ...pathspecs]));
   return fingerprint(repository, files, [], false);
+}
+
+export function runtimeCoreFingerprint(repository) {
+  return inputFingerprint(repository, runtimeCoreConfigurationPaths);
 }
 
 export function snapshotPaths(root, paths, { exclude = [] } = {}) {

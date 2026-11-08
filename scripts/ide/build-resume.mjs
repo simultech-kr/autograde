@@ -113,6 +113,45 @@ function readState(file) {
   return state;
 }
 
+/** Share the same source/output locks with tools that reuse a completed build. */
+export function lockBuildDirectories(directories) {
+  if (!Array.isArray(directories) || !directories.length) throw new Error('Build directories are required');
+  // Check aliases/overlap before creating an output parent inside a source tree.
+  const prospective = directories.map(directory => {
+    if (typeof directory !== 'string' || !path.isAbsolute(directory)) throw new Error('Build paths must be absolute');
+    directory = path.resolve(directory);
+    if (directory === path.parse(directory).root) throw new Error('A filesystem root cannot be a build directory');
+    const info = exists(directory);
+    if (info && (!info.isDirectory() || info.isSymbolicLink())) throw new Error('Build path must be a regular directory');
+    let parent = directory;
+    const suffix = [];
+    while (!exists(parent)) {suffix.unshift(path.basename(parent)); parent = path.dirname(parent);}
+    if (!fs.statSync(parent).isDirectory()) throw new Error('Build parent must be a directory');
+    return path.join(fs.realpathSync.native(parent), ...suffix);
+  });
+  const separate = paths => {
+    for (let i = 0; i < paths.length; i++) for (let j = i + 1; j < paths.length; j++) {
+      if (contains(paths[i], paths[j]) || contains(paths[j], paths[i])) throw new Error('Build directories must be separate and must not overlap');
+    }
+  };
+  separate(prospective);
+  const canonical = prospective.map(buildDirectory);
+  separate(canonical);
+  const releases = [];
+  let closed = false;
+  const close = () => {
+    if (closed) return;
+    closed = true;
+    let failure;
+    for (const release of releases.reverse()) { try { release(); } catch (error) { failure ??= error; } }
+    if (failure) throw failure;
+  };
+  try {
+    for (const directory of [...canonical].sort()) releases.push(acquireLock(directory));
+    return {directories: canonical, close};
+  } catch (error) { close(); throw error; }
+}
+
 function preserveLegacyOutput(output) {
   // Reserve a sibling on the same filesystem, then move the entire directory.
   // Never walk unknown payloads or follow links inside a failed old package.

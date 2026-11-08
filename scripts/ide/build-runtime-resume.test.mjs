@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { parseOptions, publishArchive, validateArtifact, builtExtensionPaths, nativeEnvironmentFingerprint } from './build-runtime.mjs';
+import { parseOptions, publishArchive, validateArtifact, builtExtensionPaths, nativeEnvironmentFingerprint, preserveQuickRuntimeProof, runtimeWslPolicy } from './build-runtime.mjs';
 import { openBuildJournal, buildStateFilename } from './build-resume.mjs';
 import { snapshotPaths, snapshotMatches } from './build-inputs.mjs';
 
@@ -23,17 +23,101 @@ function archive(directory, name = 'Autograde-IDE-local.tar.gz', contents = 'syn
   return file;
 }
 
-test('resume parsing defaults false and combines with local and WSL flags', () => {
-  assert.deepEqual(parseOptions(cli), {target: 'linux-x64', source: '/build/source', output: '/build/output', includeWsl: false, local: false, resume: false});
+test('resume defaults false while Linux WSL packaging is mandatory with or without the legacy flag', () => {
+  assert.deepEqual(parseOptions(cli), {target: 'linux-x64', source: '/build/source', output: '/build/output', includeWsl: true, local: false, resume: false});
   for (const resume of [false, true]) for (const local of [false, true]) for (const includeWsl of [false, true]) {
     const flags = [...(resume ? ['--resume'] : []), ...(local ? ['--local'] : []), ...(includeWsl ? ['--include-wsl'] : [])];
     const options = parseOptions([...flags, ...cli]);
-    assert.deepEqual({resume: options.resume, local: options.local, includeWsl: options.includeWsl}, {resume, local, includeWsl});
+    assert.deepEqual({resume: options.resume, local: options.local, includeWsl: options.includeWsl}, {resume, local, includeWsl:true});
   }
   for (const flag of ['--resume', '--local', '--include-wsl']) assert.throws(() => parseOptions([...cli, flag, flag]), /Usage/);
   for (const extra of [['--resume', 'false'], ['--resume=true'], ['--unknown'], ['--source', '/other'], ['--output'], ['--resume', '--resume']]) {
     assert.throws(() => parseOptions([...cli, ...extra]), /Usage/);
   }
+});
+
+test('new Linux builds include WSL without making other native targets produce Linux payloads', t => {
+  const f = fixture(t);
+  for (const target of ['linux-x64', 'windows-x64', 'macos-arm64']) {
+    assert.deepEqual(runtimeWslPolicy({target, output:f.output}), {
+      includeWsl:target === 'linux-x64', checkpointIncludeWsl:target === 'linux-x64',
+    });
+    const args = ['--target', target, '--source', f.source, '--output', f.output];
+    assert.deepEqual(parseOptions([...args, '--include-wsl']), parseOptions(args));
+  }
+  assert.equal(fs.existsSync(f.output), false);
+});
+
+for (const legacyIncludeWsl of [false, true]) {
+  test(`mandatory WSL preserves historical checkpoint identity and compiler successes (${legacyIncludeWsl})`, t => {
+    const f = fixture(t), identity = {target:'linux-x64', node:'26.13.0', local:true, includeWsl:legacyIncludeWsl};
+    fs.mkdirSync(f.source);
+    let compiled = 0, packaged = 0;
+    const original = openBuildJournal({...f, identity});
+    original.step('compile', {key:'source-v1'}, () => {compiled++; return 'verified-core';});
+    original.close();
+    const stateFile = path.join(f.output, buildStateFilename), before = fs.readFileSync(stateFile, 'utf8');
+    const policy = runtimeWslPolicy({target:'linux-x64', output:f.output, resume:true});
+    assert.deepEqual(policy, {includeWsl:true, checkpointIncludeWsl:legacyIncludeWsl});
+    assert.equal(fs.readFileSync(stateFile, 'utf8'), before);
+    const resumed = openBuildJournal({...f, identity:{...identity, includeWsl:policy.checkpointIncludeWsl}, resume:true});
+    try {
+      assert.equal(resumed.step('compile', {key:'source-v1'}, () => {compiled++;}), 'verified-core');
+      resumed.step('package-wsl', {key:'wsl-v1', deps:['compile']}, () => {packaged++;});
+    } finally {resumed.close();}
+    assert.equal(compiled, 1);
+    assert.equal(packaged, 1);
+    assert.equal(JSON.parse(fs.readFileSync(stateFile, 'utf8')).identity.includeWsl, legacyIncludeWsl);
+  });
+}
+
+test('historical WSL selection never authorizes a different source or compiler identity', t => {
+  const f = fixture(t), identity = {target:'linux-x64', node:'26.13.0', local:true, includeWsl:false};
+  const journal = openBuildJournal({...f, identity}); journal.close();
+  const stateFile = path.join(f.output, buildStateFilename), before = fs.readFileSync(stateFile, 'utf8');
+  const policy = runtimeWslPolicy({target:'linux-x64', output:f.output, resume:true});
+  const restored = {...identity, includeWsl:policy.checkpointIncludeWsl};
+  for (const change of [{identity:{...restored, node:'99.0.0'}}, {identity:{...restored, local:false}},
+    {identity:restored, source:path.join(f.directory, 'different-source')}]) {
+    assert.throws(() => openBuildJournal({...f, identity:restored, resume:true, ...change}), /identity|paths/);
+    assert.equal(fs.readFileSync(stateFile, 'utf8'), before);
+  }
+  const corrupt = JSON.parse(before); corrupt.schema = 999;
+  fs.writeFileSync(stateFile, JSON.stringify(corrupt));
+  const invalidPolicy = runtimeWslPolicy({target:'linux-x64', output:f.output, resume:true});
+  assert.throws(() => openBuildJournal({...f, identity:{...identity, includeWsl:invalidPolicy.checkpointIncludeWsl}, resume:true}), /Invalid build checkpoint/);
+  assert.equal(fs.readFileSync(stateFile, 'utf8'), JSON.stringify(corrupt));
+});
+
+test('WSL identity compatibility does not follow linked checkpoint files', t => {
+  const f = fixture(t); fs.mkdirSync(f.output);
+  const checkpoint = path.join(f.output, buildStateFilename), outside = path.join(f.directory, 'outside.json');
+  fs.writeFileSync(outside, JSON.stringify({identity:{target:'linux-x64', includeWsl:false}}));
+  fs.linkSync(outside, checkpoint);
+  assert.throws(() => runtimeWslPolicy({target:'linux-x64', output:f.output, resume:true}), /regular build file/);
+  assert.equal(JSON.parse(fs.readFileSync(outside, 'utf8')).identity.includeWsl, false);
+  const alias = path.join(f.directory, 'output-alias');
+  fs.symlinkSync(f.output, alias, process.platform === 'win32' ? 'junction' : 'dir');
+  assert.throws(() => runtimeWslPolicy({target:'linux-x64', output:alias, resume:true}), /regular directory/);
+});
+
+test('a completed full build preserves old quick proofs before publishing its new evidence', t => {
+  const f = fixture(t); fs.mkdirSync(f.output);
+  assert.equal(preserveQuickRuntimeProof(f.output), undefined);
+  const proof = path.join(f.output, '.autograde-quick-runtime.json');
+  const originals = [];
+  for (const contents of ['{"schema":1,"old":"evidence"}', 'corrupt previous proof']) {
+    fs.writeFileSync(proof, contents);
+    const backup = preserveQuickRuntimeProof(f.output);
+    assert.match(path.basename(backup), /^\.previous-quick-runtime-[a-f0-9-]+\.json$/);
+    assert.equal(fs.readFileSync(backup, 'utf8'), contents);
+    assert.equal(fs.existsSync(proof), false);
+    originals.push(backup);
+  }
+  assert.notEqual(originals[0], originals[1]);
+  fs.linkSync(originals[0], proof);
+  assert.throws(() => preserveQuickRuntimeProof(f.output), /regular build file/);
+  assert.equal(fs.readFileSync(proof, 'utf8'), fs.readFileSync(originals[0], 'utf8'));
 });
 
 test('archive publication verifies checksums before writing and preserves all previous files', t => {

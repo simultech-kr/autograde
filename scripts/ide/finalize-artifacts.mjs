@@ -11,7 +11,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const read = file => JSON.parse(fs.readFileSync(file, 'utf8'));
 const targets = {
   'macos-arm64': { platform: 'darwin', architecture: 'arm64', artifacts: ['macos-native'], checks: ['upstream-commit-and-node', 'teacher-only-policy-overlay', 'code-oss-client-compile', 'native-electron-download', 'overlay-verification', 'package-macos', 'macos-policy-smoke'] },
-  'linux-x64': { platform: 'linux', architecture: 'x64', artifacts: ['linux-native'], checks: ['upstream-commit-and-node', 'teacher-only-policy-overlay', 'code-oss-client-compile', 'native-electron-download', 'overlay-verification', 'package-linux', 'linux-packaged-cli-version'] },
+  'linux-x64': { platform: 'linux', architecture: 'x64', artifacts: ['linux-native', 'windows-wsl2-payload'], checks: ['upstream-commit-and-node', 'teacher-only-policy-overlay', 'code-oss-client-compile', 'native-electron-download', 'overlay-verification', 'package-linux', 'linux-packaged-cli-version', 'package-wsl', 'wsl-packaged-cli-version'] },
   'windows-x64': { platform: 'win32', architecture: 'x64', artifacts: ['windows-native'], checks: ['upstream-commit-and-node', 'teacher-only-policy-overlay', 'code-oss-client-compile', 'native-electron-download', 'overlay-verification', 'package-windows', 'windows-packaged-cli-version', 'windows-native-job-acl-msvc-checks'] },
   'windows-launcher': { platform: 'win32', architecture: 'x64', artifacts: ['windows-wsl2-launcher'], checks: ['windows-launcher-compile', 'windows-launcher-self-tests', 'windows-launcher-version'] },
 };
@@ -53,10 +53,8 @@ export function verifyReports(input, expected) {
     const report = read(file), original = targets[report.buildTarget];
     if (report.status === 'local-build' || report.buildMode === 'local') throw new Error('Local build outputs cannot be finalized as release candidates; rebuild from a clean committed checkout without --local');
     const definition = original && { ...original, artifacts: [...original.artifacts], checks: [...original.checks] };
-    if (report.buildTarget === 'linux-x64' && report.includeWsl === true) {
-      definition.artifacts.push('windows-wsl2-payload'); definition.checks.push('package-wsl', 'wsl-packaged-cli-version');
-    }
     if (report.schema !== 1 || report.status !== 'release-candidate' || !definition || seen.has(report.buildTarget)) throw new Error('Invalid or duplicate build report');
+    if (report.buildTarget === 'linux-x64' && report.includeWsl !== true) throw new Error('Linux builds must include the WSL2 runtime payload');
     if (report.sourceDirty !== false) throw new Error('Candidate provenance requires a clean committed source checkout');
     seen.add(report.buildTarget);
     if (report.sourceRevision !== expected.sourceRevision || report.extensionVersion !== expected.extensionVersion) throw new Error('Builds must use the same Autograde revision and extension version');
@@ -79,8 +77,11 @@ export function verifyReports(input, expected) {
     result.push({ file, report });
   }
   if (!['macos-arm64', 'linux-x64', 'windows-x64'].every(target => seen.has(target))) throw new Error('All three native platform build reports are required');
-  const wslPayload = result.some(build => build.report.buildTarget === 'linux-x64' && build.report.includeWsl === true);
-  if (wslPayload !== seen.has('windows-launcher')) throw new Error('Optional Windows WSL2 requires both the Linux payload and Windows launcher');
+  const bundledLauncher = result.some(build => build.report.buildTarget === 'windows-x64'
+    && build.report.checks.some(check => check.name === 'windows-wsl2-launcher-checks' && check.result === 'passed'));
+  // New native Windows archives include the launcher. A separately built and
+  // fully validated launcher remains a supported source for older archives.
+  if (!bundledLauncher && !seen.has('windows-launcher')) throw new Error('WSL2 requires a checked bundled Windows launcher or a separate Windows launcher report');
   return result;
 }
 
@@ -91,14 +92,17 @@ export function finalize(input, output) {
     extensionVersion: read(path.join(root, 'extensions/vscode/package.json')).version,
     sourceRevision: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim() };
   const builds = verifyReports(input, expected);
+  const bundledLauncher = builds.some(build => build.report.buildTarget === 'windows-x64'
+    && build.report.checks.some(check => check.name === 'windows-wsl2-launcher-checks' && check.result === 'passed'));
   const manifest = { schema: 1, product: 'Autograde IDE', status: 'release-candidate', ...expected,
     createdAt: new Date().toISOString(), run: { id: process.env.GITHUB_RUN_ID ?? null, attempt: process.env.GITHUB_RUN_ATTEMPT ?? null },
     distribution: 'workflow-artifact-repository-visibility', productionReady: false,
     acceptance: { institution: 'not-tested', windowsNative: 'not-tested', windowsWsl2: 'not-tested', linuxDesktop: 'not-tested', macosSigning: 'ad-hoc-only',
-      requiredBeforeDeployment: ['Institution configuration and server/extension compatibility review', 'Real target desktop launch, teaching workflow and shared-session cleanup', 'Windows native MSVC/SDK and instructor-extension workflow acceptance', 'Optional WSL2/WSLg acceptance when that target is selected', 'Institution signing/notarization and software license review'] },
+      requiredBeforeDeployment: ['Institution configuration and server/extension compatibility review', 'Real target desktop launch, teaching workflow and shared-session cleanup', 'Windows native MSVC/SDK and instructor-extension workflow acceptance', 'WSL2/WSLg acceptance on institution Windows PCs', 'Institution signing/notarization and software license review'] },
     windows: { default: 'windows-native', runtime: 'Windows x64 + operator-provisioned MSVC and Windows SDK',
-      optional: builds.some(build => build.report.buildTarget === 'windows-launcher') ? ['windows-wsl2'] : [],
-      optionalWslRequiredArtifactTargets: ['windows-wsl2-payload', 'windows-wsl2-launcher'] },
+      included: ['windows-wsl2'],
+      wslLauncher: bundledLauncher ? 'bundled-in-windows-native' : 'separate-artifact',
+      wslRequiredArtifactTargets: ['windows-wsl2-payload', bundledLauncher ? 'windows-native' : 'windows-wsl2-launcher'] },
     builds: [], artifacts: [] };
   fs.mkdirSync(output, { recursive: true });
   for (const { file, report } of builds) {

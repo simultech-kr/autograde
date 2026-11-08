@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Native Windows x64 packaging; no WSL or cross-platform node_modules reuse.
+// Native Windows x64 plus the WSL launcher; Linux runtime remains a separate payload.
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -12,6 +12,14 @@ import { fileSha256 } from './package-wsl.mjs';
 import { selectPlatformPrebuilds } from './package-linux.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
+export const windowsWslInstallerFiles = Object.freeze([
+  'Install-Shortcut.ps1', 'Build-Launcher.ps1', 'LauncherCore.cs', 'LauncherChecks.cs',
+  'AutogradeWslLauncher.cs', 'launcher.example.json', 'Resolve-LauncherVersion.ps1', 'LauncherVersionChecks.ps1',
+]);
+export function windowsWslSupport() {
+  return {launcher: 'wsl/Autograde IDE.exe', installer: 'wsl/Install-Shortcut.ps1',
+    runtime: 'separate-linux-payload', requires: ['WSL2', 'WSLg']};
+}
 function regular(file) { const info = fs.lstatSync(file); if (!info.isFile() || info.isSymbolicLink()) throw new Error(`A regular file is required: ${file}`); return info; }
 export function windowsRelative(value) {
   if (typeof value !== 'string') throw new Error('Invalid Windows runtime path');
@@ -57,6 +65,7 @@ export function windowsManifest({ version, extensionVersion, nodeVersion, upstre
     editorRoot: 'editor/app', executable: `editor/electron/${binaryName}`, node: 'runtime/node.exe', approvedBuiltins,
     policy: 'standard', lifecycle: 'shared', distribution: 'windows-native-shared-lab-candidate',
     requires: { toolchain: 'Administrator-provisioned MSVC x64 and Windows SDK', filesystem: 'local NTFS', framework: '.NET Framework 4.8', wsl: false },
+    wsl: windowsWslSupport(),
     acceptance: 'not-tested-on-institution-windows', productionReady: false };
 }
 function copy(file, destination, sourceRoot) {
@@ -87,6 +96,30 @@ export function assembleWindowsPackage({ source, node, nodeLicense, editorPlan, 
   fs.writeFileSync(path.join(destination, 'windows-package.json'), `${JSON.stringify(manifest, null, 2)}\n`, { flag: 'wx' });
   copy(path.join(launcherRoot, 'windows/INSTALL-NATIVE-WINDOWS.md'), path.join(destination, 'INSTALL-NATIVE-WINDOWS.md'));
 }
+
+/** Build the Windows side only. No WSL distribution is installed or started. */
+export function bundleWindowsWslLauncher({destination, stage, extensionVersion, powershell, launcherRoot = here, run = execFileSync}) {
+  if (!/^\d+\.\d+\.\d+$/.test(extensionVersion ?? '')) throw new Error('Invalid WSL launcher extension version');
+  const output = path.join(destination, 'wsl'), compiled = path.join(stage, 'wsl-launcher');
+  for (const directory of [output, compiled]) {
+    try { fs.lstatSync(directory); throw new Error('Choose a new WSL launcher output directory'); }
+    catch (error) { if (error.code !== 'ENOENT') throw error; }
+  }
+  for (const name of windowsWslInstallerFiles) regular(path.join(launcherRoot, 'windows', name));
+  run(powershell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File',
+    path.join(launcherRoot, 'windows/Build-Launcher.ps1'), '-OutputDirectory', compiled,
+    '-ExtensionVersion', extensionVersion, '-RunChecks'], {stdio: 'inherit'});
+  const generated = ['Autograde IDE.exe', 'Autograde Launcher Checks.exe', 'launcher-version.json'];
+  for (const name of generated) regular(path.join(compiled, name));
+  const version = readJson(path.join(compiled, 'launcher-version.json'));
+  if (version.schema !== 1 || version.extensionVersion !== extensionVersion || version.assemblyVersion !== `${extensionVersion}.0`) {
+    throw new Error('Compiled WSL launcher version does not match the native package');
+  }
+  for (const name of generated) copy(path.join(compiled, name), path.join(output, name));
+  for (const name of windowsWslInstallerFiles) copy(path.join(launcherRoot, 'windows', name), path.join(output, name));
+  return windowsWslSupport();
+}
+
 export function packageWindows({ source, node, output, institutionProfile, archive = true }) {
   if (process.platform !== 'win32' || process.arch !== 'x64') throw new Error('Build native Windows x64 on Windows x64 with fresh Windows dependencies');
   source = fs.realpathSync(source); node = fs.realpathSync(node); output = path.resolve(output);
@@ -108,6 +141,7 @@ export function packageWindows({ source, node, output, institutionProfile, archi
   const powershell = path.join(process.env.SystemRoot, 'System32/WindowsPowerShell/v1.0/powershell.exe');
   execFileSync(powershell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', path.join(here, 'windows/Build-NativeLauncher.ps1'), '-OutputDirectory', compiled, '-ExtensionVersion', checked.extensionVersion, '-RunChecks'], { stdio: 'inherit' });
   for (const name of ['Autograde IDE.exe', 'Autograde Native Checks.exe']) { if (peArchitecture(path.join(compiled, name)) !== 'x64') throw new Error('Native launcher architecture mismatch'); copy(path.join(compiled, name), path.join(payload, name)); }
+  const wsl = bundleWindowsWslLauncher({destination: payload, stage, extensionVersion: checked.extensionVersion, powershell});
   prepareDistribution(payload, path.join(payload, 'autograde'), {ideVersion: manifest.version, extensionVersion: checked.extensionVersion, nodeVersion: info.version, upstreamCommit: upstream.commit}, institutionProfile);
   fs.renameSync(payload, output);
   if (archive) {
@@ -115,7 +149,7 @@ export function packageWindows({ source, node, output, institutionProfile, archi
     execFileSync('tar.exe', ['-a', '-cf', `${output}.zip`, '-C', path.dirname(output), path.basename(output)], { stdio: 'inherit' });
     fs.writeFileSync(`${output}.zip.sha256`, `${fileSha256(`${output}.zip`)}  ${path.basename(output)}.zip\n`, { flag: 'wx' });
   }
-  return { directory: output, archive: archive ? `${output}.zip` : null, extensionVersion: checked.extensionVersion, platform: 'win32', architecture: 'x64', node: 'bundled', lifecycle: 'shared', productionReady: false };
+  return { directory: output, archive: archive ? `${output}.zip` : null, extensionVersion: checked.extensionVersion, platform: 'win32', architecture: 'x64', node: 'bundled', lifecycle: 'shared', wsl, productionReady: false };
 }
 export function parseWindowsOptions(args) {
   const result = { source: path.join(repoRoot, '.cache/code-oss'), node: process.execPath, output: path.join(repoRoot, 'build/windows/Autograde-IDE-windows-x64'), archive: true }, seen = new Set();

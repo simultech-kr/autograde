@@ -1,7 +1,7 @@
 # 기관 배포용 IDE 후보 빌드
 
 `.github/workflows/ide-build.yml`은 수동 release-candidate 빌드다. **Mac·Windows 네이티브·Linux
-네이티브가 기본이며 Windows WSL2는 선택 사항**이다. GitHub Release·배포·저장소 push는 만들지
+네이티브와 Windows WSL2 구성요소를 항상 만든다.** GitHub Release·배포·저장소 push는 만들지
 않는다. 산출물은 Actions 실행에 14일간 보관하고 접근 범위는 저장소 공개/비공개 설정을 따른다.
 공개 저장소의 artifact를 비공개라고 설명하지 않는다. 다른 OS에서의 C# 컴파일 성공은 실제
 Windows 실행 성공을 뜻하지 않는다.
@@ -13,7 +13,7 @@ Windows 실행 성공을 뜻하지 않는다.
 | macOS Apple Silicon | `macos-15`, ARM64 | `.app.zip` | Mac 앱 아이콘 |
 | Windows 네이티브 기본 | `windows-2022`, x64 | `windows-native-x64.zip` | Windows EXE 아이콘, WSL 불필요 |
 | Linux x64 | `ubuntu-22.04`, x64 | `linux-x64.tar.gz` | Linux 데스크톱 아이콘 |
-| Windows WSL2 선택 | Linux x64 + Windows x64 | WSL2 payload `.tar.gz` + launcher `.zip` | Windows 아이콘이 WSL2/WSLg 편집기를 실행 |
+| Windows WSL2 항상 포함 | Linux x64 + Windows x64 | WSL2 payload `.tar.gz` + Windows 패키지의 `wsl/` 실행기·설치기 | 설정한 Windows 아이콘이 WSL2/WSLg 편집기를 실행 |
 
 Windows 네이티브는 관리자 설치 MSVC x64와 Windows SDK를 찾고 번들 Node·Electron을 사용한다.
 학생이 Node를 설치하거나 시작 명령을 입력하지 않는다. 담당자가 전체 패키지를 설치한 다음
@@ -21,9 +21,13 @@ Windows 네이티브는 관리자 설치 MSVC x64와 Windows SDK를 찾고 번�
 제공한다. 디버거·언어 기능은 교수자가 허용한 C/C++ 확장을 별도로 배포해야 한다. 기본 패키지에
 상용 C/C++ 확장이나 디버거 UI가 포함되었다고 간주하지 않는다.
 
-선택 WSL2는 별도 배포판·WSLg·비-root Linux 계정이 필요하다. 두 구성요소는 같은 빌드 실행에서
-만든 것을 함께 사용한다. WSL launcher ZIP에는 컴파일된 EXE와 기존 설치 도구가 들어 있다.
-기존 `Install-Shortcut.ps1`이 재컴파일·사전 점검을 수행하므로 포함된 C#·PowerShell·버전 파일도 보존한다.
+Windows 전체 빌드와 빠른 빌드는 모두 `wsl/` 폴더에 검사한 실행기·설치 도구를 포함한다.
+Linux 전체 빌드는 Linux 네이티브 패키지와 WSL2용 Linux payload를 함께 만든다. Windows
+패키지가 Linux 편집기·런타임까지 포함하거나 Windows에서 Linux 런타임을 자동 컴파일하는 것은 아니다.
+WSL2 배포판·WSLg·비-root Linux 계정과 별도 Linux payload 설치가 필요하며 OS 설치·변환은 자동 수행하지 않는다.
+두 구성요소는 같은 Autograde commit·확장 버전으로 만든 것을 함께 사용한다.
+`wsl/Install-Shortcut.ps1`이 재컴파일·사전 점검을 수행하므로 포함된 C#·PowerShell·버전 파일도 보존한다.
+WSL을 사용하지 않는 수업은 패키지 루트의 네이티브 실행기를 그대로 사용한다.
 
 `ide/code-oss/upstream.json`이 Code-OSS 저장소·tag·commit·Node 버전의 기준이다. 현재
 Code-OSS `1.143.0`, commit `2d0b7506a36c1d6db9a466440131a8e01eab2289`, 빌드·번들 Node `26.13.0`이다.
@@ -46,8 +50,8 @@ GitHub의 [runner 표](https://docs.github.com/en/actions/reference/runners/gith
 보고서에 `status: local-build`, `buildMode: local`과 실제 `sourceDirty`를 기록한다.
 시험·고정 버전/commit 검증·해시 검증·플랫폼별 서명 검사는 그대로 수행한다.
 
-Actions를 사용할 때는 **Institution IDE candidates**에서 ref를 수동 선택한다. 기본은 세 가지
-native OS이며 필요할 때만 `include_wsl`을 선택한다. 토큰은 `contents: read`만 요청하고
+Actions를 사용할 때는 **Institution IDE candidates**에서 ref를 수동 선택한다. 세 가지
+native OS와 WSL2 구성요소를 함께 만든다. 토큰은 `contents: read`만 요청하고
 checkout 자격증명을 보존하지 않는다.
 
 1. 빌드 검증 시험과 예제 기관 제품 정의를 검사한다. 예제를 운영 승인본으로 변경하지 않는다.
@@ -62,8 +66,9 @@ checkout 자격증명을 보존하지 않는다.
 5. Mac 정책 smoke와 대상별 단위 시험·패키지 내부 CLI 실행을 수행한다. Windows에서는 실제
    launcher EXE를 컴파일하고 ACL·중복 실행·잠긴 파일 실패 시 recovery marker·job의 자식/손자
    종료·stale 복구·export 보존을 검사한다. MSVC C17/C++17 compile·SDK 링크·프로그램 실행도 검사한다.
-6. 모든 기본 native job 성공 후 commit·버전·pin·SHA-256·파일 크기를 대조한다. 선택 WSL2의
-   두 부분 중 하나라도 없으면 후보 묶음을 만들지 않는다.
+6. 모든 native job 성공 후 commit·버전·pin·SHA-256·파일 크기를 대조한다. WSL2용 Linux payload와
+   검사한 Windows WSL 실행기 중 하나라도 없으면 후보 묶음을 만들지 않는다. 새 Windows 패키지에는
+   WSL 실행기가 내장되며, 이전 별도 launcher artifact가 제공된 경우에도 버전·해시를 검증한다.
 
 Windows에서는 POSIX process-group·chmod 전용 시험을 실행하지 않고 Windows 패키지/부트스트랩,
 플랫폼 관련 확장 시험 및 실제 native EXE 검사를 수행한다. 실제 통과한 이름을 build report에 기록한다.
@@ -138,7 +143,7 @@ $spectre = Join-Path $vsRoot "VC\Tools\MSVC\$toolset\lib\spectre\x64"
 ```sh
 node scripts/ide/build-runtime.mjs --target macos-arm64 --source /tmp/code-oss-mac-new --output /tmp/mac-artifacts-new
 node scripts/ide/build-runtime.mjs --target linux-x64 --source /tmp/code-oss-linux-new --output /tmp/linux-artifacts-new
-# 선택 WSL2까지 만들려면 Linux 명령에 --include-wsl 추가
+# Linux 전체 빌드는 WSL2 payload도 항상 만든다. --include-wsl은 더 이상 필요하지 않다.
 ```
 
 ```powershell
@@ -146,7 +151,8 @@ node scripts/ide/build-runtime.mjs --target linux-x64 --source /tmp/code-oss-lin
 node --version
 Test-Path .\scripts\ide\build-runtime.mjs
 node .\scripts\ide\build-runtime.mjs --target windows-x64 --source .\.cache\code-oss-windows-01 --output .\dist\windows-native-01
-# 선택 WSL2 launcher만 빌드:
+# Windows 전체 패키지에는 wsl/ 실행기·설치기가 항상 포함된다.
+# 이전 배포 방식의 별도 WSL2 launcher ZIP이 필요한 경우에만:
 .\scripts\ide\build-windows.ps1 -OutputDirectory .\dist\wsl-launcher-01
 ```
 
@@ -213,6 +219,86 @@ output 옆의 고유한 임시 작업 폴더를 사용한다. 실패한 패키�
 재개 기록은 실제 대상 OS에서의 빌드·실행 검증을
 대신하지 않으며, 이 변경의 실제 Windows 네이티브 빌드는 여기서 검증하지 않았다.
 
+### Windows 확장·실행기 빠른 빌드
+
+Windows 전체 빌드가 한 번 성공한 뒤 Autograde 확장이나 실행기를 수정했다면, 검증된
+Code-OSS 실행 파일을 재사용하여 새 패키지를 만들 수 있다. Code-OSS 전체 컴파일과
+`npm ci`, Electron 다운로드를 반복하지 않는다. 기본값은 ZIP 압축도 생략하여 로컬
+실행에 필요한 폴더만 만든다. 기존 IDE와 실행기를 종료한 뒤 다음과 같이 실행한다.
+빠른 빌드에도 네이티브 실행기와 `wsl/` 실행기·설치기가 항상 들어간다.
+
+```powershell
+# autograde 저장소 루트에서 실행한다.
+# Source와 BuildOutput은 이전에 전체 빌드가 성공한 실제 경로로 바꾼다.
+.\scripts\ide\build-windows-quick.ps1 `
+  -Source .\.cache\code-oss-windows-26-local-01 `
+  -BuildOutput .\dist\windows-node26-local-01 `
+  -Output .\dist\windows-quick-01
+
+# 다른 시험 PC에 옮길 ZIP도 필요하면 새 출력 경로와 -Archive를 지정한다.
+.\scripts\ide\build-windows-quick.ps1 `
+  -Source .\.cache\code-oss-windows-26-local-01 `
+  -BuildOutput .\dist\windows-node26-local-01 `
+  -Output .\dist\windows-quick-02 `
+  -Archive
+```
+
+`-Source`는 기존 Code-OSS **소스 빌드 폴더**, `-BuildOutput`은 그 전체 빌드의
+`.autograde-build-state.json`과 `build-windows-x64.json`이 있는 **결과 폴더**다.
+압축 해제한 IDE 설치 폴더나 이전 빠른 빌드 결과를 대신 지정할 수 없다. `-Output`은
+존재하지 않는 새 폴더여야 하며, 이전 패키지와 학생 작업 폴더를 덮어쓰지 않는다.
+래퍼를 다른 위치에서 실행해도 입력한 상대 경로는 호출한 PowerShell의 현재 폴더를
+기준으로 해석한다. Node 진입점은 다음과 같이 직접 실행할 수도 있다.
+
+```powershell
+node .\scripts\ide\build-windows-quick.mjs --source .\.cache\code-oss-windows-26-local-01 --build-output .\dist\windows-node26-local-01 --output .\dist\windows-quick-03
+# ZIP을 추가하려면 --archive를 붙인다.
+```
+
+빠른 빌드는 같은 Windows x64 PC·고정 Node 버전의 완료 기록과 기존 산출물을 검사한다.
+Code-OSS 버전, 핵심 정책이나 런타임 의존성이 달라졌거나 검증에 필요한 파일이 없으면
+중단하고 전체 빌드의 `--resume`을 안내한다. 의존성을 자동 재설치하거나 완료 기록을
+추측하지 않는다. 안내된 전체 빌드는 기존 `--source`·`--output`과 `--local` 사용 여부를
+유지하여 실행한다. 처음부터 전체 빌드를 완료하지 못했다면 먼저 그 빌드를 마쳐야 한다.
+
+이전 버전에서 수정 파일이 있는 상태로 만든 `--local` 빌드는 핵심 입력의 별도 기록이 없을 수 있다.
+그 이후 실행기나 빌드 스크립트가 바뀌었다면 기존 본체의 구성 일치를 증명할 수 없어 전체
+`--resume`이 한 번 필요하다. 새 전체 빌드는 핵심 입력을 별도로 기록하므로 이후 확장·실행기
+수정은 빠른 빌드로 처리할 수 있다. 전체 빌드가 성공하면 이전 빠른 재사용 증명은 별도 파일로
+보존하고 다음 빠른 빌드에서 새 증명을 만든다.
+
+새 Autograde 확장 컴파일, 네이티브·WSL 실행기 검사, 패키지 복사와 무결성 검사는 계속 수행하므로
+디스크 성능에 따라 시간이 필요하다. 결과의 `quick-build.json`은 `local-fast-build`로
+기록되며 판매용 후보 묶음 생성기의 입력으로 사용할 수 없다. 실제 Windows 시험 PC에서
+새 패키지의 `Autograde IDE.exe`로 인증·과제 수령·제출·정상 및 비정상 종료 후 정리를
+확인한다. 다른 PC로 옮길 때는 실행기 하나만 복사하지 말고 새 패키지 전체를 옮긴다.
+기관 배포 후보와 공식 빌드 보고서가 필요하면 전체 빌드 절차를 사용한다.
+
+WSL 실습을 진행할 좌석은 먼저 별도로 만든 WSL2용 Linux payload를 WSL의 Linux 파일시스템에
+설치한다. 이후 새 Windows 패키지에 포함된 설치기를 실행해 배포판·일반 사용자·Linux 설치 위치를
+연결한다. 다음의 배포판 이름·사용자·설치 위치는 해당 좌석에 맞게 바꾼다.
+
+```powershell
+.\dist\windows-quick-01\wsl\Install-Shortcut.ps1 `
+  -Distribution 'Ubuntu-24.04' `
+  -User 'student' `
+  -LinuxInstallRoot '/home/student/.local/share/autograde-ide/releases/release-01/autograde-ide-linux-x64'
+```
+
+설치기가 WSL2·WSLg·Linux payload를 확인한 뒤 바탕 화면에 WSL용 바로가기를 만든다.
+배포판과 실행 위치를 아직 연결하지 않은 `wsl/Autograde IDE.exe`만 직접 실행하는 것은 설치 절차를
+대체하지 않는다. [WSL2 설치 안내](autograde-windows-wsl-app.md)에 Linux payload 설치 절차가 있다.
+빠른 빌드 보고서는 `windows-wsl2-launcher-checks`, `wsl.launcherIncluded: true`,
+`wsl.runtimeIncluded: false`, `wsl.runtime: separate-linux-payload`를 기록한다.
+실행기 검사는 설치한 학생 좌석에서의 WSL GUI 인수를 뜻하지 않으므로 `acceptance.windowsWsl2`는
+`not-tested`로 남긴다.
+
+2026-11-06 검증: 빠른 빌드 흐름과 이전 빌드 검증 테스트 통과. 정상 반복 실행,
+손상·누락 파일, 변경된 핵심 설정, 동시 빌드, 단계별 실패 시 이전 자료 보존, 공개 보고서의
+경로·PC명 제외, 필수 WSL 파일·버전 표식과 판매용 후보 판별을 검사했다. 기존 빌드·overlay·패키징 회귀도 통과했다.
+검사는 Mac에서 임시 Git 저장소와 모의 Windows 프로세스를 사용했다. PowerShell 래퍼는 정적
+검사이며 실제 Windows 빌드 성공·실행 시간·실습 종료 정리는 Windows PC에서 별도로 확인한다.
+
 ### Windows에서 확장 테스트가 실패하는 경우
 
 `EPERM ... symlink`가 테스트용 임시 폴더에서 발생하면 파일 링크를 만드는 권한이 없는
@@ -247,9 +333,11 @@ launch의 containment를 증명하지 못하거나 링크·권한·잠긴 파일
 격리하는 보안 경계나 시험 감독 기능으로 설명하지 않는다. Windows 동작은
 [Microsoft Job Objects 문서](https://learn.microsoft.com/en-us/windows/win32/procthread/job-objects)를 따른다.
 
-최종 `institution-ide-candidate-<run>-<attempt>` artifact에는 기본 세 native archive, 선택 WSL2
-두 archive, 각 `.sha256`, `build-*.json`, `artifact-manifest.json`, `SHA256SUMS`가 있다.
-manifest에는 크기·해시·버전·commit·실제 통과 검사와 선택 대상 관계를 기록한다.
+최종 `institution-ide-candidate-<run>-<attempt>` artifact에는 세 native archive, WSL2용 Linux
+payload archive, 각 `.sha256`, `build-*.json`, `artifact-manifest.json`, `SHA256SUMS`가 있다.
+Windows native archive의 `wsl/`에 WSL 실행기·설치기가 들어간다. 이전 방식의 별도 WSL launcher
+archive가 제공된 경우 함께 검증하고 보관한다. manifest에는 크기·해시·버전·commit·실제 통과
+검사와 WSL 구성요소의 관계를 기록한다.
 
 ```sh
 sha256sum -c SHA256SUMS
@@ -264,4 +352,4 @@ Developer ID/공증 및 Windows Authenticode는 수행하지 않는다. 기본 �
 정리와 서버 호환을 검증하고 그 증거를 기관 프로필에 연결한다.
 
 설치 안내: [Windows 네이티브](../../ide/code-oss/windows/INSTALL-NATIVE-WINDOWS.md),
-[Mac 앱](autograde-macos-app.md), [선택 Windows WSL2](autograde-windows-wsl-app.md).
+[Mac 앱](autograde-macos-app.md), [Windows WSL2](autograde-windows-wsl-app.md).

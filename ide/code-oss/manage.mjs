@@ -293,18 +293,27 @@ export function prepare(source, options = {}) {
   return { source, commit: upstream.commit, extensionVersion: marker.extensionVersion, backup: staging };
 }
 
-export function verify(source, options = {}) {
+/** Validate editor policy/product without requiring a newly compiled student extension. */
+export function verifyCoreOverlay(source, options = {}) {
   const upstream = options.upstream ?? readJson(path.join(here, 'upstream.json'));
   source = checkSource(path.resolve(source), upstream);
   verifyNodeCompatibility(source, upstream, { required: true });
   if (!fs.existsSync(path.join(source, markerName))) throw new Error('Run prepare first');
   const expectedProduct = productOverlay(JSON.parse(git(source, 'show', 'HEAD:product.json')));
   if (!equal(readJson(path.join(source, 'product.json')), expectedProduct)) throw new Error('Product overlay is out of date; run prepare');
+  const marker = readJson(path.join(source, markerName));
+  if (!equal(marker.policySources, hashes(expectedPolicy(source, options)))) throw new Error('IDE installation policy is stale; run prepare');
+  return {source, marker};
+}
+
+export function verify(source, options = {}) {
+  const upstream = options.upstream ?? readJson(path.join(here, 'upstream.json'));
+  const checked = verifyCoreOverlay(source, options);
+  source = checked.source;
+  const marker = checked.marker;
   const extensionRoot = path.resolve(options.extensionRoot ?? path.join(repoRoot, 'extensions/vscode'));
   const expected = extensionBundle(extensionRoot);
   const profile = walk(options.profileRoot ?? path.join(here, 'profile'));
-  const marker = readJson(path.join(source, markerName));
-  if (!equal(marker.policySources, hashes(expectedPolicy(source, options)))) throw new Error('IDE installation policy is stale; run prepare');
   if (marker.extensionInputsHash !== sourceFingerprint(extensionRoot)) throw new Error('Extension sources changed; run prepare to compile and bundle again');
   if (!equal(marker.extensions.autograde, hashes(expected))
       || !equal(marker.extensions['autograde-ide-profile'], hashes(profile))) {
