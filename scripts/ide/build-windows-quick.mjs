@@ -9,11 +9,12 @@ import {lockBuildDirectories} from './build-resume.mjs';
 import {inputFingerprint} from './build-inputs.mjs';
 import {assertBuildHost, readBuildSource, sha256} from './build-runtime.mjs';
 import {validateBaseline} from './windows-quick-baseline.mjs';
+import {discoverWindowsBuilds, newQuickOutput} from './windows-quick-discovery.mjs';
 import {prepare, verify, verifyCoreOverlay} from '../../ide/code-oss/manage.mjs';
 import {packageWindows, windowsWslInstallerFiles, windowsWslSupport} from '../../ide/code-oss/package-windows.mjs';
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const usage = 'Usage: build-windows-quick.mjs --source EXISTING_CODE_OSS --build-output COMPLETED_BUILD_OUTPUT --output NEW_DIRECTORY [--archive]';
+const usage = 'Usage: build-windows-quick.mjs [--source EXISTING_CODE_OSS] [--build-output COMPLETED_BUILD_OUTPUT] [--output NEW_DIRECTORY] [--archive]';
 const exists = file => {try {return fs.lstatSync(file);} catch (error) {if (error.code === 'ENOENT') return undefined; throw error;}};
 const read = file => JSON.parse(fs.readFileSync(file, 'utf8'));
 
@@ -28,8 +29,52 @@ export function parseQuickOptions(args) {
     if (!key || !args[index + 1] || args[index + 1].startsWith('--')) throw new Error(usage);
     options[key] = args[++index];
   }
-  if (!options.source || !options.buildOutput || !options.output) throw new Error(usage);
   return options;
+}
+
+function assertNewOutput(output) {
+  for (const file of [output, `${output}.zip`, `${output}.zip.sha256`]) {
+    if (exists(file)) throw new Error(`Quick build requires a new output; existing files are preserved: ${file}`);
+  }
+}
+
+// Discovery only locates records. Reuse still requires the ordinary locks and
+// complete artifact/runtime validation before any extension or launcher work.
+function selectBaseline(options, {root, host, pin, dependencies}) {
+  const {candidates, rejected} = discoverWindowsBuilds({repository:root, host, pin,
+    source:options.source, buildOutput:options.buildOutput});
+  const failures = [...rejected];
+  const output = options.output === undefined ? newQuickOutput(root) : path.resolve(options.output);
+  assertNewOutput(output);
+  for (const candidate of candidates) {
+    for (const [name, value] of Object.entries({source:candidate.source, buildOutput:candidate.buildOutput})) {
+      const info = exists(value);
+      if (!info?.isDirectory() || info.isSymbolicLink()) throw new Error(`Existing full-build ${name} directory is required. Run build-runtime.mjs --resume first.`);
+    }
+    // A lock conflict or unsafe output is not a reason to silently use another
+    // source tree. Only an unusable automatically selected baseline is skipped.
+    const locks = lockBuildDirectories([candidate.source, candidate.buildOutput, output]);
+    const [source, buildOutput, destination] = locks.directories;
+    try { assertNewOutput(destination); }
+    catch (error) { locks.close(); throw error; }
+    try {
+      console.log(`[quick] Verifying full build: ${buildOutput}`);
+      const started = Date.now();
+      const baseline = (dependencies.validateBaseline ?? validateBaseline)({repository:root, source, buildOutput, pin, host});
+      (dependencies.verifyCoreOverlay ?? verifyCoreOverlay)(source);
+      console.log(`[quick] Baseline verified in ${Date.now() - started} ms`);
+      console.log(`[quick] Source: ${source}\n[quick] Output: ${destination}`);
+      if (failures.length) console.log(`[quick] Skipped ${failures.length} unusable build record(s).`);
+      return {locks, baseline, source, buildOutput, destination};
+    } catch (error) {
+      locks.close();
+      if (options.buildOutput !== undefined) throw error;
+      failures.push({directory:buildOutput, reason:error.message});
+      console.warn(`[quick] Skipping ${buildOutput}: ${error.message}`);
+    }
+  }
+  const details = failures.slice(0, 6).map(item => `\n- ${item.directory}: ${item.reason}`).join('');
+  throw new Error(`No reusable Windows full build found under this repository's dist, build or .cache directories.${details}\nComplete build-runtime.mjs --target windows-x64 first, or resume the previous full build with --resume. Use --build-output COMPLETED_BUILD_OUTPUT to select a build outside these locations.`);
 }
 
 export const extensionChecks = [
@@ -72,29 +117,12 @@ export function buildWindowsQuick(options, dependencies = {}) {
   const pin = read(path.join(root, 'ide/code-oss/upstream.json'));
   assertBuildHost('windows-x64', pin, {platform: host.platform, arch: host.architecture, versions: {node: host.node}});
   if (typeof options.archive !== 'boolean') throw new Error('Archive option must be a boolean');
-  for (const [name, value] of Object.entries({source: options.source, buildOutput: options.buildOutput})) {
-    if (typeof value !== 'string' || !value) throw new Error(usage);
-    const info = exists(path.resolve(value));
-    if (!info?.isDirectory() || info.isSymbolicLink()) throw new Error(`Existing full-build ${name} directory is required. Run build-runtime.mjs --resume first.`);
+  for (const name of ['source', 'buildOutput', 'output']) {
+    if (options[name] !== undefined && (typeof options[name] !== 'string' || !options[name])) throw new Error(usage);
   }
-  if (typeof options.output !== 'string' || !options.output) throw new Error(usage);
-  const output = path.resolve(options.output);
-  for (const file of [output, `${output}.zip`, `${output}.zip.sha256`]) {
-    if (exists(file)) throw new Error(`Quick build requires a new output; existing files are preserved: ${file}`);
-  }
-  const locks = lockBuildDirectories([path.resolve(options.source), path.resolve(options.buildOutput), output]);
+  const {locks, baseline, source, destination} = selectBaseline(options, {root, host, pin, dependencies});
   let attempt;
   try {
-    const [source, buildOutput, destination] = locks.directories;
-    // Check again under the locks before touching the source or creating output.
-    for (const file of [destination, `${destination}.zip`, `${destination}.zip.sha256`]) {
-      if (exists(file)) throw new Error('Quick output appeared while acquiring locks; choose a new output');
-    }
-    console.log('[quick] Verifying full-build evidence and existing runtime files...');
-    const baselineStarted = Date.now();
-    const baseline = (dependencies.validateBaseline ?? validateBaseline)({repository: root, source, buildOutput, pin, host});
-    console.log(`[quick] Baseline verified in ${Date.now() - baselineStarted} ms`);
-    (dependencies.verifyCoreOverlay ?? verifyCoreOverlay)(source);
     const provenance = readBuildSource(root, {local: true});
     const fingerprints = () => Object.fromEntries(['extensions/vscode', 'ide/code-oss', 'scripts/ide'].map(directory => [directory, inputFingerprint(root, [directory])]));
     const inputs = fingerprints(), stages = [];

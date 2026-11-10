@@ -229,17 +229,33 @@ Code-OSS 실행 파일을 재사용하여 새 패키지를 만들 수 있다. Co
 
 ```powershell
 # autograde 저장소 루트에서 실행한다.
-# Source와 BuildOutput은 이전에 전체 빌드가 성공한 실제 경로로 바꾼다.
-.\scripts\ide\build-windows-quick.ps1 `
-  -Source .\.cache\code-oss-windows-26-local-01 `
-  -BuildOutput .\dist\windows-node26-local-01 `
-  -Output .\dist\windows-quick-01
+.\scripts\ide\build-windows-quick.ps1
 
-# 다른 시험 PC에 옮길 ZIP도 필요하면 새 출력 경로와 -Archive를 지정한다.
+# 다른 시험 PC에 옮길 ZIP도 필요하면 -Archive를 추가한다.
+.\scripts\ide\build-windows-quick.ps1 -Archive
+```
+
+인자를 생략하면 저장소의 `dist/`, `build/`, `.cache/`에서 완료된 전체 빌드를 찾아,
+같은 Windows x64 PC·고정 Node 버전에서 재사용할 수 있는 가장 최근의 빌드를 선택한다.
+손상된 보고서, 미완료 빌드, 다른 PC·OS·Node 버전의 기록은 건너뛴다. 선택한 전체 빌드의
+체크포인트에서 Code-OSS 소스 경로를 읽으며, 새 결과 폴더는 저장소의
+`dist/windows-quick-YYYYMMDD-HHmmss-<고유값>`에 자동으로 만든다. 선택한 경로와
+출력 위치는 콘솔에서 확인할 수 있다. 경로 입력을 묻는 프롬프트는 없다.
+탐색은 각 기준 폴더 아래 최대 3단계로 제한하며, 빌드 기록을 찾은 폴더의 산출물 내부는
+탐색하지 않는다. 다른 위치나 더 깊은 위치의 전체 빌드는 `-BuildOutput`으로 지정한다.
+
+특정 전체 빌드를 사용하려면 `-BuildOutput`만 지정해도 된다. `-Source`만 지정하면 그
+Code-OSS 소스를 사용한 전체 빌드로 탐색을 좁힌다. `-Output`도 필요할 때만 지정한다.
+
+```powershell
+.\scripts\ide\build-windows-quick.ps1 -BuildOutput .\dist\windows-node26-local-01
+.\scripts\ide\build-windows-quick.ps1 -Source .\.cache\code-oss-windows-26-local-01
+
+# 이전처럼 세 경로를 모두 지정할 수도 있다. 실제 전체 빌드 경로로 바꾼다.
 .\scripts\ide\build-windows-quick.ps1 `
   -Source .\.cache\code-oss-windows-26-local-01 `
   -BuildOutput .\dist\windows-node26-local-01 `
-  -Output .\dist\windows-quick-02 `
+  -Output .\dist\windows-quick-01 `
   -Archive
 ```
 
@@ -251,14 +267,16 @@ Code-OSS 실행 파일을 재사용하여 새 패키지를 만들 수 있다. Co
 기준으로 해석한다. Node 진입점은 다음과 같이 직접 실행할 수도 있다.
 
 ```powershell
-node .\scripts\ide\build-windows-quick.mjs --source .\.cache\code-oss-windows-26-local-01 --build-output .\dist\windows-node26-local-01 --output .\dist\windows-quick-03
-# ZIP을 추가하려면 --archive를 붙인다.
+node .\scripts\ide\build-windows-quick.mjs
+# --source, --build-output, --output은 각각 선택 사항이며 ZIP은 --archive로 추가한다.
 ```
 
 빠른 빌드는 같은 Windows x64 PC·고정 Node 버전의 완료 기록과 기존 산출물을 검사한다.
-Code-OSS 버전, 핵심 정책이나 런타임 의존성이 달라졌거나 검증에 필요한 파일이 없으면
-중단하고 전체 빌드의 `--resume`을 안내한다. 의존성을 자동 재설치하거나 완료 기록을
-추측하지 않는다. 안내된 전체 빌드는 기존 `--source`·`--output`과 `--local` 사용 여부를
+자동 탐색에서도 기존 잠금·완료 기록·산출물 검증을 그대로 수행한다. Code-OSS 버전,
+핵심 정책이나 런타임 의존성이 달라졌거나 검증에 필요한 파일이 없어 사용 가능한 전체 빌드를
+찾지 못하면 중단하고 전체 빌드 또는 `--resume`을 안내한다. 전체 컴파일로 자동 전환하거나
+의존성을 자동 재설치하거나 완료 기록을 추측하지 않는다. 안내된 전체 빌드는 기존
+`--source`·`--output`과 `--local` 사용 여부를
 유지하여 실행한다. 처음부터 전체 빌드를 완료하지 못했다면 먼저 그 빌드를 마쳐야 한다.
 
 이전 버전에서 수정 파일이 있는 상태로 만든 `--local` 빌드는 핵심 입력의 별도 기록이 없을 수 있다.
@@ -296,8 +314,9 @@ WSL 실습을 진행할 좌석은 먼저 별도로 만든 WSL2용 Linux payload�
 2026-11-06 검증: 빠른 빌드 흐름과 이전 빌드 검증 테스트 통과. 정상 반복 실행,
 손상·누락 파일, 변경된 핵심 설정, 동시 빌드, 단계별 실패 시 이전 자료 보존, 공개 보고서의
 경로·PC명 제외, 필수 WSL 파일·버전 표식과 판매용 후보 판별을 검사했다. 기존 빌드·overlay·패키징 회귀도 통과했다.
-검사는 Mac에서 임시 Git 저장소와 모의 Windows 프로세스를 사용했다. PowerShell 래퍼는 정적
-검사이며 실제 Windows 빌드 성공·실행 시간·실습 종료 정리는 Windows PC에서 별도로 확인한다.
+검사는 Mac에서 임시 Git 저장소와 모의 Windows 프로세스를 사용했다. PowerShell 래퍼의
+인자 없는 실행·상대 경로 전달 검사는 Windows에서만 실행되며 Mac에서는 건너뛴다.
+실제 Windows 빌드 성공·실행 시간·실습 종료 정리는 Windows PC에서 별도로 확인한다.
 
 ### Windows에서 확장 테스트가 실패하는 경우
 

@@ -1,8 +1,8 @@
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory = $true)][ValidateNotNullOrEmpty()][string]$Source,
-    [Parameter(Mandatory = $true)][ValidateNotNullOrEmpty()][string]$BuildOutput,
-    [Parameter(Mandatory = $true)][ValidateNotNullOrEmpty()][string]$Output,
+    [ValidateNotNullOrEmpty()][string]$Source,
+    [ValidateNotNullOrEmpty()][string]$BuildOutput,
+    [ValidateNotNullOrEmpty()][string]$Output,
     [switch]$Archive
 )
 
@@ -10,15 +10,22 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 # Resolve user paths against the caller's location, not this script's directory.
-# Output need not exist; the Node entry point validates ownership and freshness.
+# Omitted paths are discovered by Node; output need not exist. The Node entry
+# point validates the completed baseline and output ownership and freshness.
 # Every result includes the native launcher and the checked wsl/ launcher and
 # installer. WSL2/WSLg and the separately built Linux payload are not installed.
 $quickBuildArguments = @(
-    (Join-Path $PSScriptRoot 'build-windows-quick.mjs'),
-    '--source', $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Source),
-    '--build-output', $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($BuildOutput),
-    '--output', $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Output)
+    (Join-Path $PSScriptRoot 'build-windows-quick.mjs')
 )
+if ($PSBoundParameters.ContainsKey('Source')) {
+    $quickBuildArguments += '--source', $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Source)
+}
+if ($PSBoundParameters.ContainsKey('BuildOutput')) {
+    $quickBuildArguments += '--build-output', $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($BuildOutput)
+}
+if ($PSBoundParameters.ContainsKey('Output')) {
+    $quickBuildArguments += '--output', $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Output)
+}
 if ($Archive) { $quickBuildArguments += '--archive' }
 
 $nodeCommand = Get-Command node -CommandType Application -ErrorAction Stop

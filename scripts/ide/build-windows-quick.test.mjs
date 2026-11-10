@@ -9,6 +9,7 @@ import {buildWindowsQuick, parseQuickOptions, extensionChecks} from './build-win
 import {openBuildJournal} from './build-resume.mjs';
 import {verifyReports} from './finalize-artifacts.mjs';
 import {windowsWslInstallerFiles, windowsWslSupport} from '../../ide/code-oss/package-windows.mjs';
+import {requiredBaselineStages} from './windows-quick-baseline.mjs';
 
 const read = file => JSON.parse(fs.readFileSync(file, 'utf8'));
 const write = (root, relative, contents) => {
@@ -112,11 +113,31 @@ function assertUnpublished(f) {
   for (const directory of [f.source, f.buildOutput, f.output]) assert.equal(fs.existsSync(lockPath(directory)), false);
 }
 
-test('CLI requires the three named paths and defaults to folder-only packaging', () => {
+function discoveryRecord(f, name, time = Date.now()) {
+  const buildOutput = path.join(f.repository, 'dist', name);
+  const checks = [...requiredBaselineStages, 'windows-packaged-cli-version', 'windows-native-job-acl-msvc-checks'];
+  const report = {schema:1, buildTarget:'windows-x64', includeWsl:false, status:'local-build', buildMode:'local',
+    sourceDirty:false, sourceRevision:f.git(['rev-parse', 'HEAD']).trim(), extensionVersion:'0.6.0', upstream:f.pin,
+    host:f.host, acceptance:{productionReady:false, institution:'not-tested', windowsWsl2:'not-tested'},
+    checks:checks.map(name => ({name, result:'passed'})), artifacts:[{target:'windows-native', file:'original.zip'}]};
+  write(buildOutput, 'build-windows-x64.json', JSON.stringify(report));
+  write(buildOutput, '.autograde-build-state.json', JSON.stringify({schema:1, source:f.source, output:buildOutput,
+    identity:{...f.host, target:'windows-x64', upstream:f.pin, local:true, includeWsl:false},
+    steps:Object.fromEntries(requiredBaselineStages.map(name => [name,
+      {status:'passed', signature:'a'.repeat(64), token:name, dependencies:{}, value:{}}]))}));
+  fs.utimesSync(path.join(buildOutput, 'build-windows-x64.json'), time / 1000, time / 1000);
+  return buildOutput;
+}
+
+test('CLI accepts automatic discovery and optional path overrides with folder-only defaults', () => {
   const args = ['--source', 'existing source', '--build-output', 'completed build', '--output', 'new output'];
+  assert.deepEqual(parseQuickOptions([]), {archive:false});
+  assert.deepEqual(parseQuickOptions(['--archive']), {archive:true});
+  assert.deepEqual(parseQuickOptions(['--build-output', 'completed build']), {buildOutput:'completed build', archive:false});
+  assert.deepEqual(parseQuickOptions(args.slice(0, -2)), {source:'existing source', buildOutput:'completed build', archive:false});
   assert.deepEqual(parseQuickOptions(args), {source:'existing source', buildOutput:'completed build', output:'new output', archive:false});
   assert.equal(parseQuickOptions(['--archive', ...args]).archive, true);
-  for (const invalid of [[], args.slice(0, -1), args.slice(0, -2), [...args, '--archive', 'false'],
+  for (const invalid of [args.slice(0, -1), [...args, '--archive', 'false'],
     [...args, '--archive', '--archive'], [...args, '--source', 'other'], [...args, '--local'],
     [...args, '--skip-tests'], [...args, '--resume'], ['--source', '--output', 'out'], [...args, '--output=other']]) {
     assert.throws(() => parseQuickOptions(invalid), /Usage:/);
@@ -130,6 +151,94 @@ test('host and exact Node pin are checked before any build work', t => {
     assertUnpublished(f);
   }
   assert.deepEqual(f.events, []);
+});
+
+test('no-argument builds discover the latest full build and create distinct outputs on repeat runs', t => {
+  const f = fixture(t), older = discoveryRecord(f, 'full-older', 1000), latest = discoveryRecord(f, 'full-latest', 2000);
+  const before = tree(latest), options = parseQuickOptions([]);
+  const first = buildWindowsQuick(options, f.dependencies);
+  assert.equal(f.baselines[0].buildOutput, latest);
+  assert.equal(f.baselines[0].source, f.source);
+  assert.equal(path.dirname(first.directory), path.join(f.repository, 'dist'));
+  assert.match(path.basename(first.directory), /^windows-quick-\d{8}-\d{6}-[a-f0-9]{8}$/);
+  assert.equal(fs.existsSync(path.join(first.directory, 'Autograde IDE.exe')), true);
+  const original = tree(first.directory), second = buildWindowsQuick(options, f.dependencies);
+  assert.notEqual(second.directory, first.directory);
+  assert.equal(f.baselines[1].buildOutput, latest);
+  assert.deepEqual(tree(first.directory), original);
+  assert.deepEqual(tree(latest), before);
+  assert.equal(fs.existsSync(lockPath(latest)), false);
+  assert.equal(fs.existsSync(lockPath(older)), false);
+});
+
+test('build-output alone derives its source and automatically names the destination', t => {
+  const f = fixture(t), buildOutput = discoveryRecord(f, 'full-selected');
+  const result = buildWindowsQuick({buildOutput, archive:true}, f.dependencies);
+  assert.equal(f.baselines[0].buildOutput, buildOutput);
+  assert.equal(f.baselines[0].source, f.source);
+  assert.equal(result.archive, `${result.directory}.zip`);
+  assert.equal(fs.existsSync(result.archive), true);
+});
+
+test('automatic discovery falls back only when a full baseline fails verification under locks', t => {
+  const f = fixture(t), older = discoveryRecord(f, 'full-older', 1000), newer = discoveryRecord(f, 'full-newer', 2000);
+  const validate = f.dependencies.validateBaseline, attempted = [];
+  f.dependencies.validateBaseline = options => {
+    attempted.push(options.buildOutput);
+    assert.equal(fs.existsSync(lockPath(options.source)), true);
+    assert.equal(fs.existsSync(lockPath(options.buildOutput)), true);
+    if (options.buildOutput === newer) throw new Error('original ZIP is missing');
+    return validate(options);
+  };
+  const result = buildWindowsQuick({archive:false}, f.dependencies);
+  assert.deepEqual(attempted, [newer, older]);
+  assert.equal(f.events.filter(event => event === 'prepare').length, 1);
+  assert.equal(fs.existsSync(result.directory), true);
+  assert.equal(fs.existsSync(lockPath(newer)), false);
+  assert.equal(fs.existsSync(lockPath(older)), false);
+});
+
+test('explicitly selected invalid baseline does not silently build another source', t => {
+  const f = fixture(t), selected = discoveryRecord(f, 'full-selected', 1000);
+  discoveryRecord(f, 'full-other', 2000);
+  f.dependencies.validateBaseline = () => {throw new Error('selected baseline is invalid');};
+  assert.throws(() => buildWindowsQuick({buildOutput:selected, archive:false}, f.dependencies), /selected baseline is invalid/);
+  assert.deepEqual(f.events, []);
+  assert.equal(fs.existsSync(lockPath(selected)), false);
+});
+
+test('a busy discovered build is reported without falling back to an older one', t => {
+  const f = fixture(t), latest = discoveryRecord(f, 'full-latest', 2000);
+  discoveryRecord(f, 'full-older', 1000);
+  const full = openBuildJournal({source:f.source, output:path.join(f.directory, 'active-full'), identity:{test:'active'}});
+  try {
+    assert.throws(() => buildWindowsQuick({archive:false}, f.dependencies), /locked by process/);
+    assert.deepEqual(f.events, []);
+    assert.equal(fs.existsSync(lockPath(latest)), false);
+  } finally {full.close();}
+});
+
+test('no usable records give full-build guidance and never start compilation', t => {
+  const f = fixture(t);
+  assert.throws(() => buildWindowsQuick({archive:false}, f.dependencies), /No reusable Windows full build.*\nComplete build-runtime.mjs/s);
+  assert.deepEqual(f.events, []);
+  assert.equal(fs.existsSync(path.join(f.repository, 'dist')), false);
+  const buildOutput = discoveryRecord(f, 'full-unusable');
+  f.dependencies.validateBaseline = () => {throw new Error('baseline core changed');};
+  assert.throws(() => buildWindowsQuick({archive:false}, f.dependencies), /baseline core changed.*--resume/s);
+  assert.deepEqual(f.events, []);
+  assert.equal(fs.existsSync(lockPath(buildOutput)), false);
+  assert.equal(fs.readdirSync(path.join(f.repository, 'dist')).length, 1);
+});
+
+test('failure after preparation starts never falls back to another discovered baseline', t => {
+  const f = fixture(t), latest = discoveryRecord(f, 'full-latest', 2000);
+  discoveryRecord(f, 'full-older', 1000);
+  f.dependencies.prepare = () => {throw new Error('extension compile failed');};
+  assert.throws(() => buildWindowsQuick({archive:false}, f.dependencies), /extension compile failed/);
+  assert.equal(f.baselines.length, 1);
+  assert.equal(f.baselines[0].buildOutput, latest);
+  assert.equal(fs.existsSync(lockPath(f.source)), false);
 });
 
 test('missing or non-directory baselines and nonboolean archive options cannot prepare a build', t => {
@@ -421,8 +530,10 @@ test('PowerShell wrapper resolves caller paths and forwards optional archive wit
   const script = fs.readFileSync(new URL('./build-windows-quick.ps1', import.meta.url), 'utf8');
   for (const name of ['Source', 'BuildOutput', 'Output']) {
     assert.match(script, new RegExp(`GetUnresolvedProviderPathFromPSPath\\(\\$${name}\\)`));
-    assert.match(script, new RegExp(`\\[Parameter\\(Mandatory = \\$true\\)\\]\\[ValidateNotNullOrEmpty\\(\\)\\]\\[string\\]\\$${name}`));
+    assert.match(script, new RegExp(`\\[ValidateNotNullOrEmpty\\(\\)\\]\\[string\\]\\$${name}`));
+    assert.match(script, new RegExp(`\\$PSBoundParameters\\.ContainsKey\\('${name}'\\)`));
   }
+  assert.doesNotMatch(script, /Mandatory\s*=\s*\$true|Read-Host/);
   assert.match(script, /\[switch\]\$Archive/);
   assert.match(script, /if \(\$Archive\) \{ \$quickBuildArguments \+= '--archive' \}/);
   assert.match(script, /& \$nodeCommand\.Path @quickBuildArguments/);
