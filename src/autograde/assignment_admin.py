@@ -5,6 +5,8 @@ service. It accepts files, never user-supplied paths, commands or grader code.
 """
 from __future__ import annotations
 
+from contextlib import nullcontext
+
 import argparse
 import hashlib
 import io
@@ -494,8 +496,8 @@ class AssignmentAdminService:
             self._event(connection, course, draft_id, "created")
         return self.get_draft(course, draft_id)
 
-    def get_draft(self, course, draft_id):
-        with self.state._connection() as connection:
+    def get_draft(self, course, draft_id, *, _connection=None):
+        with (self.state._connection() if _connection is None else nullcontext(_connection)) as connection:
             row = self._row(connection, course, draft_id)
             result = {**json.loads(row["document_json"]), **{key: row[key] for key in row.keys() if key != "document_json"}}
             result["uploads"] = [json.loads(upload[0]) for upload in connection.execute("SELECT metadata_json FROM instructor_assignment_uploads WHERE draft_id=? ORDER BY role", (draft_id,))]
@@ -530,6 +532,44 @@ class AssignmentAdminService:
         if result['due_at'] and result['due_at'] <= utc_iso():
             result['can_publish'] = False
         return result
+
+    @staticmethod
+    def _save_event(connection, course, draft_id, revision, request_key, kind):
+        """Persist response-loss evidence in the same transaction as the edit.
+
+        The random correlation key contains no content or identity and is not an
+        authorization credential. A rollback also rolls back this evidence.
+        """
+        if request_key is None:
+            return
+        if not isinstance(request_key, str) or not re.fullmatch(r'[a-f0-9]{32}', request_key):
+            raise ValueError('저장 요청 번호를 확인해 주세요.')
+        AssignmentAdminService._event(connection, course, draft_id,
+            f'save_confirmed:{int(revision) + 1}:{kind}:{request_key}')
+
+    def recover_save(self, course, draft_id, revision, request_key, kind):
+        if not isinstance(request_key, str) or not re.fullmatch(r'[a-f0-9]{32}', request_key):
+            raise ValueError('저장 요청 번호를 확인해 주세요.')
+        if kind not in {'problem', 'tests', 'uploads/starter', 'uploads/solution', 'uploads/negative', 'grading-template'}:
+            raise ValueError('저장 영역을 확인해 주세요.')
+        revision = int(revision)
+        if revision < 1:
+            raise ValueError('저장 버전을 확인해 주세요.')
+        with self.state._connection() as connection:
+            connection.execute('BEGIN')
+            draft = self.get_draft(course, draft_id, _connection=connection)
+            confirmed = connection.execute(
+                'SELECT 1 FROM instructor_assignment_events WHERE course_key=? AND draft_id=? AND action=?',
+                (course, draft_id, f'save_confirmed:{revision + 1}:{kind}:{request_key}'),
+            ).fetchone() is not None
+            try:
+                self._editable(connection, course, draft_id, draft['revision'])
+                editable = True
+            except PlatformConflict:
+                editable = False
+            status = ('locked' if not editable else 'saved' if confirmed and draft['revision'] == revision + 1
+                      else 'not_saved' if not confirmed and draft['revision'] == revision else 'conflict')
+            return {'draft': draft, 'status': status, 'request_saved': confirmed}
 
     def preview_files(self, course, draft_id):
         draft = self.get_draft(course, draft_id)
@@ -587,14 +627,14 @@ class AssignmentAdminService:
         draft = self.get_draft(course, draft_id)
         return self._cached_archive(_grading_template_archive(draft), "grading-templates")
 
-    def save_starter_template(self, course, draft_id, revision):
+    def save_starter_template(self, course, draft_id, revision, *, save_request=None):
         """Save the generated starter as the direct draft's real student upload."""
         draft = self.get_draft(course, draft_id)
         if draft["mode"] != "direct":
             raise PlatformConflict("예제 모드는 설정 자체가 서버 템플릿으로 저장됩니다.")
-        return self.upload_zip(course, draft_id, revision, "starter", _template_archive(draft))
+        return self.upload_zip(course, draft_id, revision, "starter", _template_archive(draft), save_request=save_request)
 
-    def import_grading_template(self, course, draft_id, revision, content):
+    def import_grading_template(self, course, draft_id, revision, content, *, save_request=None):
         """Atomically replace direct-mode positive/negative sources and test configuration."""
         self._course(course)
         draft = self.get_draft(course, draft_id)
@@ -636,6 +676,7 @@ class AssignmentAdminService:
                     (draft_id, role, archives[role], json.dumps(metadata[role])),
                 )
             self._event(connection, course, draft_id, "imported_grading_template")
+            self._save_event(connection, course, draft_id, revision, save_request, "grading-template")
         return self.get_draft(course, draft_id)
 
     def list_drafts(self, course):
@@ -648,7 +689,7 @@ class AssignmentAdminService:
             )]
         return [self.get_draft(course, draft_id) for draft_id in ids]
 
-    def update_draft(self, course, draft_id, revision, **fields):
+    def update_draft(self, course, draft_id, revision, *, save_request=None, **fields):
         self._course(course)
         with self.state._write() as connection:
             row = self._editable(connection, course, draft_id, revision)
@@ -658,6 +699,7 @@ class AssignmentAdminService:
                 connection.execute("DELETE FROM instructor_assignment_uploads WHERE draft_id=?", (draft_id,))
             connection.execute("UPDATE instructor_assignment_drafts SET document_json=?,revision=revision+1,updated_at=? WHERE draft_id=?", (json.dumps(document), utc_iso(), draft_id))
             self._event(connection, course, draft_id, "updated")
+            self._save_event(connection, course, draft_id, revision, save_request, "tests" if "tests" in fields else "problem")
         return self.get_draft(course, draft_id)
 
     def get_assignment_document(self, course, assignment_id):
@@ -696,7 +738,7 @@ class AssignmentAdminService:
             )
             self._event(connection, course, draft_id, "deleted")
 
-    def upload_zip(self, course, draft_id, revision, role, content):
+    def upload_zip(self, course, draft_id, revision, role, content, *, save_request=None):
         self._course(course)
         if role not in ("starter", "solution", "negative"):
             raise ValueError("파일 역할을 확인하세요.")
@@ -715,6 +757,7 @@ class AssignmentAdminService:
             connection.execute("INSERT INTO instructor_assignment_uploads VALUES (?,?,?,?) ON CONFLICT(draft_id,role) DO UPDATE SET archive=excluded.archive,metadata_json=excluded.metadata_json", (draft_id, role, content, json.dumps(metadata)))
             connection.execute("UPDATE instructor_assignment_drafts SET revision=revision+1,updated_at=? WHERE draft_id=?", (utc_iso(), draft_id))
             self._event(connection, course, draft_id, "uploaded_" + role)
+            self._save_event(connection, course, draft_id, revision, save_request, "uploads/" + role)
         return self.get_draft(course, draft_id)
 
     @staticmethod

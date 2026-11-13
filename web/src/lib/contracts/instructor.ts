@@ -1,10 +1,12 @@
-export type Course = { course_key: string; name: string; code: string; section: string; status: string };
+export type NavigationGroup = { label: string; items: { id: string; label: string; href: string }[] };
+export type Course = { course_key: string; name: string; code: string; section: string; status: string; navigation?: NavigationGroup[] };
 export type Metadata = { contract_version: "1"; request_id: string; server_time: string };
 export type Bootstrap = Metadata & {
   principal: { id: string; display_name: string; mode: "shared" | "personal" };
   courses: Course[];
   csrf: string;
   capabilities: string[];
+  portal_navigation?: NavigationGroup[];
 };
 export type PreviousBest = { submission_id: string; received_at: string; score: number; max_score: number };
 export type ResultRow = {
@@ -60,7 +62,25 @@ function metadata(value: ObjectValue): Metadata {
 }
 function course(value: unknown): Course {
   const c = object(value);
-  return { course_key: courseKey(c.course_key), name: str(c.name), code: str(c.code), section: str(c.section), status: str(c.status) };
+  const key = courseKey(c.course_key);
+  return { course_key: key, name: str(c.name), code: str(c.code), section: str(c.section), status: str(c.status),
+    ...(c.navigation === undefined ? {} : { navigation: navigationGroups(c.navigation, key) }) };
+}
+
+function navigationGroups(value: unknown, key?: string): NavigationGroup[] {
+  const seen = new Set<string>();
+  const coursePaths = ["", "classroom", "assignments", "submissions", "gradebook", "rubrics", "content", "materials", "exam-papers", "students", "registrations", "environments", "extensions", "settings"];
+  const allowed = new Set(key ? coursePaths.map(path => `/courses/${key}/instructor${path ? `/${path}` : ""}`)
+    : ["/instructor", "/instructor/admin", "/instructor/operations", "/instructor/account", "/instructor/accounts", "/", "/student"]);
+  return array(value, entry => {
+    const group = object(entry);
+    return { label: str(group.label), items: array(group.items, entry => {
+      const item = object(entry); const id = str(item.id); const href = str(item.href);
+      if (!/^[a-z][a-z-]*$/.test(id) || seen.has(id) || !allowed.has(href)) throw new ContractError();
+      seen.add(id);
+      return { id, href, label: str(item.label) };
+    }) };
+  });
 }
 export function parseBootstrap(value: unknown): Bootstrap {
   const v = object(value); const p = object(v.principal);
@@ -68,7 +88,8 @@ export function parseBootstrap(value: unknown): Bootstrap {
   const courses = array(v.courses, course);
   if (new Set(courses.map(c => c.course_key)).size !== courses.length) throw new ContractError();
   return { ...metadata(v), principal: { id: str(p.id), display_name: str(p.display_name), mode: p.mode },
-    csrf: str(v.csrf), courses, capabilities: array(v.capabilities, str) };
+    csrf: str(v.csrf), courses, capabilities: array(v.capabilities, str),
+    ...(v.portal_navigation === undefined ? {} : { portal_navigation: navigationGroups(v.portal_navigation) }) };
 }
 function previousBest(value: unknown): PreviousBest {
   const v = object(value);

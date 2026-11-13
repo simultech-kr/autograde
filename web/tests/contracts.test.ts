@@ -8,6 +8,17 @@ test("bootstrap accepts only current version and explicit server capabilities", 
   assert.throws(() => parseBootstrap({ ...sampleBootstrap, contract_version: "2" }), ContractError);
   assert.throws(() => parseBootstrap({ ...sampleBootstrap, courses: [sampleBootstrap.courses[0], sampleBootstrap.courses[0]] }), ContractError);
 });
+
+test("navigation contract rejects cross-course, remote, duplicate and action destinations", () => {
+  const item = { id: "materials", label: "학생별 자료 배포", href: "/courses/come2201/instructor/materials" };
+  const payload = (items: object[]) => ({ ...sampleBootstrap, courses: [{ ...sampleBootstrap.courses[0], navigation: [{ label: "학습자료", items }] }] });
+  assert.equal(parseBootstrap(payload([item])).courses[0].navigation?.[0].items[0].href, item.href);
+  for (const href of ["https://evil.test/", "/courses/other/instructor/materials", "/courses/come2201/instructor/materials/../settings", "/courses/come2201/instructor/status", "//evil.test/"]) {
+    assert.throws(() => parseBootstrap(payload([{ ...item, href }])), ContractError);
+  }
+  assert.throws(() => parseBootstrap(payload([item, item])), ContractError);
+  assert.throws(() => parseBootstrap({ ...sampleBootstrap, portal_navigation: [{ label: "계정", items: [{ ...item, href: "/instructor/logout" }] }] }), ContractError);
+});
 test("latest zero is retained independently of previous best 100 and pending null", () => {
   const r = parseResults(sampleResults);
   assert.equal(r.rows[0].score, 0); assert.equal(r.rows[0].previous_best?.score, 100);

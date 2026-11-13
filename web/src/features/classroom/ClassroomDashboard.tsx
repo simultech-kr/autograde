@@ -135,7 +135,7 @@ export function ClassroomDashboard() {
   const clearSelection = () => { setSelected(null); setDetail(null); setData(null); setLastSuccess(""); setAttention("all"); };
   const attentionCount = validData?.students.filter(s => needsAttention(s, "attention", validData.server_time)).length || 0;
   const students = stableStudents(validData?.students || []).filter(s => (!search || `${s.student_key} ${s.student_name}`.includes(search)) && needsAttention(s, attention, validData?.server_time || "") && (!assignment || filter === "all" || (filter === "submitted" ? s.submission.submitted : !s.submission.submitted && s.submission.state !== "not_assigned")));
-  return <AppShell testId="classroom-dashboard" course={selectedCourse(identity?.courses, course)} section="classroom" resultsEnabled={identity?.capabilities.includes("results.read")}>
+  return <AppShell testId="classroom-dashboard" course={selectedCourse(identity?.courses, course)} section="classroom" portalNavigation={identity?.portal_navigation} resultsEnabled={identity?.capabilities.includes("results.read")}>
     <PageHeading eyebrow="수업 운영 / 실습 교실" title="학생 활동" description="IDE 연결·수업 활동·공식 제출을 확인하고 학생에게 IDE 작업을 요청합니다." label="실시간 · 학생 확인 후 실행" />
     {error && <div role="alert" className={styles.notice}><p>{error.message}</p>{error.terminal || !identity ? <a href={classroomEntry(course)}>교수자 인증</a> : <button onClick={() => setRefresh(n => n + 1)}>다시 연결</button>}{!identity && !error.terminal && <button onClick={() => setBoot(n => n + 1)}>다시 조회</button>}</div>}
     {!identity && !error && <p role="status">교수자 접근 권한 확인 중… <a href={classroomEntry(course)}>교수자 인증</a></p>}

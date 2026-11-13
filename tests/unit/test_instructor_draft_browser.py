@@ -58,18 +58,19 @@ function environment() {
   const forms = [problem, tests, starter, grading, checks];
   const document = new Element(); const window = new Element();
   const overview = new Element(); const published = new Element();
-  document.querySelector = selector => ({'[data-draft-save-overview]': overview, '#draft-publish': published})[selector] || null;
+  const recovery = new Element({hidden: true}); const recoverButton = new Element(); const conflict = new Element({hidden: true}); const serverValues = new Element();
+  document.querySelector = selector => ({'[data-draft-save-overview]': overview, '#draft-publish': published, '[data-draft-recovery]': recovery, '[data-draft-recover]': recoverButton, '[data-draft-conflict]': conflict, '[data-draft-server-values]': serverValues})[selector] || null;
   document.querySelectorAll = selector => ({'form[data-dirty-guard]': forms.filter(f => f.hasAttribute('data-dirty-guard')), 'form': forms})[selector] || [];
   window.location = {href: 'https://class.example' + path, origin: 'https://class.example', reload() { throw Error('Unexpected navigation'); }};
   window.confirm = () => { throw Error('Unexpected data-loss confirmation'); };
   const requests = [];
-  const context = {window, document, URL, URLSearchParams, FormData, AbortController, Event, setTimeout: () => 1, clearTimeout() {},
+  const context = {window, document, URL, URLSearchParams, FormData, AbortController, Event, crypto: require('node:crypto').webcrypto, setTimeout: () => 1, clearTimeout() {},
     fetch(url, options) { return new Promise((resolve, reject) => { requests.push({url, options, resolve, reject}); }); }};
   for (const key of ['localStorage', 'sessionStorage', 'indexedDB']) Object.defineProperty(context, key, {get() { throw Error('Unexpected persistence'); }});
   vm.runInNewContext(source, context);
   const submit = form => { const event = {target: form, defaultPrevented: false, preventDefault() { this.defaultPrevented = true; }}; document.fire('submit', event); return event; };
   const dirtyExit = () => { const event = {prevented: false, preventDefault() { this.prevented = true; }}; window.fire('beforeunload', event); return event.prevented; };
-  return {problem, tests, starter, grading, checks, forms, document, requests, submit, dirtyExit, overview, published};
+  return {problem, tests, starter, grading, checks, forms, document, requests, submit, dirtyExit, overview, published, recovery, recoverButton, conflict, serverValues};
 }
 const receipt = (previous = 1, changes = {}) => ({ok: true, path, previous_revision: previous, revision: previous + 1,
   values: {}, summary: ['deadline', 'starter', 'grading', 'tests', 'recheck'], uploads: {}, can_check: true, title: 'Saved', updated_at: 'now', grading_status: 'stored, not validated', ...changes});
@@ -141,9 +142,73 @@ const finish = async (request, data = receipt(), status = 200, type = 'applicati
     assert.equal(env.problem.field('title').value, 'Never discard', failure);
     assert.equal(env.starter.field('file').files, files, failure);
     assert.ok(env.forms.every(f => f.field('revision').value === '1'), failure);
-    assert.match(env.problem.status.textContent, /새 탭/, failure);
+    assert.match(env.problem.status.textContent, /저장 상태 다시 확인/, failure);
+    assert.equal(env.recovery.hidden, false);
     env.submit(env.problem); assert.equal(env.requests.length, 1, 'no uncertain automatic or blind manual replay: ' + failure);
   }
+
+  const lostResponse = async env => {
+    env.requests[0].reject(Error('connection lost'));
+    await new Promise(resolve => setImmediate(resolve));
+    env.recoverButton.fire('click');
+    assert.equal(env.requests[1].options.method, 'GET');
+    assert.equal(env.requests[1].options.body, undefined, 'recovery does not resend teacher input');
+  };
+  const recoveryResult = (env, status, data, requestSaved = false, changes = {}) => ({ok: true, path,
+    save_request: env.requests[0].options.body.get('save_request'), previous_revision: 1,
+    save_kind: 'problem', status, request_saved: requestSaved, receipt: data, ...changes});
+
+  env = environment(); env.problem.field('title').value = 'Retry me'; env.submit(env.problem);
+  await lostResponse(env);
+  await finish(env.requests[1], recoveryResult(env, 'not_saved', receipt(0)));
+  assert.match(env.problem.status.textContent, /저장되지 않은 상태/);
+  assert.equal(env.problem.field('title').value, 'Retry me');
+  assert.equal(env.problem.field('revision').value, '1');
+  assert.equal(env.requests.length, 2, 'recovery does not automatically replay');
+  env.submit(env.problem); assert.equal(env.requests.length, 3, 'explicit retry is available after precommit failure');
+  await finish(env.requests[2]);
+
+  env = environment(); env.problem.field('title').value = 'Committed'; env.tests.field('test_0_title').value = 'Keep other edits';
+  env.submit(env.problem); await lostResponse(env);
+  await finish(env.requests[1], recoveryResult(env, 'saved', receipt(1, {values: {title: 'Committed'}}), true));
+  assert.equal(env.problem.field('revision').value, '2');
+  assert.equal(env.problem.field('title').value, 'Committed');
+  assert.equal(env.tests.field('test_0_title').value, 'Keep other edits');
+  assert.match(env.overview.textContent, /서버 저장 기록 확인 완료/);
+  assert.equal(env.recovery.hidden, true);
+  env.submit(env.problem); assert.equal(env.requests[2].options.body.get('revision'), '2'); await finish(env.requests[2], receipt(2));
+
+  env = environment(); env.problem.field('title').value = 'Committed'; env.submit(env.problem);
+  await lostResponse(env); env.problem.field('title').value = 'New local edit';
+  await finish(env.requests[1], recoveryResult(env, 'saved', receipt(1, {values: {title: 'Committed'}}), true));
+  assert.equal(env.problem.field('title').value, 'New local edit', 'late recovery never overwrites subsequent editing');
+  assert.match(env.problem.status.textContent, /아직 미저장/);
+
+  env = environment(); env.starter.field('starter_confirm').checked = true; env.submit(env.starter);
+  const originalSelection = env.starter.field('file').files;
+  await lostResponse(env);
+  // File identity can change even when name, size and timestamp match.
+  env.starter.field('file').files = originalSelection.map(item => ({...item}));
+  const newSelection = env.starter.field('file').files;
+  await finish(env.requests[1], recoveryResult(env, 'saved', receipt(), true, {save_kind: 'uploads/starter'}));
+  assert.equal(env.starter.field('file').files, newSelection);
+  assert.match(env.starter.status.textContent, /아직 미저장/);
+  assert.equal(env.dirtyExit(), true, 'new file selection remains unsaved');
+
+  env = environment(); env.problem.field('title').value = 'Keep mine'; const conflictFiles = env.starter.field('file').files;
+  env.submit(env.problem); await lostResponse(env);
+  await finish(env.requests[1], recoveryResult(env, 'conflict', receipt(2, {values: {title: 'Other writer'}}), true));
+  assert.equal(env.problem.field('title').value, 'Keep mine');
+  assert.equal(env.problem.field('revision').value, '1', 'concurrent write keeps original fence');
+  assert.equal(env.starter.field('file').files, conflictFiles);
+  assert.equal(env.conflict.hidden, false); assert.match(env.serverValues.textContent, /Other writer/);
+  env.submit(env.problem); assert.equal(env.requests.length, 2, 'conflict cannot silently overwrite');
+
+  env = environment(); env.submit(env.problem); await lostResponse(env);
+  await finish(env.requests[1], recoveryResult(env, 'saved', receipt(), true, {save_request: '0'.repeat(32)}));
+  assert.equal(env.problem.field('revision').value, '1', 'receipt for a different save cannot be applied');
+  assert.match(env.problem.status.textContent, /아직 확인할 수 없습니다/);
+  assert.equal(env.recoverButton.disabled, false, 'failed check can be retried');
 
   env = environment(); env.tests.field('test_0_title').value = 'Unsaved case';
   env.submit(env.grading); assert.equal(env.requests.length, 0, 'import cannot overwrite dirty tests');

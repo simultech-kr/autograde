@@ -139,6 +139,11 @@ class HTTPResult:
 
 
 @dataclass(frozen=True, slots=True)
+class HTTPBinaryResult(HTTPResult):
+    """A bounded private in-memory attachment, never a larger HTML/JSON response."""
+
+
+@dataclass(frozen=True, slots=True)
 class HTTPFileResult:
     """A trusted local regular file streamed without loading it into memory."""
 
@@ -824,6 +829,8 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
                             {'q', 'status', 'page'} if re.fullmatch(r'/courses/[a-z0-9_-]{1,96}/instructor/students', path) else
                             {'student_key'} if re.fullmatch(r'/courses/[a-z0-9_-]{1,96}/instructor/registrations', path) else
                             {'assignment_id'} if re.fullmatch(r'/courses/[a-z0-9_-]{1,96}/instructor/classroom', path) else
+                            {'revision', 'save_request', 'save_kind'} if re.fullmatch(r'/courses/[a-z0-9_-]{1,96}/instructor/drafts/[A-Za-z0-9_-]+/save-state', path) else
+                            {'q', 'page', 'change', 'view', 'columns', 'cell'} if re.fullmatch(r'/courses/[a-z0-9_-]{1,96}/instructor/gradebook/gbook_[A-Za-z0-9_-]+', path) else
                             {'q', 'visibility', 'page'} if re.fullmatch(r'/courses/[a-z0-9_-]{1,96}/instructor/assignments', path) else set())
             if query and (self.command != 'GET' or
                           (getattr(facade, 'instructor', None) is None and not participation_page) or
@@ -906,6 +913,16 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
             else:
                 self._ensure_no_body()
                 form = dict(query)
+            if re.fullmatch(r'/courses/[a-z0-9_-]{1,96}/instructor/materials/mat_[A-Za-z0-9_-]+/batch-review/mbatch_[0-9a-f]{32}/(?:apply|refresh|file/[0-9]{1,20})', path):
+                # Stored ZIP review work needs the same bounded admission as
+                # initial uploads; ordinary request concurrency is much larger.
+                if not facade.admin_upload_slots.acquire(blocking=False):
+                    raise PlatformHTTPError(503, 'upload_busy', '파일 처리 중입니다. 잠시 후 다시 시도하세요.')
+                try:
+                    return facade.portal_request(self.command, path, form, self._cookies(),
+                        self.headers.get('Origin'), self.headers.get('Authorization')), 200
+                finally:
+                    facade.admin_upload_slots.release()
             return facade.portal_request(
                 self.command, parameters["path"], form, self._cookies(),
                 self.headers.get("Origin"), self.headers.get("Authorization"),
@@ -1455,8 +1472,14 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
         try:
             status = _safe_status(result.status)
             headers = _safe_headers(result.headers)
+            binary = isinstance(result, HTTPBinaryResult)
+            if binary and (not isinstance(result.body, bytes) or headers.get('Content-Type') not in
+                    {'application/pdf', 'application/zip', 'application/octet-stream'} or
+                    not headers.get('Content-Disposition', '').startswith('attachment;')):
+                raise ValueError('invalid private binary attachment')
             body, default_content_type = _encode_body(result.body, status)
-            if allow_fallback and len(body) > self.platform_server.max_response_bytes:
+            limit = min(25 * 1024 * 1024, self.platform_server.max_file_response_bytes) if binary else self.platform_server.max_response_bytes
+            if allow_fallback and len(body) > limit:
                 raise ValueError("response body is too large")
             content_type = headers.pop("Content-Type", default_content_type)
         except Exception as exc:
@@ -1484,8 +1507,12 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
         for name, value in _SECURITY_HEADERS.items():
             results_page = content_type.startswith('text/html') and b'<script data-instructor-results-enhancement>' in body
             if name == "Content-Security-Policy" and results_page:
-                from .instructor_results_browser import SCRIPT_CSP
-                value += "; style-src 'unsafe-inline'" + SCRIPT_CSP
+                from .instructor_results_browser import SCRIPT_HASH as RESULTS_HASH
+                hashes = [RESULTS_HASH]
+                if b'<script data-instructor-enhancement>' in body:
+                    from .instructor_browser import SCRIPT_HASH as SHELL_HASH
+                    hashes.append(SHELL_HASH)
+                value += "; style-src 'unsafe-inline'; script-src " + ' '.join(f"'sha256-{digest}'" for digest in hashes) + "; connect-src 'self'"
             elif name == "Content-Security-Policy" and callable(getattr(self.platform_server.facade, "portal_request", None)):
                 value += "; style-src 'unsafe-inline'"
                 instructor = getattr(self.platform_server.facade, 'instructor', None)
@@ -1659,6 +1686,9 @@ def _normalize_result(value: Any, default_status: int) -> HTTPResult | HTTPFileR
         return value
     if isinstance(value, HTTPResult):
         return value
+    if getattr(value, 'binary_download', False) is True and all(
+            hasattr(value, attribute) for attribute in ('status', 'body', 'headers')):
+        return HTTPBinaryResult(value.status, value.body, value.headers)
     if all(
         hasattr(value, attribute)
         for attribute in ("status", "path", "content_type", "headers")

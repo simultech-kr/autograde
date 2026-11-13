@@ -1,6 +1,6 @@
 # 교수자·학생 포털 운영 안내
 
-정보구조와 권한 기준은 [포털 고도화 설계](../architecture/role-portals.md)를 참고한다.
+메뉴 계층·화면별 돌아가기·공통 메뉴 계약은 [Information Architecture Map](../architecture/portal-information-architecture.md)을 참고한다. 역할과 권한 기준은 [포털 고도화 설계](../architecture/role-portals.md)를 참고한다.
 웹은 기존 `20010`, IDE API는 기존 `20000`을 사용한다. SQLite와 CSV 설정을 유지한다.
 
 ## 시작 주소

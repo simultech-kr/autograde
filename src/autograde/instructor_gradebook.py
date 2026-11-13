@@ -1,5 +1,6 @@
 """Course-scoped Excel gradebook review and explicit student publication."""
 import re
+from urllib.parse import urlencode
 
 from .instructor_responsive import result_table
 from .instructor_web import _button, _checkbox, _e, _field, _select, _timestamp, _value
@@ -74,11 +75,122 @@ def listing(ui, course, session, values=None, notice=''):
     return '성적표 관리', body
 
 
-def detail(ui, course, entry, session, notice=''):
+_CHANGE = {'added': '신규', 'changed': '변경', 'unchanged': '유지', 'removed': '제외'}
+_PREVIEW_CHARS = 120
+_PAGE_CELLS = 200
+
+
+def _cell_preview(row, column):
+    value = row['values'].get(column['key'])
+    if isinstance(value, str) and len(value) > _PREVIEW_CHARS:
+        return (_e(value[:_PREVIEW_CHARS]) + '<span aria-hidden="true">…</span> '
+                f'<button type="submit" form="gradebook-cell-detail" name="cell" '
+                f'value="{row["source_row"]}:{_e(column["key"])}">전체 값 보기 ({len(value)}자)</button>')
+    return _display(value)
+
+
+def _full_cell(path, entry, options, selected, student_preview):
+    match = re.fullmatch(r'([1-9][0-9]{0,5}):(column_[1-9][0-9]{0,3})', _value(options, 'cell'))
+    if not match:
+        raise PlatformNotFound('확인할 성적표 항목을 찾을 수 없습니다.')
+    row = next((row for row in entry['rows'] if row['source_row'] == int(match[1])), None)
+    column = next((column for column in entry['columns'] if column['key'] == match[2]), None)
+    if row is None or column is None or (student_preview and column['key'] not in selected):
+        raise PlatformNotFound('확인할 성적표 항목을 찾을 수 없습니다.')
+    context = {name: _value(options, name) for name in ('q', 'page', 'change', 'view', 'columns') if name in options}
+    back = path + ('?' + urlencode(context) if context else '') + '#gradebook-review'
+    return '성적표 전체 값 확인', (f'<a class="button secondary" href="{_e(back)}">성적표 검토로 돌아가기</a>'
+        f'<h3>{_e(entry["title"])}</h3><p>학번 <strong>{_e(row["student_key"])}</strong> · 항목 <strong>{_e(column["label"])}</strong></p>'
+        '<p class="hint">생략하지 않은 원본 값입니다. 이 화면을 열어도 공개 상태나 저장된 값은 변경되지 않습니다.</p>'
+        f'<section aria-label="전체 값"><pre style="white-space:pre-wrap">{_display(row["values"].get(column["key"]))}</pre></section>')
+
+
+def _publication_changes(entry, previous, selected):
+    """Compare public values by header label, not position-based column keys."""
+    before = {row['student_key']: row for row in previous['rows']} if previous else {}
+    old_columns = [column for column in previous['columns'] if column['key'] in previous['selected_columns']] if previous else []
+    columns = [column for column in entry['columns'] if column['key'] in selected]
+    reviewed = []
+    for row in entry['rows']:
+        old = before.pop(row['student_key'], None)
+        new_values = {column['label']: row['values'].get(column['key']) for column in columns}
+        old_values = {column['label']: old['values'].get(column['key']) for column in old_columns} if old else None
+        change = 'added' if old is None else ('unchanged' if new_values == old_values else 'changed')
+        reviewed.append(dict(row, change=change))
+    reviewed.extend(dict(row, change='removed') for row in before.values())
+    return reviewed
+
+
+def _review_table(path, entry, rows, columns, options, *, student_preview=False):
+    search = _value(options, 'q').strip()[:96]
+    change = _value(options, 'change', 'all')
+    if change not in {'all', 'unmatched', *_CHANGE}:
+        change = 'all'
+    filtered = [row for row in rows if search.casefold() in row['student_key'].casefold()
+                and (change == 'all' or (change == 'unmatched' and not row['matched']) or row.get('change') == change)]
+    # Bound both cells and text, including escaping and responsive labels. The
+    # original 2,000-character values stay intact in storage and the full view.
+    per_page = min(50, max(1, _PAGE_CELLS // max(1, len(columns))))
+    page_count = max(1, (len(filtered) + per_page - 1) // per_page)
+    raw_page = _value(options, 'page', '1')
+    page = min(int(raw_page), page_count) if re.fullmatch(r'[1-9][0-9]{0,5}', raw_page) else 1
+    query = {'columns': _value(options, 'columns')} if _value(options, 'columns') else {}
+    if student_preview:
+        query['view'] = 'student'
+    fields = ''.join(f'<input type="hidden" name="{_e(key)}" value="{_e(value)}">' for key, value in query.items())
+    fields += _field('q', '학번 검색', search, extra='maxlength="96"')
+    filters = [('all', '전체 학생'), ('unmatched', '명단 미일치')]
+    if student_preview:
+        filters += list(_CHANGE.items())
+    fields += _select('change', '검토 대상', filters, change) + _button('검색·필터 적용')
+    fields += f'<a class="button secondary" href="{path}?{_e(urlencode(query))}#gradebook-review">필터 초기화</a>'
+    body = '<section id="gradebook-review"><h3>' + ('학생 공개 내용 미리보기' if student_preview else '학생별 값 미리보기') + '</h3>'
+    description = '교수자에게만 보이는 검토용 표입니다. 모든 학생을 검색하거나 페이지를 이동하여 확인할 수 있습니다.'
+    if student_preview:
+        description = '선택한 항목만 표시합니다. 학생은 본인 행만 보며, 학번·명단·변경 표시는 교수자 검토용입니다. 제외되는 학생은 새 공개본에서 점수가 보이지 않습니다.'
+    elif entry['status'] == 'draft':
+        description += ' 공개 항목을 선택한 뒤 학생에게 보일 내용만 미리볼 수 있습니다.'
+    else:
+        description += ' 학생에게 공개하지 않은 항목도 포함되어 있습니다.'
+    body += '<p class="hint">' + description + '</p>'
+    body += f'<form method="get" action="{path}#gradebook-review" class="filters">{fields}</form>'
+    body += f'<p role="status">검색 결과 {len(filtered)}명 · 전체 검토 대상 {len(rows)}명 · {page}/{page_count}페이지 (페이지당 {per_page}명)</p>'
+    if per_page < 50:
+        body += '<p class="hint">항목이 많은 성적표는 한 번에 표시할 학생 수를 줄입니다. 긴 값은 전체 값 보기로 확인하세요. 원본 값과 공개 범위는 바뀌지 않습니다.</p>'
+    cell_context = dict(query, q=search, change=change, page=str(page))
+    cell_fields = ''.join(f'<input type="hidden" name="{_e(key)}" value="{_e(value)}">' for key, value in cell_context.items())
+    body += f'<form id="gradebook-cell-detail" method="get" action="{path}">{cell_fields}</form>'
+    display_rows = []
+    for row in filtered[(page - 1) * per_page:page * per_page]:
+        values = tuple('<span class="hint">공개 대상 제외</span>' if row.get('change') == 'removed' else _cell_preview(row, column) for column in columns)
+        prefix = (_e(row['student_key']), '일치' if row['matched'] else '미일치')
+        if student_preview:
+            prefix += (_e(_CHANGE[row['change']]),)
+        display_rows.append((*prefix, *values))
+    if display_rows:
+        headers = [column['label'] + (' (학생 비공개)' if entry['status'] != 'draft' and column['key'] not in entry['selected_columns'] else '') for column in columns]
+        body += result_table(('학번', '수강 명단', *(('현재 공개본 대비',) if student_preview else ()), *headers), display_rows, '학번별 점수 미리보기')
+    else:
+        body += '<p class="notice">이 조건에 해당하는 학생이 없습니다. 학번이나 검토 대상을 바꾸거나 필터를 초기화하세요.</p>'
+    query.update(q=search, change=change)
+    body += '<nav class="actions" aria-label="성적표 검토 페이지">'
+    for number, label in ((page - 1, '이전'), (page + 1, '다음')):
+        if 1 <= number <= page_count:
+            body += f'<a class="button secondary" href="{path}?{_e(urlencode(dict(query, page=number)))}#gradebook-review">{label} 페이지</a>'
+    return body + '</nav></section>'
+
+
+def detail(ui, course, entry, session, notice='', options=None):
     path = _path(ui, course, entry)
     columns = entry['columns']
-    body = (notice + f'<p><a class="button secondary" href="{_path(ui, course)}">성적표 목록</a></p>'
-            f'<h3>{_e(entry["title"])}</h3><p><span class="status-badge">{_e(_STATUS.get(entry["status"], entry["status"]))}</span>'
+    options = options or {}
+    requested_columns = _value(options, 'columns').split(',')
+    selected = [column['key'] for column in columns if column['key'] in requested_columns]
+    student_preview = entry['status'] == 'draft' and _value(options, 'view') == 'student' and bool(selected)
+    if 'cell' in options:
+        return _full_cell(path, entry, options, selected, student_preview)
+    edit_selection = path + '?' + urlencode({'columns': ','.join(selected)}) + '#gradebook-columns'
+    body = (notice + f'<h3>{_e(entry["title"])}</h3><p><span class="status-badge">{_e(_STATUS.get(entry["status"], entry["status"]))}</span>'
             f' · 공개본 {_e(entry.get("version") or "미공개")} · 편집 번호 {_e(entry["revision"])}</p>'
             f'<dl class="portal-metrics" aria-label="성적표 확인 결과"><div><dt>엑셀 학생</dt><dd>{entry["student_count"]}</dd></div>'
             f'<div><dt>명단 일치</dt><dd>{entry["matched_count"]}</dd></div><div><dt>미일치</dt><dd>{len(entry["unmatched_keys"])}</dd></div>'
@@ -91,20 +203,37 @@ def detail(ui, course, entry, session, notice=''):
         body += '<div class="notice error" role="alert"><strong>수강 명단과 맞지 않는 학번이 있습니다.</strong><p>' + ', '.join(_e(key) for key in entry['unmatched_keys'][:100]) + '</p><p>학번·분반·수강 상태를 확인한 뒤 파일을 수정해 다시 올려 주세요. 명단에 없는 학생은 자동 등록하지 않습니다.</p></div>'
     if entry['missing_student_count']:
         body += '<p class="notice warning">이 엑셀에 없는 수강생은 새 공개본의 점수가 표시되지 않습니다. 전체 성적표를 교체하려는 것인지 확인해 주세요.</p>'
-    if entry['status'] == 'draft' and course['status'] != 'archived':
-        fields = _revision_field(entry) + '<fieldset><legend>학생에게 공개할 항목</legend><p>필요한 항목만 선택하세요. 학번 열은 매칭에 사용하며 학생에게 다른 학생의 행을 제공하지 않습니다.</p>'
+    if entry['status'] == 'draft' and course['status'] != 'archived' and not student_preview:
+        fields = _revision_field(entry) + '<fieldset><legend>학생에게 공개할 항목</legend><p>공개할 항목을 직접 선택하세요. 새 업로드의 모든 항목은 기본 비공개입니다. 교수자 메모 등 내부 항목은 선택하지 마세요.</p>'
         for column in columns:
-            fields += f'<label><input type="checkbox" name="column_{_e(column["key"])}" value="yes" checked> {_e(column["label"])}</label>'
-        fields += '</fieldset>' + _checkbox('confirm', '학번과 공개 항목을 확인했으며, 현재 공개본 전체를 이 성적표로 교체합니다.')
+            checked = ' checked' if column['key'] in selected else ''
+            fields += f'<label><input type="checkbox" name="column_{_e(column["key"])}" value="yes"{checked}> {_e(column["label"])}</label>'
+        fields += '</fieldset>' + _button('선택 항목으로 학생 화면 미리보기')
+        body += '<section id="gradebook-columns"><h3>1. 공개 항목 선택</h3>' + ui._form(path + '/preview', session, fields)
+        if _value(options, 'view') == 'student' and not selected:
+            body += '<p class="notice warning" role="alert">공개할 항목을 한 개 이상 선택하세요. 아직 학생에게 공개되지 않았습니다.</p>'
+        body += '</section>'
+    reviewed = entry['rows']
+    preview_columns = columns
+    if student_preview:
+        previous = ui.gradebook.current_for_instructor(course['course_key'])
+        reviewed = _publication_changes(entry, previous, selected)
+        preview_columns = [column for column in columns if column['key'] in selected]
+        body += '<section><h3>1. 선택한 공개 항목</h3><p>' + ', '.join(_e(column['label']) for column in preview_columns) + '</p>'
+        body += f'<a class="button secondary" href="{_e(edit_selection)}">공개 항목 수정</a></section>'
+        counts = {change: sum(row['change'] == change for row in reviewed) for change in _CHANGE}
+        body += '<section><h3>2. 현재 공개본과 비교</h3><p>' + ('현재 공개본 ' + _e(previous['version']) + '과 선택한 공개 항목을 비교합니다.' if previous else '현재 공개본이 없습니다. 첫 성적표를 공개합니다.') + '</p>'
+        body += '<dl class="portal-metrics" aria-label="성적표 변경 요약">' + ''.join(f'<div><dt>{label}</dt><dd>{counts[change]}명</dd></div>' for change, label in _CHANGE.items()) + '</dl>'
+        body += '<p>변경 여부는 학생에게 보일 항목 이름과 값을 기준으로 계산합니다. 아래 검토 대상에서 신규·변경·제외 학생을 각각 확인할 수 있습니다.</p></section>'
+    body += _review_table(path, entry, reviewed, preview_columns, options, student_preview=student_preview)
+    if student_preview and course['status'] != 'archived':
+        fields = _revision_field(entry) + ''.join(f'<input type="hidden" name="column_{_e(key)}" value="yes">' for key in selected)
+        fields += f'<p><strong>공개 대상: {entry["student_count"]}명 · {len(selected)}개 항목</strong></p><p>' + ', '.join(_e(column['label']) for column in preview_columns) + '</p>'
+        fields += '<p class="hint">검색·페이지·검토 대상 필터는 공개 범위를 줄이지 않습니다. 이 엑셀의 전체 학생에게 선택 항목을 공개합니다.</p>'
+        fields += _checkbox('confirm', '학생별 값과 신규·변경·제외 대상을 확인했으며, 현재 공개본 전체를 이 성적표로 교체합니다.')
         fields += '<button type="submit"' + (' disabled' if entry['unmatched_keys'] else '') + '>선택 항목 학생 공개</button>'
-        body += '<section><h3>공개 전 확인</h3>' + ui._form(path + '/publish', session, fields) + '</section>'
-    preview = entry['rows'][:100]
-    rows = [(_e(row['student_key']), '일치' if row['matched'] else '미일치', *(_display(row['values'].get(column['key'])) for column in columns)) for row in preview]
-    body += '<section><h3>학생별 값 미리보기</h3><p class="hint">교수자에게만 보이는 검토용 표입니다. 학생 화면에는 로그인한 학생의 값만 제공됩니다.'
-    if len(entry['rows']) > len(preview):
-        body += f' 처음 {len(preview)}명만 표시하며 공개에는 검토한 전체 {entry["student_count"]}명의 선택 항목이 적용됩니다.'
-    headers = [column['label'] + (' (학생 비공개)' if entry['status'] != 'draft' and column['key'] not in entry['selected_columns'] else '') for column in columns]
-    body += '</p>' + result_table(('학번', '수강 명단', *headers), rows, '학번별 점수 미리보기') + '</section>'
+        fields += f'<a class="button secondary" href="{_e(edit_selection)}">공개 항목 다시 선택</a>'
+        body += '<section><h3>3. 검토 완료 후 학생 공개</h3>' + ui._form(path + '/publish', session, fields) + '</section>'
     if course['status'] != 'archived':
         if entry['status'] == 'draft':
             body += '<details><summary>이 업로드 초안 삭제</summary><p>현재 학생 공개본에는 영향을 주지 않습니다.</p>' + ui._form(path + '/delete', session, _revision_field(entry) + _checkbox('confirm', '이 비공개 초안을 삭제합니다.') + _button('초안 삭제', danger=True)) + '</details>'
@@ -138,14 +267,24 @@ def request(ui, method, course, route, form, session):
             title, body = listing(ui, course, session, values, notice)
             return ui._page(title, body, course=course, status=409 if isinstance(exc, PlatformConflict) else 400, current_path=_path(ui, course))
         return ui._redirect(_path(ui, course, entry))
-    match = re.fullmatch(r'gradebook/(' + _ID + r')(?:/(publish|hide|delete))?', route)
+    match = re.fullmatch(r'gradebook/(' + _ID + r')(?:/(preview|publish|hide|delete))?', route)
     if not match:
         raise PlatformNotFound('성적표 경로를 찾을 수 없습니다.')
     entry = ui.gradebook.review(course['course_key'], match[1])
     if method == 'GET' and match[2] is None:
-        return detail(ui, course, entry, session)
+        return detail(ui, course, entry, session, options=form)
     if method != 'POST' or match[2] is None:
         raise PlatformNotFound('성적표 화면의 작업 버튼을 사용하세요.')
+    if match[2] == 'preview':
+        names = {'column_' + column['key']: column['key'] for column in entry['columns']}
+        if set(form) - {'csrf', 'revision', *names} or any(_value(form, name) != 'yes' for name in names if name in form):
+            raise ValueError('공개할 항목을 다시 선택해 주세요.')
+        if _revision(form) != entry['revision'] or entry['status'] != 'draft':
+            raise PlatformConflict('성적표 상태가 변경되었습니다. 최신 성적표를 다시 확인하세요.')
+        selected = [key for name, key in names.items() if name in form]
+        # A single bounded query field supports all 100 columns without raising
+        # the HTTP query-field limit, and PRG keeps review pagination read-only.
+        return ui._redirect(_path(ui, course, entry) + '?' + urlencode({'view': 'student', 'columns': ','.join(selected)}))
     if _value(form, 'confirm') != 'yes':
         raise ValueError('확인 항목을 선택해 주세요.')
     revision = _revision(form)

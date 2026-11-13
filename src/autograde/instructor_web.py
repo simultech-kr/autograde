@@ -22,6 +22,7 @@ from .web_theme import THEME_CSS
 from .instructor_responsive import RESPONSIVE_CSS, result_table
 from .instructor_assignment_catalog import InstructorAssignmentCatalog
 from .instructor_form_recovery import FormRecovery
+from .instructor_page import InstructorPageFragment
 from .instructor_browser import SCRIPT_TAG
 from .instructor_portal import STYLE as PORTAL_STYLE, navigation, portal_home, course_workflows, course_summary, environment_page
 from .instructor_design import STYLE as DESIGN_STYLE
@@ -267,7 +268,7 @@ class InstructorWeb:
     @staticmethod
     def _background_read(path):
         return (path in {'/instructor/operations/readiness/status', '/instructor/operations/seats/status'} or
-                bool(re.fullmatch(r'/courses/[a-z0-9_-]{1,96}/instructor/(?:checks/[a-zA-Z0-9_-]+/status|submissions/live)', path)))
+                bool(re.fullmatch(r'/courses/[a-z0-9_-]{1,96}/instructor/(?:checks/[a-zA-Z0-9_-]+/status|drafts/[a-zA-Z0-9_-]+/save-state|submissions/live)', path)))
 
     def _authenticated_request(self, method, path, form, cookies, origin, authorization):
         polling = self._background_read(path)
@@ -292,6 +293,9 @@ class InstructorWeb:
                 response = self._course_request(method, course, match[2] or "", form, session, authorization)
             else:
                 response = self._root_request(method, path, form, session)
+            if isinstance(response, InstructorPageFragment):
+                return self._page(response.title, response.body, course=course, cookie=cookie,
+                                  status=response.status, current_path=path, styles=response.styles)
             if isinstance(response, (PlatformResponse, PlatformFileResponse)):
                 if isinstance(response, PlatformResponse) and cookie and match and match[2] == 'submissions':
                     # A direct results-page visit must establish the same signed
@@ -305,9 +309,9 @@ class InstructorWeb:
             title, body = response
             return self._page(title, body, course=course, cookie=cookie, current_path=path)
         except PlatformNotFound:
-            return self._page("찾을 수 없습니다", '<p>현재 수업에 해당 항목이 없습니다.</p>', course=course, status=404, cookie=cookie)
+            return self._page("찾을 수 없습니다", '<p>현재 수업에 해당 항목이 없습니다.</p>', course=course, status=404, cookie=cookie, current_path=path)
         except PlatformAccessDenied:
-            return self._page("접근할 수 없습니다", '<p>현재 수업에서 이 작업을 수행할 수 없습니다.</p>', course=course, status=403, cookie=cookie)
+            return self._page("접근할 수 없습니다", '<p>현재 수업에서 이 작업을 수행할 수 없습니다.</p>', course=course, status=403, cookie=cookie, current_path=path)
         except (ValueError, PlatformConflict) as exc:
             # Domain errors are intended to be operator-facing. Values are HTML escaped.
             if method == 'POST' and self._inline_draft_save(path, form):
@@ -326,9 +330,9 @@ class InstructorWeb:
                                       status=409 if isinstance(exc, PlatformConflict) else 400, current_path=path)
             return self._page("입력 확인이 필요합니다", '<div class="notice error" role="alert">' + _e(exc) +
                               '</div><p>이전 화면으로 돌아가 입력을 수정해 주세요. 저장된 자료는 유지됩니다.</p>',
-                              course=course, status=409 if isinstance(exc, PlatformConflict) else 400, cookie=cookie)
+                              course=course, status=409 if isinstance(exc, PlatformConflict) else 400, cookie=cookie, current_path=path)
 
-    def _page(self, title, body, *, course=None, cookie=None, status=200, current_path=''):
+    def _page(self, title, body, *, course=None, cookie=None, status=200, current_path='', styles=''):
         if self.principal:
             identity = f'{self.principal.display_name} ({self.principal.username}) · ' + {'admin': '관리자', 'instructor': '담당 교수자', 'assistant': '조교 · 조회 전용', 'evaluator': '평가자 · 조회 전용'}[self.principal.role]
         nav = navigation(self, course, current_path)
@@ -345,23 +349,15 @@ class InstructorWeb:
             headers["Set-Cookie"] = f"{_COOKIE}={cookie}; Path=/; Max-Age=3600; HttpOnly; SameSite=Strict{secure}"
         account_hint = ('개인 교수자 계정으로 인증되었습니다. 공용 기기에서는 사용 후 로그아웃하세요. '
                         if self.principal else '공유 교수자 계정은 개인별 권한을 제공하지 않습니다. 공용 학생 PC에서 사용하지 마세요. ')
-        from .instructor_account_web import enabled
-        if enabled(self):
-            nav += '<div class="portal-account"><a href="/instructor/account">내 계정·로그아웃</a>'
-            if self.principal and self.principal.role == 'admin':
-                nav += '<a href="/instructor/accounts">교수자 계정 관리</a>'
-            nav += '</div>'
         read_only = bool(self.principal and self.principal.read_only)
         if read_only:
             body = '<p class="notice">조회 전용 계정입니다. 변경·평가 저장·학생 IDE 요청은 담당 교수자에게 요청하세요.</p>' + body
         identity_caption = identity if self.principal else '공유 운영자 계정'
-        breadcrumb = '<a href="/instructor">교수자 포털</a>'
-        if course:
-            breadcrumb += f'<span aria-hidden="true">/</span><a href="{self._base(course)}">{_e(course.get("name") or course["code"])}</a>'
-        breadcrumb += '<span aria-hidden="true">/</span><span>' + _e(title) + '</span>'
+        from .instructor_navigation import page_location
+        breadcrumb, back = page_location(self, course, current_path, title)
         document = ('<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
-                    f'<title>{_e(title)} · Autograde</title><style>{_STYLE}{THEME_CSS}{RESPONSIVE_CSS}{PORTAL_STYLE}{DESIGN_STYLE}{STUDENTS_STYLE}{SEATS_STYLE}</style></head><body class="responsive-instructor{" readonly-view" if read_only else ""}"><a class="skip-link" href="#main-content">본문으로 건너뛰기</a><header class="instructor-header"><a class="instructor-brand" href="/instructor"><span class="instructor-brand-mark" aria-hidden="true">A</span><div><h1>Autograde 교수자 포털</h1><small>{_e(identity_caption)}</small></div></a>{switch}</header>'
-                    f'<div class="shell"><details class="portal-menu" open><summary>교수자 메뉴 · {_e(title)}</summary><nav class="portal-navigation" aria-label="교수자 메뉴">{nav}</nav></details><main id="main-content" tabindex="-1" data-audience="instructor"><div class="page-heading"><nav class="page-breadcrumb" aria-label="현재 위치">{breadcrumb}</nav><h2>{_e(title)}</h2></div>{body}'
+                    f'<title>{_e(title)} · Autograde</title><style>{_STYLE}{THEME_CSS}{RESPONSIVE_CSS}{PORTAL_STYLE}{DESIGN_STYLE}{STUDENTS_STYLE}{SEATS_STYLE}{styles}</style></head><body class="responsive-instructor{" readonly-view" if read_only else ""}"><a class="skip-link" href="#main-content">본문으로 건너뛰기</a><header class="instructor-header"><a class="instructor-brand" href="/instructor"><span class="instructor-brand-mark" aria-hidden="true">A</span><div><h1>Autograde 교수자 포털</h1><small>{_e(identity_caption)}</small></div></a>{switch}</header>'
+                    f'<div class="shell"><details class="portal-menu" open><summary>교수자 메뉴 · {_e(title)}</summary><nav class="portal-navigation" aria-label="교수자 메뉴">{nav}</nav></details><main id="main-content" tabindex="-1" data-audience="instructor"><div class="page-heading">{back}<nav class="page-breadcrumb" aria-label="현재 위치">{breadcrumb}</nav><h2>{_e(title)}</h2></div>{body}'
                     '<p class="hint account-notice">' + account_hint +
                     'pilot-local 실행은 보안 격리가 아닙니다.</p></main></div>' + SCRIPT_TAG + '</body></html>')
         return PlatformResponse(status, document, headers)
@@ -440,6 +436,8 @@ class InstructorWeb:
                     target = '/'.join(route.split('/')[:2])
                 elif route == 'materials' and self.student_materials:
                     target = route
+                elif self.student_materials and re.fullmatch(r'materials/mat_[A-Za-z0-9_-]+/batch-review/mbatch_[0-9a-f]{32}/(?:apply|cancel|refresh)', route):
+                    target = route.rsplit('/', 1)[0]
                 elif self.student_materials and re.fullmatch(r'materials/mat_[A-Za-z0-9_-]+(?:/(?:upload|upload-batch|publish|archive|revise|remove/[0-9]+))?', route):
                     target = '/'.join(route.split('/')[:2])
                 elif route == 'exam-papers' and self.exam_papers:
@@ -1003,11 +1001,23 @@ class InstructorWeb:
             else:
                 self.assignments.extend_deadline(key, assignment_id, _utc(_value(form, 'due_at')), _value(form, 'reason'))
             return self._redirect(base + '/assignments')
-        draft_match = re.fullmatch(r'drafts/([a-zA-Z0-9_-]+)(?:/(uploads/(?:starter|solution|negative)|starter-template(?:\.zip)?|grading-template(?:\.zip)?|checks|publish|delete))?', route)
+        draft_match = re.fullmatch(r'drafts/([a-zA-Z0-9_-]+)(?:/(uploads/(?:starter|solution|negative)|starter-template(?:\.zip)?|grading-template(?:\.zip)?|save-state|checks|publish|delete))?', route)
         if not draft_match:
             raise PlatformNotFound()
         draft_id, action = draft_match.groups()
         draft = self.assignments.get_draft(key, draft_id)
+        if method == 'GET' and action == 'save-state':
+            previous = int(_value(form, 'revision'))
+            request_key = _value(form, 'save_request')
+            kind = _value(form, 'save_kind')
+            recovered = self.assignments.recover_save(key, draft_id, previous, request_key, kind)
+            current = recovered['draft']
+            receipt_form = {'inline_save': 'yes', **({'tests_present': 'yes'} if kind == 'tests' else {})}
+            receipt_action = None if kind in {'problem', 'tests'} else kind
+            receipt = self._draft_save_response(base, current, current['revision'] - 1, receipt_form, receipt_action).body
+            return PlatformResponse(200, {'ok': True, 'path': base + '/drafts/' + draft_id,
+                'save_request': request_key, 'previous_revision': previous, 'save_kind': kind,
+                'status': recovered['status'], 'request_saved': recovered['request_saved'], 'receipt': receipt})
         if method == 'GET' and action == 'starter-template.zip':
             filename = f'autograde-{draft["language"]}-{draft["platform"]}-starter.zip'
             return self._template_download(self.assignments.draft_starter_template(key, draft_id), filename)
@@ -1019,6 +1029,7 @@ class InstructorWeb:
         if method != 'POST':
             raise PlatformNotFound()
         revision = int(_value(form, 'delete_revision' if action == 'delete' else 'revision'))
+        save_request = _value(form, 'save_request') if self._inline_draft_save(path=base + '/drafts/' + draft_id, form=form) and 'save_request' in form else None
         if action == 'delete':
             if _value(form, 'confirm') != 'yes':
                 raise ValueError('삭제할 미공개 초안을 확인해 주세요.')
@@ -1027,7 +1038,7 @@ class InstructorWeb:
         if action == 'starter-template':
             if _value(form, 'template_confirm') != 'yes':
                 raise ValueError('기존 학생용 파일을 기본 템플릿으로 교체하는 데 동의해 주세요.')
-            saved = self.assignments.save_starter_template(key, draft_id, revision)
+            saved = self.assignments.save_starter_template(key, draft_id, revision, save_request=save_request)
             return self._draft_save_response(base, saved, revision, form, action)
         if action == 'grading-template':
             content = form.get('file')
@@ -1035,7 +1046,7 @@ class InstructorWeb:
                 raise ValueError('채점 템플릿 ZIP 파일을 선택해 주세요.')
             if _value(form, 'grading_confirm') != 'yes':
                 raise ValueError('채점 템플릿의 정답·오답·테스트 내용을 검토했는지 확인해 주세요.')
-            saved = self.assignments.import_grading_template(key, draft_id, revision, content)
+            saved = self.assignments.import_grading_template(key, draft_id, revision, content, save_request=save_request)
             return self._draft_save_response(base, saved, revision, form, action)
         if action and action.startswith('uploads/'):
             content = form.get('file')
@@ -1044,7 +1055,7 @@ class InstructorWeb:
             role = action.split('/')[1]
             if role == 'starter' and _value(form, 'starter_confirm') != 'yes':
                 raise ValueError('학생용 자료에 정답과 비공개 입력이 없는지 확인해 주세요.')
-            saved = self.assignments.upload_zip(key, draft_id, revision, role, content)
+            saved = self.assignments.upload_zip(key, draft_id, revision, role, content, save_request=save_request)
             return self._draft_save_response(base, saved, revision, form, action)
         if action == 'checks':
             if _value(form, 'trusted_code') != 'yes':
@@ -1058,7 +1069,7 @@ class InstructorWeb:
             return self._redirect(base + '/drafts/' + draft_id)
         if action is None:
             fields = self._draft_fields(form)
-            saved = self.assignments.update_draft(key, draft_id, revision, **fields)
+            saved = self.assignments.update_draft(key, draft_id, revision, save_request=save_request, **fields)
             return self._draft_save_response(base, saved, revision, form, action)
         raise PlatformNotFound()
 
@@ -1402,6 +1413,11 @@ class InstructorWeb:
         body += f'<p><strong data-draft-title>{_e(draft["title"])}</strong> · 저장 버전 <span data-draft-revision>{draft["revision"]}</span> · <span data-draft-language>{_e(draft["language"])}</span> · {"예제" if draft["mode"] == "template" else "직접 만들기"}</p>'
         body += f'<p class="meta">마지막 저장: <span data-draft-updated>{_e(_timestamp(draft.get("updated_at")))}</span> KST · 각 영역의 저장 버튼을 누른 내용만 보존됩니다.</p>'
         body += '<p data-draft-save-overview role="status" aria-live="polite">서버 저장 상태는 각 영역에서 확인하세요.</p>'
+        body += ('<div data-draft-recovery hidden><button type="button" class="secondary" data-draft-recover>저장 상태 다시 확인</button>'
+                 '<p class="hint">서버 기록만 확인하며 입력을 다시 보내거나 페이지를 이동하지 않습니다. 현재 입력·파일 선택은 유지됩니다.</p>'
+                 '<details data-draft-conflict hidden><summary>현재 서버 내용과 비교</summary>'
+                 '<p>아래는 서버에 저장된 내용입니다. 이 화면의 입력은 변경하지 않았습니다. 다른 영역의 미저장 입력도 그대로 유지됩니다.</p>'
+                 '<pre data-draft-server-values></pre></details></div>')
         body += '<noscript><p>JavaScript가 꺼져 있어 저장 후 화면이 이동합니다. 한 영역씩 작성하고 저장하세요.</p></noscript>'
         download_path = base + ('/assignments/' + draft['published_assignment_id'] if draft.get('published_assignment_id') else '/drafts/' + draft['draft_id'])
         body += f'<div class="ui-actions"><a class="ui-action secondary" href="{_e(download_path)}/downloads">등록 파일·제출물 다운로드</a><a class="ui-action quiet" href="{path}" target="_blank" rel="noopener">서버에 저장된 초안을 새 탭에서 확인</a></div>'

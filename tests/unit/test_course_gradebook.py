@@ -36,6 +36,8 @@ def test_preview_not_public_then_own_selected_values_only(setup):
     draft = upload(setup)
     assert draft['student_count'] == draft['matched_count'] == 2
     assert draft['unmatched_keys'] == [] and draft['version'] == 0
+    assert draft['selected_columns'] == []
+    assert service.current_for_instructor('come2201') is None
     assert service.student_view('come2201', credential(setup)) is None
     book = publish(setup, draft, selected_columns=['column_2', 'column_3'])
     assert book['version'] == 1 and book['revision'] == 2
@@ -44,6 +46,8 @@ def test_preview_not_public_then_own_selected_values_only(setup):
     assert 'student_key' not in own and 'rows' not in own and 'filename' not in own
     assert service.student_view('come2201', credential(setup, '002'))['items'][0]['value'] == 90
     assert service.student_view('come3105', credential(setup, course='come3105')) is None
+    assert service.current_for_instructor('come2201')['selected_columns'] == ['column_2', 'column_3']
+    assert service.current_for_instructor('come3105') is None
 
 
 def test_atomic_replacement_does_not_merge_missing_students_or_publish_draft(setup):
@@ -100,6 +104,9 @@ def test_hide_and_delete_draft_are_scope_and_revision_checked(setup):
         service.delete_draft('come2201', book['draft_id'], book['revision'])
     assert service.hide('come2201', book['draft_id'], book['revision'])['status'] == 'hidden'
     assert service.student_view('come2201', credential(setup)) is None
+    assert service.current_for_instructor('come2201') is None
+    with pytest.raises(PlatformNotFound):
+        service.current_for_instructor('unknown-course')
 
 
 @pytest.mark.parametrize('selected', [[], ['unknown'], ['column_2', 'column_2']])

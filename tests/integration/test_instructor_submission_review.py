@@ -35,8 +35,8 @@ def test_review_auth_course_boundary_history_and_escaping(portal, tmp_path, admi
         service = services['come3105']
         facade.instructor = InstructorWeb(CourseAdminService(service.state), EnrollmentAdminService(service.state, b'p' * 32), None,
             authorize=service._authorize_instructor, secret=b'p' * 32, web_url='https://grade.example.edu:20010',
-            submissions=lambda key, auth: services[key].instructor_dashboard_page(auth, portal=True),
-            submission_review=lambda key, auth, sid, index: services[key].instructor_submission_page(auth, sid, index))
+            submissions=lambda key, auth: services[key].instructor_dashboard_page(auth, portal=True, fragment=True),
+            submission_review=lambda key, auth, sid, index: services[key].instructor_submission_page(auth, sid, index, fragment=True))
     sid, token, bundle = submit(portal, tmp_path, {'main.cpp': b'<script>alert("unsafe")</script>\n//\xe2\x80\xaeevil'})
     path = BASE + '/' + sid
     for endpoint in (path, path + '/files/0'):
@@ -45,6 +45,11 @@ def test_review_auth_course_boundary_history_and_escaping(portal, tmp_path, admi
         assert request(web, endpoint.replace('come3105', 'come2201'), authorization=AUTH)[0] == 404
     status, headers, raw = request(web, path, authorization=AUTH)
     assert status == 200 and b'main.cpp' in raw and bundle.digest.encode() in raw
+    if admin_enabled:
+        assert raw.count(b'<!doctype html>') == 1 and raw.count(b'<main ') == 1
+        assert 'aria-label="교수자 메뉴"'.encode() in raw
+        assert ('data-parent-link href="' + BASE + '"').encode() in raw
+        assert 'aria-current="page">제출 코드 확인'.encode() in raw
     assert b'no-store' in headers['Cache-Control'].encode()
     assert b'grade.py' not in raw and str(store.root).encode() not in raw
     status, _, raw = request(web, path + '/files/0', authorization=AUTH)
@@ -52,11 +57,25 @@ def test_review_auth_course_boundary_history_and_escaping(portal, tmp_path, admi
     assert b'<script>' not in raw and b'&lt;script&gt;' in raw and b'\\u202e' in raw
     assert b'1 |' in raw
     assert request(web, path + '/files/42', authorization=AUTH)[0] == 404
+    if admin_enabled:
+        _, _, missing = request(web, path + '/files/42', authorization=AUTH)
+        assert 'aria-label="교수자 메뉴"'.encode() in missing
+        assert ('data-parent-link href="' + path + '"').encode() in missing
     assert request(web, BASE + '/bsub_missing', authorization=AUTH)[0] == 404
     status, _, raw = request(web, BASE, authorization=AUTH)
     assert status == 200 and (path + '"').encode() in raw
     assert '<option value="attention">확인 필요</option>'.encode() in raw
     assert 'data-results-content'.encode() in raw
+    if admin_enabled:
+        from autograde.instructor_browser import SCRIPT_HASH as SHELL_HASH
+        from autograde.instructor_results_browser import SCRIPT_HASH as RESULTS_HASH
+        assert raw.count(b'<!doctype html>') == 1 and raw.count(b'<main ') == 1
+        assert 'aria-label="교수자 메뉴"'.encode() in raw
+        assert ('data-parent-link href="' + BASE.removesuffix('/submissions') + '"').encode() in raw
+        _, combined_headers, _ = request(web, BASE, authorization=AUTH)
+        csp = combined_headers['Content-Security-Policy']
+        assert csp.count('script-src') == 1
+        assert f"'sha256-{SHELL_HASH}'" in csp and f"'sha256-{RESULTS_HASH}'" in csp
     assert store.get(bundle.digest).path.read_bytes() == bundle.path.read_bytes()
 
 
@@ -126,3 +145,20 @@ def test_corrupt_stored_source_is_not_displayed(portal, tmp_path):
 ])
 def test_attention_reasons_are_not_cheating_verdicts(state, score, maximum, expected):
     assert expected in attention_reason(state, score, maximum)
+
+
+def test_common_review_shell_preserves_storage_error_status_and_return_route(portal, tmp_path, monkeypatch):
+    web, _, services, facade, store = portal
+    service = services['come3105']
+    facade.instructor = InstructorWeb(CourseAdminService(service.state), EnrollmentAdminService(service.state, b'p' * 32), None,
+        authorize=service._authorize_instructor, secret=b'p' * 32, web_url='https://grade.example.edu:20010',
+        submission_review=lambda key, auth, sid, index: services[key].instructor_submission_page(auth, sid, index, fragment=True))
+    sid, _, _ = submit(portal, tmp_path)
+    def unavailable(_):
+        raise OSError('/private/do-not-expose')
+    monkeypatch.setattr(store, 'get', unavailable)
+    status, _, raw = request(web, BASE + '/' + sid + '/files/0', authorization=AUTH)
+    assert status == 503 and b'/private/do-not-expose' not in raw
+    assert 'aria-label="교수자 메뉴"'.encode() in raw
+    assert ('data-parent-link href="' + BASE + '/' + sid + '"').encode() in raw
+    assert raw.count(b'<!doctype html>') == 1

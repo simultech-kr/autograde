@@ -51,7 +51,7 @@ def test_a_b_a_latest_best_timeline_and_compare(portal, tmp_path, admin_enabled)
         services = portal[2]
         portal[3].instructor = InstructorWeb(CourseAdminService(state), EnrollmentAdminService(state, b'p' * 32), None,
             authorize=service._authorize_instructor, secret=b'p' * 32, web_url='https://grade.example.edu:20010',
-            submission_review=lambda key, auth, sid, index, **options: services[key].instructor_submission_page(auth, sid, index, **options))
+            submission_review=lambda key, auth, sid, index, **options: services[key].instructor_submission_page(auth, sid, index, fragment=True, **options))
     first = send(a, 'first')['submission']['submission_id']
     grade(state, first, 8)
     second = send(b, 'second')['submission']['submission_id']
@@ -76,6 +76,9 @@ def test_a_b_a_latest_best_timeline_and_compare(portal, tmp_path, admin_enabled)
     assert row['source_digest'] == a.digest
     status, headers, html = request(portal[0], BASE + '/' + third, authorization=AUTH)
     assert status == 200 and 'no-store' in headers['Cache-Control']
+    if admin_enabled:
+        assert 'aria-label="교수자 메뉴"'.encode() in html
+        assert html.count(b'<!doctype html>') == 1
     for expected in ('#3', '+7', '-5', '10 / 10', '직전 제출과 코드 비교', '이전 최고점'):
         assert expected.encode() in html
     (tmp_path / 'timeline.html').write_bytes(html)
@@ -84,6 +87,10 @@ def test_a_b_a_latest_best_timeline_and_compare(portal, tmp_path, admin_enabled)
     assert request(portal[0], path, token=token)[0] == 401
     status, _, html = request(portal[0], path, authorization=AUTH)
     assert status == 200 and all(value.encode() in html for value in ('추가', '삭제', '수정'))
+    if admin_enabled:
+        assert 'aria-label="교수자 메뉴"'.encode() in html
+        assert ('data-parent-link href="' + BASE + '/' + second + '"').encode() in html
+        assert html.count(b'<!doctype html>') == 1
     # Sorted union is added.h, main.cpp, removed.h.
     status, _, html = request(portal[0], path + '/files/1', authorization=AUTH)
     assert status == 200 and b'&lt;script&gt;' in html and b'<script>' not in html

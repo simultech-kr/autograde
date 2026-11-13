@@ -18,7 +18,7 @@ from test_course_portal import request
 from test_instructor_web import Forms
 from test_student_material_http import (
     BASE, COURSE, OTHER_PDF, PDF, STUDENT_BASE, WEB, ZIP, MaterialBrowser,
-    assert_file, download_path, material_http, preview_path, publish_material,
+    apply_batch_review, assert_file, download_path, material_http, preview_path, publish_material,
     records, remove_path, request_count, revision, student_login, zip_bytes,
 )
 
@@ -129,7 +129,7 @@ def test_batch_updates_only_changed_student_and_adds_new_recipient_without_repub
     assert added.post(download_path(path))[0] == 404
     response = env.admin.upload(path + "/upload-batch", revision=revision(env, path), filename="students.zip",
         content=zip_bytes([("20260001.pdf", CHANGED_PDF), ("20260002.pdf", OTHER_PDF), ("20260003.zip", ZIP)]))
-    assert response[0] == 303, response[2]
+    apply_batch_review(env, response)
     rows = {row["student_key"]: row for row in records(env, path)}
     assert rows["20260001"]["request_count"] == 0
     assert rows["20260002"]["request_count"] == 1

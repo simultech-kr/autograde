@@ -10,6 +10,7 @@ from html import escape
 
 from .portal_runtime_view import STATES as RUNTIME_STATES, overview as runtime_overview, time_label
 from .instructor_design import navigation_icon, task_card
+from .instructor_navigation import can_manage_courses, navigation_groups
 
 
 STATUS = {'active': '운영', 'preparation': '준비', 'archived': '보관'}
@@ -64,10 +65,6 @@ def _e(value):
     return escape(str(value if value is not None else ''), quote=True)
 
 
-def can_manage_courses(web):
-    return not web.principal or web.principal.role == 'admin'
-
-
 def course_caption(course):
     year = f'{course["year"]}학년도' if course.get('year') else '학년도 미설정'
     semester = SEMESTER.get(course.get('semester'), course.get('semester') or '학기 미설정')
@@ -75,48 +72,11 @@ def course_caption(course):
     return f'{year} · {semester} · {section}'
 
 
-def navigation_groups(web, course):
-    """One capability-aware navigation definition for the course shell."""
-    portal = [('/instructor', '교수자 포털')]
-    if can_manage_courses(web):
-        portal.append(('/instructor/admin', '교과목·분반 관리'))
-        if getattr(web, 'operations', None) is not None:
-            portal.append(('/instructor/operations', '서버·실습실 운영'))
-    groups = [('포털', portal)]
-    if course:
-        base = web._base(course)
-        groups.append(('수업 운영', [(base, '수업 개요'), (base + '/classroom', '실습 교실'),
-                                   (base + '/environments', '실습 환경'),
-                                   (base + '/students', '수강생 관리'),
-                                   (base + '/registrations', '명단·본인 확인')]))
-        assessment = ([(base + '/assignments', '과제 관리')] if web.assignments is not None else [])
-        assessment.append((base + '/submissions', '제출·채점 현황'))
-        if getattr(web, 'gradebook', None) is not None:
-            assessment.append((base + '/gradebook', '성적표 관리'))
-        if web.rubrics:
-            assessment.append((base + '/rubrics', '루브릭 관리'))
-        groups.append(('평가', assessment))
-        resources = []
-        if web.content_service is not None:
-            resources.append((base + '/content', '콘텐츠'))
-        if web.student_materials is not None:
-            resources.append((base + '/materials', '학생별 자료 배포'))
-        if web.exam_papers is not None:
-            resources.append((base + '/exam-papers', '시험지 배포'))
-        if web.extension_distribution is not None:
-            resources.append((base + '/extensions', 'IDE 확장 배포'))
-        if resources:
-            groups.append(('자료·IDE', resources))
-        groups.append(('설정', [(base + '/settings', '수업 설정')]))
-    groups.append(('다른 포털', [('/', '포털 안내'), ('/student', '학생 포털')]))
-    return groups
-
-
 def navigation(web, course, current_path):
     groups = navigation_groups(web, course)
     selected = current_path
     base = web._base(course) if course else ''
-    if course and any(current_path.startswith(base + '/' + segment) for segment in ('drafts', 'checks')):
+    if course and any(current_path.startswith(base + '/' + segment) for segment in ('drafts', 'checks', 'assignment-templates', 'grading-templates')):
         selected = base + '/assignments'
     active = None
     for _, links in groups:
@@ -208,7 +168,7 @@ def course_workflows(web, course):
     if web.assignments is not None:
         preparation.insert(0, (base + '/assignments', '과제 준비·공개', '문제와 채점 자료를 함께 준비하고, 검증 결과를 확인한 뒤 학생에게 공개합니다.'))
     if web.content_service is not None:
-        preparation.append((base + '/content', '강의자료 업데이트', '교재와 예제 파일을 공개하면 학생 IDE에서 변경된 자료를 받을 수 있습니다.'))
+        preparation.append((base + '/content', '강의자료', '교재와 예제 파일을 공개하면 학생 IDE에서 변경된 자료를 받을 수 있습니다.'))
     if web.student_materials is not None:
         preparation.append((base + '/materials', '학생별 자료 배포', '학번별 PDF·ZIP을 올려 각 학생에게 필요한 파일을 전달하고 수정합니다.'))
     if web.exam_papers is not None:
@@ -221,7 +181,7 @@ def course_workflows(web, course):
     if getattr(web, 'gradebook', None) is not None:
         review.append((base + '/gradebook', '엑셀 성적표 공개', '중간·기말·출석 등 엑셀 항목을 학번으로 연결해 학생에게 본인 점수만 공개합니다.'))
     if web.rubrics:
-        review.append((base + '/rubrics', '평가 기준 관리', '루브릭의 평가 항목을 준비하고 학생 제출본에 적용합니다.'))
+        review.append((base + '/rubrics', '평가 기준·루브릭', '루브릭의 평가 항목을 준비하고 학생 제출본에 적용합니다.'))
     review.append((base + '/settings', '수업 설정', '수업명·학기·분반과 운영 상태를 변경하고 수업 종료 절차를 진행합니다.'))
     groups = [('수업 준비', '학생과 과제, 배포할 자료를 준비합니다.', preparation),
               ('수업 진행', '현재 실습 상황을 확인하고 학생을 지원합니다.', teaching),

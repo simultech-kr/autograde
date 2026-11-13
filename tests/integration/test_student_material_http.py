@@ -124,12 +124,23 @@ def revision(env, path):
 def publish_material(env, *, filename="20260001.pdf", content=PDF, batch=False, **fields):
     path = create_material(env, **fields)
     upload_path = path + ("/upload-batch" if batch else "/upload")
-    status, _, body = env.admin.upload(upload_path, revision=revision(env, path),
-                                       filename=filename, content=content)
-    assert status == 303, body
+    response = env.admin.upload(upload_path, revision=revision(env, path), filename=filename, content=content)
+    assert response[0] == 303, response[2]
+    if batch:
+        apply_batch_review(env, response)
     status, _, body = env.admin.post(path + "/publish", revision=str(revision(env, path)), confirm="yes")
     assert status == 303, body
     return path
+
+
+def apply_batch_review(env, response):
+    assert response[0] == 303, response[2]
+    review_path = response[1]['Location']
+    assert '/batch-review/mbatch_' in review_path
+    assert env.admin.get(review_path)[0] == 200
+    result = env.admin.post(review_path + '/apply', confirm='yes')
+    assert result[0] == 303, result[2]
+    return result
 
 
 def student_login(env, *, course=COURSE, key="20260001", password="123456"):
@@ -394,8 +405,8 @@ def test_publication_allows_direct_file_recipient_and_schedule_updates(material_
     before = revision(env, path)
     assert env.admin.upload(path + "/upload", revision=before, content=OTHER_PDF)[0] == 303
     batch = zip_bytes([("20260002.pdf", OTHER_PDF)])
-    assert env.admin.upload(path + "/upload-batch", revision=revision(env, path),
-                            filename="new-recipients.zip", content=batch)[0] == 303
+    apply_batch_review(env, env.admin.upload(path + "/upload-batch", revision=revision(env, path),
+                            filename="new-recipients.zip", content=batch))
     assert env.admin.post(path, revision=str(revision(env, path)), title="changed", instructions="changed",
                           opens_at="2026-10-21T08:00", closes_at="2026-10-21T11:00")[0] == 303
     assert env.materials.get(COURSE, path.rsplit("/", 1)[1])["status"] == "published"
@@ -460,7 +471,7 @@ def draft_with_two_recipients(env):
     batch = zip_bytes([("20260001.pdf", PDF), ("20260002.pdf", OTHER_PDF)])
     response = env.admin.upload(path + "/upload-batch", revision=revision(env, path),
                                 filename="class-materials.zip", content=batch)
-    assert response[0] == 303, response[2]
+    apply_batch_review(env, response)
     return path
 
 

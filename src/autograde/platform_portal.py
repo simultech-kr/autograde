@@ -218,6 +218,9 @@ class CoursePortal:
         headers = {"Content-Type": "text/html; charset=utf-8"}
         if cookie:
             headers["Set-Cookie"] = cookie
+        if not navigation and audience == 'student':
+            parent, label = ('/', '포털 안내') if title == '교과목 선택' else ('/student', '학생 포털')
+            navigation = f'<a class="student-back" data-parent-link href="{parent}"><span aria-hidden="true">←</span> {label}로 돌아가기</a>'
         document = (
             '<!doctype html><html lang="ko"><head><meta charset="utf-8">'
             '<meta name="viewport" content="width=device-width,initial-scale=1">'

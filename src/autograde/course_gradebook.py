@@ -130,7 +130,7 @@ class CourseGradebook:
             db.execute('''INSERT INTO course_gradebooks(draft_id,course_key,title,filename,sheet_name,status,
                 base_revision,columns_json,selected_json,created_at) VALUES(?,?,?,?,?,'draft',?,?,?,?)''',
                 (draft, course_key, title, filename, parsed['sheet_name'], state['revision'], _json(parsed['columns']),
-                 _json([column['key'] for column in parsed['columns']]), utc_iso()))
+                 _json([]), utc_iso()))
             db.executemany('INSERT INTO course_gradebook_rows(course_key,draft_id,student_key,student_id,source_row,values_json) VALUES(?,?,?,?,?,?)',
                 [(course_key, draft, row['student_key'], roster.get(row['student_key']), row['source_row'], _json(row['values']))
                  for row in parsed['rows']])
@@ -141,6 +141,17 @@ class CourseGradebook:
             db.execute('BEGIN')
             _course(db, course_key)
             return self._review(db, course_key, draft_id)
+
+    def current_for_instructor(self, course_key):
+        """Read the actual public snapshot for a replacement comparison."""
+        with self.state._connection() as db:
+            db.execute('BEGIN')
+            _course(db, course_key)
+            current = db.execute('SELECT publication_id FROM course_gradebook_state WHERE course_key=?',
+                                 (course_key,)).fetchone()
+            if current is None or current['publication_id'] is None:
+                return None
+            return self._review(db, course_key, current['publication_id'])
 
     def list_for_instructor(self, course_key):
         with self.state._connection() as db:

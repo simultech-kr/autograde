@@ -58,7 +58,7 @@ test("public portal shell exposes audience entries without any course or student
   assert.match(html, /href="\/instructor"/);
   assert.match(html, /교수자 포털/);
   assert.match(html, /href="\/"[^>]*>포털 홈/);
-  assert.match(html, /href="\/app\/student"[^>]*>학생 포털/);
+  assert.match(html, /href="\/student"[^>]*>학생 포털/);
   assert.doesNotMatch(html, /course-navigation|\/courses\/|course_key=|csrf|SAMPLE-001|로그아웃/);
   assert.match(html, /<main id="main" tabindex="-1"/);
 });
@@ -70,11 +70,23 @@ test("portal shell marks the current screen and escapes selected-course labels",
   }));
   assert.match(html, /data-testid="course-navigation"/);
   assert.match(html, /aria-label="수업 메뉴"/);
-  assert.equal((html.match(/aria-current="page"/g) || []).length, 1);
+  assert.equal((html.match(/<a[^>]*aria-current="page"/g) || []).length, 1);
   assert.match(html, /href="\/app\?course_key=come2201" aria-current="page"/);
   assert.match(html, /href="\/app\/classroom\?course_key=come2201"/);
   assert.match(html, /&lt;img src=x onerror=&quot;alert\(1\)&quot;&gt;/);
   assert.doesNotMatch(html, /<img|기존 관리 화면/);
+});
+
+test("account and portal navigation remain reachable with no selected course", () => {
+  const html = renderToStaticMarkup(createElement(AppShell, {
+    children: "수업을 선택하세요", portalNavigation: [{ label: "계정", items: [
+      { id: "account", label: "내 계정·로그아웃", href: "/instructor/account" },
+    ] }],
+  }));
+  assert.match(html, /data-testid="portal-navigation"/);
+  assert.match(html, /href="\/instructor\/account"/);
+  assert.match(html, /data-parent-link="true" href="\/instructor"/);
+  assert.doesNotMatch(html, /\/courses\//);
 });
 
 test("summary separates student headcount from five latest-state metrics and explains overlapping totals", () => {

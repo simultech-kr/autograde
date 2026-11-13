@@ -179,9 +179,9 @@ def run(config, *, isolated=False):
                 bundle_store=bundles,
                 learning_runtime_overview=lambda course_key: services[course_key].learning_runtime_overview(),
                 next_ui_policy=NextResultsPolicy(config),
-                submissions=lambda key, auth: services[key].instructor_dashboard_page(auth, portal=True),
+                submissions=lambda key, auth: services[key].instructor_dashboard_page(auth, portal=True, fragment=True),
                 submission_updates=lambda key, auth: services[key].instructor_dashboard_updates(auth, portal=True),
-                submission_review=lambda key, auth, sid, index, **options: services[key].instructor_submission_page(auth, sid, index, **options))
+                submission_review=lambda key, auth, sid, index, **options: services[key].instructor_submission_page(auth, sid, index, fragment=True, **options))
         from .ide_update_distribution import IDEUpdateDistribution
         api = CourseAPI(services, secret, courses=courses, student_materials=student_materials, content_service=content_service,
                         extension_distribution=extension_distribution, operations=operations,

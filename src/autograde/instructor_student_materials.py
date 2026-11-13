@@ -9,7 +9,7 @@ from urllib.parse import quote
 
 from .instructor_responsive import result_table
 from .instructor_web import _button, _checkbox, _e, _field, _grid, _textarea, _timestamp, _utc, _value
-from .platform_service import PlatformFileResponse
+from .platform_service import PlatformFileResponse, PlatformBinaryResponse
 from .platform_state import PlatformNotFound
 
 
@@ -21,6 +21,48 @@ _RECORD_NOTICE = ('기록은 서버가 승인한 파일 요청입니다. 다운�
 def _path(ui, course, material=None):
     path = ui._base(course) + '/materials'
     return path + '/' + quote(material['material_id'], safe='') if material else path
+
+
+def _actor(ui):
+    return ui.principal.user_id if ui.principal else 'shared-instructor'
+
+
+def _batch_path(ui, course, material, review):
+    return _path(ui, course, material) + '/batch-review/' + review['review_id']
+
+
+def batch_review(ui, course, material, review, session):
+    path = _batch_path(ui, course, material, review)
+    counts = {kind: sum(row['change'] == kind for row in review['rows']) for kind in ('new', 'replace', 'unchanged')}
+    body = ('<p>업로드 완료 → 파일 검사 완료 → <strong>학생 매칭 검토</strong> → 반영</p>'
+            '<div class="notice"><strong>아직 학생 자료는 변경되지 않았습니다.</strong> '
+            '파일명과 실제 받는 학생을 확인하세요. 검토한 뒤 반영해야 배정이 저장됩니다.</div>'
+            f'<p>신규 {counts["new"]}명 · 교체 {counts["replace"]}명 · 동일 파일 {counts["unchanged"]}명 · '
+            f'이번 ZIP에 없는 기존 배정 {review["unchanged_other"]}명은 유지</p>'
+            f'<p class="hint">업로드 {review["uploaded_bytes"] / 1048576:.2f} MiB · '
+            f'내부 파일 포함 누적 검증 {review["validated_bytes"] / 1048576:.2f} MiB / 100 MiB · '
+            f'검토 만료 {_e(_timestamp(review["expires_at"]).replace("T", " "))} KST</p>')
+    labels = {'new': '신규 배정', 'replace': '기존 파일 교체', 'unchanged': '내용 동일'}
+    rows = []
+    for row in review['rows']:
+        rows.append((_e(row['student_key']), _e(row['name']),
+            f'<a href="{path}/file/{row["student_id"]}">{_e(row["filename"])} · 파일 확인</a>',
+            _e(_size(row['size_bytes'])), labels[row['change']], _e(row['previous_filename'] or '—')))
+    body += result_table(('학번', '학생 이름', '업로드 파일', '크기', '변경', '현재 배정 파일'), rows, '반영 전 학생별 파일 매칭')
+    if review['stale'] or course['status'] == 'archived':
+        body += '<p class="notice warning" role="alert">검토 후 자료가 변경되어 바로 반영할 수 없습니다. 최신 명단·배정으로 다시 검토하세요.</p>'
+        if course['status'] != 'archived':
+            body += ui._form(path + '/refresh', session, _button('업로드한 ZIP으로 다시 검토'))
+    else:
+        consequence = ('확인 후 반영하면 공개 중인 학생 자료가 즉시 갱신됩니다.' if material['status'] == 'published'
+                       else '반영 후에도 학생 비공개 초안입니다. 자료 편집 화면에서 공개할 수 있습니다.')
+        body += '<section><h3>검토 결과 반영</h3><p>' + consequence + '</p>'
+        body += ui._form(path + '/apply', session,
+            _checkbox('confirm', '파일 내용과 학번·이름의 매칭을 확인했습니다.') +
+            _button(f'검토한 {len(rows)}명에게 반영')) + '</section>'
+    body += ui._form(path + '/cancel', session, '<p class="hint">취소해도 현재 학생 자료는 유지됩니다.</p>' +
+                     _button('이번 업로드 취소', danger=True))
+    return '학생별 자료 업로드 검토', body
 
 
 def _fields(material):
@@ -201,7 +243,7 @@ def detail(ui, course, material, session):
     body += (f'<p>상태: <strong>{_e(_availability(material))}</strong> · {_e(_edition_label(material))}'
              f' <small>(편집 번호 {_e(material["revision"])})</small></p>')
     body += ('<div class="notice">자료 배포는 성적·과제 채점과 무관합니다. 공개 후에도 안내·기간과 학생별 파일을 직접 수정할 수 있습니다. '
-             '저장·파일 교체·배정 제외는 즉시 반영됩니다. 이전 파일과 당시 요청 이력은 보존합니다. '
+             '개별 저장·파일 교체·배정 제외는 즉시 반영됩니다. ZIP 일괄 업로드는 학생 매칭을 검토한 뒤 반영합니다. 이전 파일과 당시 요청 이력은 보존합니다. '
              '이미 다운로드한 파일은 회수하거나 자동으로 바꿀 수 없습니다.</div>')
     if material.get('change_note'):
         body += '<p><strong>변경 안내:</strong> ' + _e(material['change_note']).replace('\n', '<br>') + '</p>'
@@ -211,6 +253,11 @@ def detail(ui, course, material, session):
     body += _revision_controls(ui, course, material, session)
     body += '<section><h3>1. 자료 안내·배포 기간</h3>'
     if editable:
+        pending = ui.student_materials.pending_batches(course['course_key'], material['material_id'], actor=_actor(ui))
+        if pending:
+            body += (f'<div class="notice"><strong>반영하지 않은 ZIP 검토본이 있습니다.</strong> '
+                     f'<a href="{_batch_path(ui, course, material, pending)}">학생 매칭 검토 이어가기</a> '
+                     '· 새 ZIP을 정상 업로드하면 이전 검토본을 교체합니다.</div>')
         body += ui._form(path, session, revision + _fields(material) +
                          _button('안내·기간 저장' if draft else '안내·기간 수정 즉시 반영'))
     else:
@@ -235,10 +282,12 @@ def detail(ui, course, material, session):
                  '<input id="material-batch" name="file" type="file" accept="application/zip,.zip" required>' +
                  '<p class="hint">ZIP의 최상위에 학번.pdf 또는 학번.zip을 넣으세요. 폴더 없이 최대 200명, '
                  '업로드 ZIP 최대 100 MiB이며, 내부 파일을 포함한 누적 검증 용량도 100 MiB 이내여야 합니다. '
-                 '중복 학번·미등록 학번·잘못된 파일이 있으면 전체 등록을 취소합니다. '
-                 '기존 대상은 교체하고 나머지는 유지합니다. 공개 중인 자료의 변경은 즉시 반영됩니다.</p>' +
-                 _button('ZIP 일괄 등록·교체' if draft else 'ZIP 일괄 교체·즉시 반영'))
-        body += ui._form(path + '/upload-batch', session, batch, multipart=True)
+                 '중복 학번·미등록 학번·잘못된 파일이 있으면 기존 배정을 변경하지 않습니다. '
+                 '파일 검사 후 학생별 매칭을 확인하고 반영하세요. 이번 ZIP에 없는 기존 대상은 유지합니다.</p>' +
+                 '<p data-upload-progress role="status" aria-live="polite">ZIP 선택 → 업로드·검사 → 학생 매칭 검토 → 반영</p>' +
+                 '<progress data-upload-meter max="100" value="0" hidden aria-label="ZIP 업로드 진행률"></progress>' +
+                 _button('ZIP 업로드 · 학생 매칭 검토'))
+        body += ui._form(path + '/upload-batch', session, batch, multipart=True).replace('<form ', '<form data-material-batch-upload ', 1)
     body += ('<p class="hint">서버는 일괄 등록용 바깥 ZIP에서 배정 파일만 읽습니다. '
              '학생용 ZIP 내부 파일을 서버에 풀거나 실행하지 않습니다.</p>'
              f'<p>파일 배정 {len(assigned)}명 · 활성 수강 중 미배정 {missing}명</p>')
@@ -310,13 +359,41 @@ def request(ui, method, course, route, form, session):
     if not service:
         raise PlatformNotFound()
     key = course['course_key']
-    actor = ui.principal.user_id if ui.principal else 'shared-instructor'
+    actor = _actor(ui)
     if route == 'materials':
         if method == 'GET':
             return listing(ui, course, session)
         if method != 'POST':
             raise PlatformNotFound()
         material = service.create(key, **_metadata(form), actor=actor)
+        return ui._redirect(_path(ui, course, material))
+    review_route = re.fullmatch(r'materials/(mat_[A-Za-z0-9_-]+)/batch-review/(mbatch_[0-9a-f]{32})(?:/(apply|cancel|refresh|file)(?:/([0-9]{1,20}))?)?', route)
+    if review_route:
+        material = service.get(key, review_route[1])
+        review_id, action, student_id = review_route[2], review_route[3], review_route[4]
+        if student_id is not None and action != 'file':
+            raise PlatformNotFound()
+        if method == 'GET' and action is None:
+            return batch_review(ui, course, material, service.review_batch(key, material['material_id'], review_id, actor=actor), session)
+        if method == 'GET' and action == 'file' and student_id is not None:
+            data, metadata = service.review_batch_file(key, material['material_id'], review_id, int(student_id), actor=actor)
+            suffix = metadata['format']
+            return PlatformBinaryResponse(200, data, {
+                'Content-Type': 'application/pdf' if suffix == 'pdf' else 'application/zip',
+                'Content-Disposition': f'attachment; filename="material.{suffix}"; filename*=UTF-8\'\'{quote(metadata["filename"], safe="")}',
+            })
+        if method != 'POST' or action not in {'apply', 'cancel', 'refresh'}:
+            raise PlatformNotFound()
+        if action == 'apply':
+            if _value(form, 'confirm') != 'yes':
+                raise ValueError('파일 내용과 학번·이름의 매칭을 확인한 뒤 확인란을 선택하세요.')
+            service.apply_batch(key, material['material_id'], review_id, actor=actor)
+        elif action == 'cancel':
+            service.cancel_batch(key, material['material_id'], review_id, actor=actor)
+        else:
+            from .student_material_batch import refresh
+            review = refresh(service, key, material['material_id'], review_id, actor=actor)
+            return ui._redirect(_batch_path(ui, course, material, review))
         return ui._redirect(_path(ui, course, material))
     match = re.fullmatch(r'materials/(mat_[A-Za-z0-9_-]+)(?:/(upload|upload-batch|publish|archive|download|remove|revise)(?:/([0-9]{1,20})(?:/([0-9]{1,12}))?)?)?', route)
     if not match:
@@ -356,7 +433,8 @@ def request(ui, method, course, route, form, session):
                 raise ValueError('파일명을 확인하세요. 학번.pdf 또는 학번.zip 형식이어야 합니다.')
             service.upload(key, material['material_id'], revision=revision, data=data, filename=filename, actor=actor)
         else:
-            service.upload_batch(key, material['material_id'], revision=revision, data=data, actor=actor)
+            review = service.prepare_batch(key, material['material_id'], revision=revision, data=data, actor=actor)
+            return ui._redirect(_batch_path(ui, course, material, review))
     else:
         if _value(form, 'confirm') != 'yes':
             raise ValueError('수정본 생성·배정 제외·공개·보관 작업의 영향을 확인하고 확인란을 선택하세요.')

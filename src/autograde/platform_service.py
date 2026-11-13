@@ -56,6 +56,7 @@ from .platform_pinner import (
 from .web_theme import THEME_CSS
 from .instructor_responsive import RESPONSIVE_CSS, result_table
 from .submission_review import render_review, render_comparison
+from .instructor_page import InstructorPageFragment
 from .platform_state import (
     DeviceAuthorization,
     DeviceAuthorizationExpired,
@@ -108,6 +109,17 @@ class PlatformResponse:
     status: int
     body: str | Mapping[str, Any] | None
     headers: Mapping[str, str | tuple[str, ...]] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class PlatformBinaryResponse(PlatformResponse):
+    """Explicit private attachment bytes, bounded separately from HTML/JSON.
+
+    The HTTP adapter enforces 25 MiB, the configured file limit, allowed media
+    types and attachment disposition. Ordinary PlatformResponse stays at 1 MiB.
+    """
+
+    binary_download: bool = True
 
 
 @dataclass(frozen=True)
@@ -1564,15 +1576,22 @@ class StudentPlatformService:
 
     def instructor_submission_page(self, authorization: str, submission_id: str,
                                    file_index: int | None = None, *, history_offset: int = 0,
-                                   compare_id: str | None = None) -> PlatformResponse:
+                                   compare_id: str | None = None, fragment: bool = False) -> PlatformResponse | InstructorPageFragment:
         self._authorize_instructor(authorization)
         try:
             if compare_id is not None:
-                status, body = render_comparison(self.state, self.bundle_store, self.course_key, submission_id, compare_id, file_index)
+                rendered = render_comparison(self.state, self.bundle_store, self.course_key, submission_id, compare_id, file_index, fragment=fragment)
             else:
-                status, body = render_review(self.state, self.bundle_store, self.course_key, submission_id, file_index, history_offset)
+                rendered = render_review(self.state, self.bundle_store, self.course_key, submission_id, file_index, history_offset, fragment=fragment)
         except PlatformNotFound as exc:
+            if fragment:
+                # The instructor controller keeps its scoped parent navigation
+                # on missing-file/source pages as well as successful reviews.
+                raise
             raise PlatformAPIError(404, 'submission_not_found', '현재 수업에서 제출물 또는 파일을 찾을 수 없습니다.') from exc
+        if isinstance(rendered, InstructorPageFragment):
+            return rendered
+        status, body = rendered
         return PlatformResponse(status, body, {'Content-Type': 'text/html; charset=utf-8'})
 
     def instructor_dashboard(self, authorization: str) -> Mapping[str, Any]:
@@ -1649,7 +1668,7 @@ class StudentPlatformService:
             'html': self._instructor_results_fragment(dashboard, portal=portal),
         }, {'Content-Type': 'application/json; charset=utf-8'})
 
-    def instructor_dashboard_page(self, authorization: str, *, portal: bool = False) -> PlatformResponse:
+    def instructor_dashboard_page(self, authorization: str, *, portal: bool = False, fragment: bool = False) -> PlatformResponse | InstructorPageFragment:
         from .instructor_results import STYLE, checked_time
         from .instructor_results_browser import SCRIPT_TAG
         dashboard = self.instructor_dashboard(authorization)
@@ -1684,7 +1703,7 @@ class StudentPlatformService:
         dashboard_url = course_base + '/submissions' if portal else '/instructor'
         updates_url = dashboard_url + '/live' if portal else '/v1/instructor/dashboard/live'
         management_url = course_base if portal else '/instructor'
-        body = (
+        document_start = (
             "<!doctype html><html lang=\"ko\"><head><meta charset=\"utf-8\">"
             "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
             f"<title>{html.escape(self.course_key)} 교수자 관리</title>"
@@ -1699,9 +1718,11 @@ class StudentPlatformService:
             + THEME_CSS + RESPONSIVE_CSS + STYLE + "</style></head><body class=\"responsive-instructor\">"
             '<a class="skip-link" href="#main-content">본문으로 건너뛰기</a>'
             '<main id="main-content" tabindex="-1" data-audience="instructor">'
+        )
+        body = (
             '<header class="results-page-header"><div>'
             f'<p class="audience">교수자 · {html.escape(self.course_key)}</p>'
-            '<h1>제출·채점 현황</h1>'
+            + ('' if fragment else '<h1>제출·채점 현황</h1>') +
             '<p class="result-hint">학생별 최신 제출을 확인하고, 수정이 필요한 코드와 제출 이력을 검토합니다.</p>'
             '</div>'
             f'<nav class="page-actions" aria-label="결과 화면 이동"><a href="{management_url}">수업 관리</a>'
@@ -1733,10 +1754,11 @@ class StudentPlatformService:
             + '</section><!-- assignment-links:start --><h2 id="assignment-links">과제 수령 링크</h2>'
             + ('<ul>' + "".join(assignment_links) + '</ul>' if assignment_links else "<p>공개된 bundle 과제가 없습니다.</p>")
             + '<!-- assignment-links:end -->'
-            + "</main>" + SCRIPT_TAG + "</body></html>"
         )
+        if fragment:
+            return InstructorPageFragment('제출·채점 현황', body + SCRIPT_TAG, styles=STYLE)
         return PlatformResponse(
-            200, body, {"Content-Type": "text/html; charset=utf-8"}
+            200, document_start + body + "</main>" + SCRIPT_TAG + "</body></html>", {"Content-Type": "text/html; charset=utf-8"}
         )
 
     @staticmethod

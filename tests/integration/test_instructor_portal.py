@@ -123,7 +123,7 @@ def test_course_home_has_correct_capability_gated_workflows_and_active_navigatio
         assert BASE + suffix in links
     for suffix in ('/content', '/materials', '/exam-papers', '/extensions', '/rubrics'):
         assert BASE + suffix not in links
-    assert '자료·IDE' not in home.body
+    assert '학습자료' not in home.body
     assert '<dt>활성 공개 과제</dt><dd>1</dd>' in home.body
     assert f'href="{BASE}/assignments/cli_one"' in home.body
     assert f'href="/courses/come2201"' in home.body
@@ -133,7 +133,7 @@ def test_course_home_has_correct_capability_gated_workflows_and_active_navigatio
     home = browser.get(BASE)
     links = {link['href'] for link in Elements(home.body).all('a')}
     assert all(BASE + suffix in links for suffix in ('/content', '/materials', '/exam-papers', '/extensions', '/rubrics'))
-    assert '자료·IDE' in home.body
+    assert '학습자료' in home.body
     current = [link['href'] for link in Elements(home.body).all('a') if link.get('aria-current') == 'page']
     assert current == [BASE]
     (tmp_path / 'portal-instructor-course-modules.html').write_text(home.body, encoding='utf-8')

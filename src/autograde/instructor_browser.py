@@ -2,6 +2,7 @@
 import base64
 import hashlib
 from .instructor_draft_browser import SCRIPT as DRAFT_SAVE_SCRIPT
+from .instructor_material_upload_browser import SCRIPT as MATERIAL_UPLOAD_SCRIPT
 from .operations_readiness_browser import SCRIPT as READINESS_SCRIPT
 from .operations_seats_browser import SCRIPT as SEATS_SCRIPT
 
@@ -163,6 +164,7 @@ SCRIPT = r"""(() => {
   window.addEventListener('beforeunload', event => {
     if (!leaving && (anyDirty() || draftSavePending)) { event.preventDefault(); event.returnValue = ''; }
   });
+  /* material-batch-upload */
   /* draft-inline-save */
   document.addEventListener('submit', event => {
     if (event.defaultPrevented) return;
@@ -249,7 +251,7 @@ SCRIPT = r"""(() => {
     window.addEventListener('pagehide', stop); window.addEventListener('pageshow', resume);
     schedule();
   });
-})();""".replace('/* draft-inline-save */', DRAFT_SAVE_SCRIPT).replace('/* classroom-readiness */', READINESS_SCRIPT).replace('/* operations-seats */', SEATS_SCRIPT)
+})();""".replace('/* material-batch-upload */', MATERIAL_UPLOAD_SCRIPT).replace('/* draft-inline-save */', DRAFT_SAVE_SCRIPT).replace('/* classroom-readiness */', READINESS_SCRIPT).replace('/* operations-seats */', SEATS_SCRIPT)
 
 SCRIPT_HASH = base64.b64encode(hashlib.sha256(SCRIPT.encode('utf-8')).digest()).decode('ascii')
 SCRIPT_CSP = f"; script-src 'sha256-{SCRIPT_HASH}'; connect-src 'self'"

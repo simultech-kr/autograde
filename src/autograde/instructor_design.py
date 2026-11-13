@@ -67,6 +67,7 @@ STYLE = """
 .portal-account{border-top:1px solid var(--border);padding-top:12px;margin-top:24px}
 .responsive-instructor .instructor-header+.shell>main{padding:28px 32px;min-width:0;background:var(--page)}
 .page-heading{padding:0 0 20px;margin:0 0 20px;border-bottom:1px solid var(--border)}
+.page-back{display:inline-flex;align-items:center;gap:6px;min-height:44px;margin:0 0 8px;color:var(--link);font-size:14px;text-decoration:none}.page-back:hover{text-decoration:underline}
 .page-heading h2{font-size:26px;font-weight:700;letter-spacing:-.035em;line-height:1.3;margin:8px 0 0}
 .page-breadcrumb{display:flex;align-items:center;gap:8px;flex-wrap:wrap;color:var(--muted);font-size:12px;margin:0;padding:0}
 .page-breadcrumb a{color:var(--muted);text-decoration:none;min-height:24px;display:inline-flex;align-items:center}

@@ -130,7 +130,7 @@ export function InstructorDashboard() {
   const refreshState = refreshPresentation({ changed, paused, automatic, failed: Boolean(error), loading, lastSuccess });
 
   return (
-    <AppShell testId="dashboard" course={selectedCourse(identity?.courses, course)} section="results" resultsEnabled={identity?.capabilities.includes("results.read")}>
+    <AppShell testId="dashboard" course={selectedCourse(identity?.courses, course)} section="results" portalNavigation={identity?.portal_navigation} resultsEnabled={identity?.capabilities.includes("results.read")}>
       <PageHeading
         eyebrow="수업 운영 / 제출 현황"
         title="제출·채점 현황"

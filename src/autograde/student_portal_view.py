@@ -33,6 +33,7 @@ STYLE = """
 main{width:100%;max-width:640px;overflow-wrap:anywhere;background:var(--surface);color:var(--text);border-radius:0}
 main.portal-wide{max-width:1080px}
 .student-brand{font-size:.9rem;text-decoration:none;font-weight:650}
+.student-back{display:flex;align-items:center;min-height:44px;gap:6px;margin:8px 0;color:var(--link);font-size:.9rem;text-decoration:none}.student-back:hover{text-decoration:underline}
 .student-nav{display:flex;flex-wrap:wrap;gap:4px;border-bottom:1px solid var(--border);padding:12px 0;margin-bottom:24px}
 .student-nav a{display:inline-flex;align-items:center;min-height:44px;padding:8px 12px;text-decoration:none;color:var(--muted)}
 .student-nav a[aria-current=page]{color:var(--link);background:var(--soft);border-bottom:2px solid var(--accent);font-weight:650}
@@ -85,15 +86,17 @@ summary{cursor:pointer;font-weight:600}.secondary{border:1px solid var(--border)
 def navigation(course, current, *, materials=False, exams=False):
     base = '/courses/' + escape(course, quote=True)
     links = [('portal', '내 수업', base + '/portal'),
-             ('assignments', '과제 받기', base + '/assignments'),
+             ('assignments', '실습 과제', base + '/assignments'),
              ('results', '내 점수', base + '/results'),
              ('privacy', '정보 활용 설정', base + '/privacy')]
     if materials:
-        links.append(('materials', '내 자료', base + '/materials'))
+        links.append(('materials', '학습자료', base + '/materials'))
     if exams:
         links.append(('exam-papers', '시험지', base + '/exam-papers'))
     links.append(('courses', '교과목 선택', '/student'))
-    return '<nav class="student-nav" aria-label="학생 메뉴">' + ''.join(
+    parent, label = ('/student', '내 수업 목록') if current == 'portal' else (base + '/portal', '내 수업')
+    back = f'<a class="student-back" data-parent-link href="{parent}"><span aria-hidden="true">←</span> {label}으로 돌아가기</a>'
+    return back + '<nav class="student-nav" aria-label="학생 메뉴">' + ''.join(
         f'<a href="{href}"' + (' aria-current="page"' if key == current else '') + f'>{label}</a>'
         for key, label, href in links) + '</nav>'
 

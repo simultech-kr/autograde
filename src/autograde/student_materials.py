@@ -150,8 +150,12 @@ def _zip_members(archive, *, batch=False):
         if entry.file_size < 0 or entry.compress_size < 0 or (batch and entry.file_size == 0):
             raise ValueError("ZIP에 빈 파일 또는 올바르지 않은 파일 크기가 있습니다.")
         total += entry.file_size
-        if total > MAX_BATCH_BYTES or (batch and entry.file_size > MAX_MATERIAL_BYTES):
-            raise ValueError("ZIP의 압축 해제 크기 제한을 초과했습니다.")
+        if batch and entry.file_size > MAX_MATERIAL_BYTES:
+            raise ValueError(f"{name}: 학생별 파일 {entry.file_size / 1048576:.2f} MiB가 "
+                             f"파일당 한도 {MAX_MATERIAL_BYTES / 1048576:g} MiB를 초과했습니다.")
+        if total > MAX_BATCH_BYTES:
+            raise ValueError(f"{name}: ZIP의 압축 해제 크기 {total / 1048576:.2f} MiB가 "
+                             f"한도 {MAX_BATCH_BYTES / 1048576:g} MiB를 초과했습니다. 배포 ZIP을 나누어 등록하세요.")
         if entry.file_size > max(entry.compress_size, 1) * 1000:
             raise ValueError("ZIP 압축 비율이 너무 높습니다.")
     if not any(not entry.is_dir() for entry in entries):
@@ -189,7 +193,11 @@ def _zip_preflight(data, *, batch=False):
 
 def _read_zip_entry(archive, entry, budget, *, retain=True):
     if entry.file_size > budget[0]:
-        raise ValueError("ZIP의 전체 압축 해제 크기 제한을 초과했습니다.")
+        required = MAX_BATCH_BYTES - budget[0] + entry.file_size
+        raise ValueError(f"{entry.filename}: ZIP 압축 해제 크기 제한 — 누적 검증 용량이 최소 {required / 1048576:.2f} MiB로 "
+                         f"한도 {MAX_BATCH_BYTES / 1048576:g} MiB를 초과했습니다. "
+                         "학생용 ZIP 자체와 내부 파일의 압축 해제 크기를 함께 계산합니다. "
+                         "학생 파일을 나누어 여러 번 등록하세요. 기존 배정은 변경되지 않았습니다.")
     chunks, size = [], 0
     with archive.open(entry) as stream:
         while True:
@@ -232,6 +240,8 @@ class StudentMaterialService:
         self.state = state
         self.root = Path(root).expanduser().absolute()
         self.clock = clock or (lambda: datetime.now(timezone.utc))
+        from .student_material_batch import cleanup_expired
+        cleanup_expired(self)
 
     def _now(self):
         return utc_iso(self.clock())
@@ -391,6 +401,35 @@ class StudentMaterialService:
         return self._upload_entries(course_key, material_id, revision, [(key, extension, filename, data)], actor, "file_uploaded")
 
     def upload_batch(self, course_key, material_id, *, revision, data, actor):
+        entries, _ = self._batch_entries(data)
+        return self._upload_entries(course_key, material_id, revision, entries, actor, "batch_uploaded")
+
+    def prepare_batch(self, course_key, material_id, *, revision, data, actor):
+        from .student_material_batch import prepare
+        return prepare(self, course_key, material_id, revision=revision, data=data, actor=actor)
+
+    def review_batch(self, course_key, material_id, review_id, *, actor):
+        from .student_material_batch import get
+        return get(self, course_key, material_id, review_id, actor=actor)
+
+    def pending_batches(self, course_key, material_id, *, actor):
+        from .student_material_batch import pending
+        return pending(self, course_key, material_id, actor=actor)
+
+    def apply_batch(self, course_key, material_id, review_id, *, actor):
+        from .student_material_batch import apply
+        return apply(self, course_key, material_id, review_id, actor=actor)
+
+    def cancel_batch(self, course_key, material_id, review_id, *, actor):
+        from .student_material_batch import cancel
+        return cancel(self, course_key, material_id, review_id, actor=actor)
+
+    def review_batch_file(self, course_key, material_id, review_id, student_id, *, actor):
+        from .student_material_batch import file_content
+        return file_content(self, course_key, material_id, review_id, student_id, actor=actor)
+
+    @staticmethod
+    def _batch_entries(data):
         if not isinstance(data, bytes) or not data or len(data) > MAX_BATCH_BYTES:
             raise ValueError("일괄 ZIP은 1바이트 이상, 100 MiB 이하로 업로드하세요.")
         entries, students, budget = [], set(), [MAX_BATCH_BYTES]
@@ -404,51 +443,57 @@ class StudentMaterialService:
                     if key in students:
                         raise ValueError(f"학번 {key}에 PDF와 ZIP이 중복 지정되었습니다. 학생별로 하나만 지정하세요.")
                     students.add(key)
-                    content = _read_zip_entry(archive, entry, budget)
-                    _validate_file(content, extension, zip_budget=budget)
+                    try:
+                        content = _read_zip_entry(archive, entry, budget)
+                        _validate_file(content, extension, zip_budget=budget)
+                    except ValueError as exc:
+                        raise ValueError(f"{entry.filename} 검사 실패: {exc}") from exc
                     entries.append((key, extension, entry.filename, content))
         except (zipfile.BadZipFile, RuntimeError, NotImplementedError, EOFError, OSError, zlib.error) as exc:
             raise ValueError("일괄 ZIP이 손상되었거나 지원하지 않는 형식입니다.") from exc
-        return self._upload_entries(course_key, material_id, revision, entries, actor, "batch_uploaded")
+        return entries, MAX_BATCH_BYTES - budget[0]
 
     def _upload_entries(self, course_key, material_id, revision, entries, actor, action):
-        actor, now = _text(actor, "작업자", 200), self._now()
         with self.state._write() as db:
-            _course(db, course_key, writable=True)
-            material = _material(db, course_key, material_id)
-            _revision(material, revision)
-            _editable(material)
-            files = []
-            # Resolve every recipient before writing anything, preserving exact string keys.
-            for key, extension, filename, content in entries:
-                student = db.execute("SELECT s.id FROM platform_students s JOIN platform_enrollments e ON s.id=e.student_id "
-                                     "WHERE s.student_key=? AND s.active=1 AND e.course_key=? AND e.active=1", (key, course_key)).fetchone()
-                if student is None:
-                    raise ValueError(f"학번 {key}은(는) 이 수업의 활성 수강생이 아닙니다. 파일명과 수강 명단을 확인하세요.")
-                file = dict(material_id=material_id, student_id=student["id"], filename=filename, format=extension,
-                            size_bytes=len(content), sha256=hashlib.sha256(content).hexdigest())
-                files.append((file, content))
-            for file, content in files:
-                self._store_file(file, content)
-                old = db.execute("SELECT * FROM student_material_files WHERE material_id=? AND student_id=?",
-                                 (material_id, file["student_id"])).fetchone()
-                if old is None:
-                    file["file_revision"] = db.execute(
-                        "SELECT COALESCE(max(file_revision),0)+1 FROM student_material_file_history "
-                        "WHERE material_id=? AND student_id=?", (material_id, file["student_id"])).fetchone()[0]
-                else:
-                    file["file_revision"] = old["file_revision"]
-                    if material["status"] == "published" and any(old[key] != file[key] for key in ("sha256", "format", "size_bytes")):
-                        self._archive_file(db, old, "replaced", actor, now)
-                        file["file_revision"] += 1
-                db.execute("INSERT INTO student_material_files(material_id,student_id,filename,format,size_bytes,sha256,file_revision) VALUES(?,?,?,?,?,?,?) "
-                           "ON CONFLICT(material_id,student_id) DO UPDATE SET filename=excluded.filename,format=excluded.format,"
-                           "size_bytes=excluded.size_bytes,sha256=excluded.sha256,file_revision=excluded.file_revision",
-                           tuple(file[key] for key in ("material_id", "student_id", "filename", "format", "size_bytes", "sha256", "file_revision")))
-            db.execute("UPDATE student_materials SET revision=revision+1,updated_at=? WHERE material_id=?", (now, material_id))
-            material = _material(db, course_key, material_id)
-            _audit(db, material, action, actor, now)
-            return material
+            return self._write_entries(db, course_key, material_id, revision, entries, actor, action)
+
+    def _write_entries(self, db, course_key, material_id, revision, entries, actor, action):
+        actor, now = _text(actor, "작업자", 200), self._now()
+        _course(db, course_key, writable=True)
+        material = _material(db, course_key, material_id)
+        _revision(material, revision)
+        _editable(material)
+        files = []
+        # Resolve every recipient before writing anything, preserving exact string keys.
+        for key, extension, filename, content in entries:
+            student = db.execute("SELECT s.id FROM platform_students s JOIN platform_enrollments e ON s.id=e.student_id "
+                                 "WHERE s.student_key=? AND s.active=1 AND e.course_key=? AND e.active=1", (key, course_key)).fetchone()
+            if student is None:
+                raise ValueError(f"학번 {key}은(는) 이 수업의 활성 수강생이 아닙니다. 파일명과 수강 명단을 확인하세요.")
+            file = dict(material_id=material_id, student_id=student["id"], filename=filename, format=extension,
+                        size_bytes=len(content), sha256=hashlib.sha256(content).hexdigest())
+            files.append((file, content))
+        for file, content in files:
+            self._store_file(file, content)
+            old = db.execute("SELECT * FROM student_material_files WHERE material_id=? AND student_id=?",
+                             (material_id, file["student_id"])).fetchone()
+            if old is None:
+                file["file_revision"] = db.execute(
+                    "SELECT COALESCE(max(file_revision),0)+1 FROM student_material_file_history "
+                    "WHERE material_id=? AND student_id=?", (material_id, file["student_id"])).fetchone()[0]
+            else:
+                file["file_revision"] = old["file_revision"]
+                if material["status"] == "published" and any(old[key] != file[key] for key in ("sha256", "format", "size_bytes")):
+                    self._archive_file(db, old, "replaced", actor, now)
+                    file["file_revision"] += 1
+            db.execute("INSERT INTO student_material_files(material_id,student_id,filename,format,size_bytes,sha256,file_revision) VALUES(?,?,?,?,?,?,?) "
+                       "ON CONFLICT(material_id,student_id) DO UPDATE SET filename=excluded.filename,format=excluded.format,"
+                       "size_bytes=excluded.size_bytes,sha256=excluded.sha256,file_revision=excluded.file_revision",
+                       tuple(file[key] for key in ("material_id", "student_id", "filename", "format", "size_bytes", "sha256", "file_revision")))
+        db.execute("UPDATE student_materials SET revision=revision+1,updated_at=? WHERE material_id=?", (now, material_id))
+        material = _material(db, course_key, material_id)
+        _audit(db, material, action, actor, now)
+        return material
 
     @staticmethod
     def _archive_file(db, file, change_type, actor, now):

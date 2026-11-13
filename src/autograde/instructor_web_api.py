@@ -12,6 +12,7 @@ from .instructor_results_query import CourseResultsQuery
 from .classroom_state import ClassroomState
 from .platform_service import PlatformAPIError, PlatformResponse
 from .platform_state import PlatformAccessDenied, PlatformNotFound, PlatformConflict, utc_iso
+from .instructor_navigation import course_groups, portal_groups
 
 
 PREFIX = '/instructor/api/v1'
@@ -33,7 +34,7 @@ def _cookie(web, value):
 
 def _courses(web, enabled):
     fields = ('course_key', 'name', 'code', 'section', 'status')
-    return [{key: course[key] for key in fields} for course in web.courses.list_courses()
+    return [{**{key: course[key] for key in fields}, 'navigation': course_groups(web, course)} for course in web.courses.list_courses()
             if course['course_key'] in enabled]
 
 
@@ -103,7 +104,8 @@ def request(web, method, path, query, cookies, authorization, *, origin=None):
             session, signed = scoped._session(cookies, required=False)
             principal = scoped.principal
             fields = ('course_key', 'name', 'code', 'section', 'status')
-            payload = dict(courses=[{key: course[key] for key in fields} for course in scoped.courses.list_courses()],
+            payload = dict(courses=[{**{key: course[key] for key in fields}, 'navigation': course_groups(scoped, course)} for course in scoped.courses.list_courses()],
+                portal_navigation=portal_groups(scoped),
                 principal={'id': principal.user_id if principal else 'shared',
                            'display_name': principal.display_name if principal else '공유 교수자',
                            'mode': 'personal' if principal else 'shared'}, csrf=session['csrf'], capabilities=['classroom.read'] + ([] if principal and principal.read_only else ['classroom.control']))
@@ -126,7 +128,7 @@ def request(web, method, path, query, cookies, authorization, *, origin=None):
                 payload.update(principal={'id': principal.user_id if principal else 'shared',
                                           'display_name': principal.display_name if principal else '공유 교수자',
                                           'mode': 'personal' if principal else 'shared'},
-                               csrf=session['csrf'], capabilities=['results.read'])
+                               csrf=session['csrf'], capabilities=['results.read'], portal_navigation=portal_groups(scoped))
                 if signed:
                     headers['Set-Cookie'] = _cookie(scoped, signed)
             return PlatformResponse(200, {**metadata, **payload}, headers)

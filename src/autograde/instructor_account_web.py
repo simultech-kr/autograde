@@ -49,7 +49,9 @@ def _form(path, csrf, content):
 def _page(web, title, body, *, status=200, set_cookie=None):
     # Standalone login/MFA must not read any course or student information.
     style = 'body{margin:0;font:16px/1.6 system-ui;background:var(--page);color:var(--text)}main{max-width:760px;margin:32px auto;padding:24px;background:var(--surface);border:1px solid var(--border)}label{display:block;margin:16px 0}input,select,button{font:inherit;box-sizing:border-box;min-height:44px;padding:10px;border:1px solid var(--border);border-radius:4px;background:var(--surface);color:var(--text)}input,select{display:block;width:100%}button{background:var(--accent);color:var(--on-accent);cursor:pointer;margin-top:8px}a{color:var(--link)}pre,code{overflow-wrap:anywhere;white-space:pre-wrap}.notice{border-left:4px solid var(--link);padding:16px;background:var(--soft)}table{width:100%;border-collapse:collapse}td,th{border-bottom:1px solid var(--border);padding:8px;text-align:left}.table-scroll{overflow-x:auto}section{margin:24px 0} :focus-visible{outline:3px solid var(--link);outline-offset:3px}@media(max-width:760px){main{margin:0;border:0;padding:16px}}'
-    document = '<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>'+escape(title)+' · Autograde</title><style>'+THEME_CSS+style+'</style></head><body><main><h1>'+escape(title)+'</h1>'+body+'</main></body></html>'
+    parent, label = ('/', '포털 안내') if title == '교수자 로그인' else ('/instructor', '교수자 포털') if title in {'내 교수자 계정', '교수자 계정 관리'} else ('/instructor/account', '내 교수자 계정')
+    back = f'<nav aria-label="현재 위치"><a data-parent-link href="{parent}">← {label}으로 돌아가기</a></nav>'
+    document = '<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>'+escape(title)+' · Autograde</title><style>'+THEME_CSS+style+'</style></head><body><main>'+back+'<h1>'+escape(title)+'</h1>'+body+'</main></body></html>'
     headers = {'Content-Type': 'text/html; charset=utf-8'}
     if set_cookie is not None:
         headers['Set-Cookie'] = set_cookie

@@ -37,6 +37,7 @@ from .exam_paper_schema import SCHEMA as _EXAM_PAPER_SCHEMA
 from .student_material_schema import SCHEMA as _STUDENT_MATERIAL_SCHEMA
 from .student_material_version_schema import SCHEMA as _STUDENT_MATERIAL_VERSION_SCHEMA
 from .student_material_edit_schema import SCHEMA as _STUDENT_MATERIAL_EDIT_SCHEMA
+from .student_material_batch_schema import SCHEMA as _STUDENT_MATERIAL_BATCH_SCHEMA
 from .content_schema import SCHEMA as _CONTENT_SCHEMA
 from .classroom_schema import SCHEMA as _CLASSROOM_SCHEMA
 from .classroom_command_schema import SCHEMA as _CLASSROOM_COMMAND_SCHEMA
@@ -1544,6 +1545,7 @@ _MIGRATIONS = {
     21: _CLASSROOM_SCHEMA,
     22: _CLASSROOM_COMMAND_SCHEMA,
     23: _EXTENSION_DISTRIBUTION_SCHEMA,
+    24: _STUDENT_MATERIAL_BATCH_SCHEMA,
 }
 _LATEST_SCHEMA_VERSION = max(_MIGRATIONS)
 

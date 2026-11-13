@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { courseNavigation, selectedCourse } from "../src/features/navigation.ts";
+import { courseNavigation, courseNavigationGroups, selectedCourse } from "../src/features/navigation.ts";
 import { sampleBootstrap } from "./fixtures.ts";
 
 const course = sampleBootstrap.courses[0];
@@ -43,4 +43,16 @@ test("classroom keeps an existing Python results fallback when Next results are 
   const links = courseNavigation(course, "classroom");
   assert.deepEqual(links.filter(link => link.current).map(link => link.id), ["classroom"]);
   assert.equal(links.find(link => link.id === "results")?.href, `/courses/${course.course_key}/instructor/submissions`);
+});
+
+test("server navigation retains optional modules, order, labels and capability omissions", () => {
+  const scoped = { ...course, navigation: [
+    { label: "수업", items: [{ id: "home", label: "수업 개요", href: `/courses/${course.course_key}/instructor` }] },
+    { label: "학습자료", items: [{ id: "materials", label: "학생별 자료 배포", href: `/courses/${course.course_key}/instructor/materials` }] },
+  ] };
+  const groups = courseNavigationGroups(scoped, "classroom");
+  assert.deepEqual(groups.map(group => group.label), ["수업", "학습자료"]);
+  assert.deepEqual(groups.flatMap(group => group.items.map(item => item.id)), ["home", "materials"]);
+  assert.equal(groups[1].items[0].href, `/courses/${course.course_key}/instructor/materials`);
+  assert.deepEqual(courseNavigation({ ...scoped, navigation: [] }, "results"), []);
 });

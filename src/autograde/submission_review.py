@@ -10,6 +10,7 @@ from .platform_bundle import BundleError, BundleStorageError
 from .platform_state import PlatformNotFound
 from .web_theme import THEME_CSS
 from .instructor_responsive import RESPONSIVE_CSS, result_table
+from .instructor_page import InstructorPageFragment
 
 MAX_SOURCE_BYTES = 256 * 1024
 MAX_LINES = 5000
@@ -87,7 +88,7 @@ def _comparison_source(store, row, entry):
     return text
 
 
-def render_comparison(state, store, course_key, submission_id, previous_id, file_index=None):
+def render_comparison(state, store, course_key, submission_id, previous_id, file_index=None, *, fragment=False):
     current, _ = state.get_instructor_submission_review(course_key=course_key, submission_id=submission_id)
     previous, _ = state.get_instructor_submission_review(course_key=course_key, submission_id=previous_id)
     if (current['student_id'], current['assignment_id']) != (previous['student_id'], previous['assignment_id']) or (
@@ -95,8 +96,8 @@ def render_comparison(state, store, course_key, submission_id, previous_id, file
         raise PlatformNotFound('comparison unavailable')
     base = '/courses/' + quote(course_key, safe='') + '/instructor/submissions/' + quote(submission_id, safe='')
     root = base + '/compare/' + quote(previous_id, safe='')
-    body = (f'<nav class="page-actions"><a href="{base}">제출 이력으로 돌아가기</a></nav>'
-            f'<h1>제출 코드 비교</h1><h2>{_e(current["student_key"])} · {_e(current["title"])}</h2>'
+    body = (('' if fragment else f'<nav class="page-actions"><a href="{base}">제출 이력으로 돌아가기</a></nav><h1>제출 코드 비교</h1>') +
+            f'<h2>{_e(current["student_key"])} · {_e(current["title"])}</h2>'
             f'<p>이전: {_e(previous["received_at"])} · {_e(previous_id)}<br>현재: {_e(current["received_at"])} · {_e(submission_id)}</p>'
             '<p>− 이전 제출에서 삭제 / + 현재 제출에 추가. 코드 변경과 점수 변화의 인과관계를 자동 판정하지 않습니다. 줄바꿈은 정규화하여 비교합니다.</p>')
     before_score = '미확정' if previous['score'] is None else f'{previous["score"]:g} / {previous["max_score"]:g}'
@@ -154,19 +155,22 @@ def render_comparison(state, store, course_key, submission_id, previous_id, file
     except (BundleError, OSError, tarfile.TarError, KeyError):
         status = 503
         body += '<p role="alert">제출 원본을 읽을 수 없습니다. 보관 상태를 확인하세요.</p>'
+    if fragment:
+        return InstructorPageFragment('제출 코드 비교', body, status,
+            '.diff-added{background:var(--soft)}.diff-removed{background:var(--error-bg);color:var(--error)}')
     return status, ('<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
         '<title>제출 코드 비교</title><style>body{margin:0;font:16px/1.6 system-ui}main{max-width:1200px;margin:24px auto;padding:24px}'
         '.diff-added{background:var(--soft)}.diff-removed{background:var(--error-bg);color:var(--error)}'
         + THEME_CSS + RESPONSIVE_CSS + '</style></head><body class="responsive-instructor"><main>' + body + '</main></body></html>')
 
 
-def render_review(state, store, course_key, submission_id, file_index=None, history_offset=0):
+def render_review(state, store, course_key, submission_id, file_index=None, history_offset=0, *, fragment=False):
     row, history = state.get_instructor_submission_review(course_key=course_key, submission_id=submission_id, offset=history_offset)
     base = '/courses/' + quote(course_key, safe='') + '/instructor'
     root = base + '/submissions/' + quote(submission_id, safe='')
     score = '미확정' if row['score'] is None else f"{row['score']:g} / {row['max_score']:g}"
-    body = (f'<p><a href="{base}">수업 관리</a> · <a href="{base}/submissions">제출·채점 현황</a></p>'
-            f'<h1>제출 코드 확인</h1><h2>{_e(row["student_key"])} · {_e(row["title"])}</h2>'
+    body = (('' if fragment else f'<p><a href="{base}">수업 관리</a> · <a href="{base}/submissions">제출·채점 현황</a></p><h1>제출 코드 확인</h1>') +
+            f'<h2>{_e(row["student_key"])} · {_e(row["title"])}</h2>'
             f'<p>과제 {_e(row["assignment_key"])} / 릴리스 {_e(row["release_id"])}</p>'
             f'<p>제출 ID <code>{_e(submission_id)}</code><br>접수 {_e(row["received_at"])}</p>'
             f'<p>상태 {_e(row["state"])} · 점수 {_e(score)} · {_e(attention_reason(row["state"], row["score"], row["max_score"]))}</p>'
@@ -259,6 +263,8 @@ def render_review(state, store, course_key, submission_id, file_index=None, hist
     except (BundleError, OSError, tarfile.TarError, KeyError):
         status = 503
         body += '<p class="error" role="alert">제출 원본을 읽을 수 없습니다. 보관 상태를 확인하고 다시 시도하세요.</p>'
+    if fragment:
+        return InstructorPageFragment('제출 코드 확인', body, status)
     style = ('body{margin:0;font:16px/1.6 system-ui}main{max-width:1200px;margin:24px auto;padding:24px}'
              'code{overflow-wrap:anywhere}li{margin:6px 0}a{overflow-wrap:anywhere}.notice{padding:16px}' + THEME_CSS + RESPONSIVE_CSS)
     return status, ('<!doctype html><html lang="ko"><head><meta charset="utf-8">'
