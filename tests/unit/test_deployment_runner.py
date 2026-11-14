@@ -88,6 +88,50 @@ def _mock_install(monkeypatch):
     return calls
 
 
+def _mock_prerequisite_commands(monkeypatch, profile, node_version):
+    calls = []
+    binaries = {name: '/synthetic/bin/' + name for name in ('node', 'npm', 'git', 'docker', 'nginx')}
+    monkeypatch.setattr(deployment, 'check_platform', lambda _: None)
+    monkeypatch.setattr(deployment.shutil, 'which', binaries.get)
+
+    def execute(argv, **kwargs):
+        calls.append(argv)
+        assert kwargs.get('capture') is True
+        if argv == [binaries['node'], '--version']:
+            return node_version
+        if argv[:2] == [binaries['docker'], 'info']:
+            return 'linux'
+        if argv[:3] == [binaries['docker'], 'image', 'inspect']:
+            return json.dumps({'os': 'linux', 'digests': [profile['runner_image']]})
+        pytest.fail(f'unexpected prerequisite command: {argv}')
+
+    monkeypatch.setattr(deployment, 'execute', execute)
+    return binaries, calls
+
+
+@pytest.mark.parametrize('version', ['v24.15.0', 'v24.19.0', 'v26.0.0', 'v26.13.1'])
+def test_prerequisites_accept_supported_node_and_still_check_runner(profile, monkeypatch, version):
+    binaries, calls = _mock_prerequisite_commands(monkeypatch, profile, version)
+
+    assert deployment.prerequisites(profile) == binaries
+    assert any(command[:2] == [binaries['docker'], 'info'] for command in calls)
+    assert any(command[:3] == [binaries['docker'], 'image', 'inspect'] for command in calls)
+    assert not Path(profile['install_dir']).exists()
+
+
+@pytest.mark.parametrize('version', [
+    'v22.22.2', 'v24.0.0', 'v24.14.9', 'v25.8.1', 'v27.0.0',
+    'v26.13.1-rc.1', 'v26.13.1+custom', 'v26', 'v026.13.1', '', 'not a version',
+])
+def test_prerequisites_reject_unsupported_node_before_runner_commands(profile, monkeypatch, version):
+    binaries, calls = _mock_prerequisite_commands(monkeypatch, profile, version)
+
+    with pytest.raises(ValueError, match=r'Node\.js >=24\.15\.0 <25 or >=26\.0\.0 <27'):
+        deployment.prerequisites(profile)
+    assert calls == [[binaries['node'], '--version']]
+    assert not Path(profile['install_dir']).exists()
+
+
 def test_unmanaged_existing_directory_is_preserved(profile, source, monkeypatch):
     root = Path(profile['install_dir'])
     root.mkdir()

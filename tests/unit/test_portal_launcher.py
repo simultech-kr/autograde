@@ -401,14 +401,15 @@ def checkout(tmp_path, monkeypatch, launcher):
         "listen,127.0.0.1\n"
         f"port,{api_port}\nweb_port,{web_port}\nnext_web_port,{next_port}\n"
     )
-    (web / "package.json").write_text(json.dumps({"engines": {"node": ">=24.0.0 <25"}}))
+    engines = json.loads((ROOT / "web/package.json").read_text())["engines"]
+    (web / "package.json").write_text(json.dumps({"engines": engines}))
     next_entry = web / "node_modules/next/dist/bin/next"
     next_entry.parent.mkdir(parents=True)
     next_entry.write_text("// fake Next entry for read-only preflight\n")
     (web / ".next").mkdir()
     (web / ".next/BUILD_ID").write_text("test-build\n")
     node = tools / "node"
-    node.write_text(f"#!{sys.executable}\nprint('v24.0.0')\n")
+    node.write_text(f"#!{sys.executable}\nprint('v26.13.0')\n")
     node.chmod(0o755)
     npm = tools / "npm"
     npm.write_text(f"#!{sys.executable}\n" + '''
@@ -440,6 +441,23 @@ else:
 def snapshot_tree(root):
     return {str(path.relative_to(root)): path.read_bytes() if path.is_file() else None
             for path in root.rglob("*")}
+
+
+@pytest.mark.parametrize(("version", "supported"), [
+    ("v24.14.9", False), ("v24.15.0", True), ("v24.19.0", True),
+    ("v25.8.1", False), ("v26.0.0", True), ("v26.13.1", True),
+    ("v27.0.0", False), ("v26.14.0-rc.1", False), ("v026.13.1", False), ("not-a-version", False),
+])
+def test_preflight_supports_declared_stable_node_lines(launcher, checkout, version, supported):
+    (checkout / "tools/node").write_text(f"#!{sys.executable}\nprint({version!r})\n")
+    assert launcher.main(["--check"], root=checkout) == (0 if supported else 1)
+    assert not (checkout / "pilot/data with spaces").exists()
+
+
+def test_web_engine_and_lockfile_use_the_same_range():
+    package = json.loads((ROOT / "web/package.json").read_text())
+    lock = json.loads((ROOT / "web/package-lock.json").read_text())
+    assert package["engines"] == lock["packages"][""]["engines"]
 
 
 def test_check_is_read_only_and_default_config_is_relative_to_checkout(

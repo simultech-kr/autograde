@@ -226,10 +226,14 @@ def prepare(args, *, root: Path = ROOT) -> Plan:
         raise ValueError('node 실행 파일을 찾을 수 없습니다. web/package.json의 Node.js 버전을 준비하세요.')
     version = subprocess.run([node, '--version'], capture_output=True, text=True, timeout=5, check=True).stdout.strip()
     engine = json.loads((web / 'package.json').read_text())['engines']['node']
-    bounds = re.fullmatch(r'>=(\d+)\.(\d+)\.(\d+) <(\d+)', engine)
-    actual = re.fullmatch(r'v(\d+)\.(\d+)\.(\d+)', version)
-    if not bounds or not actual or not (
-        tuple(map(int, bounds.groups()[:3])) <= tuple(map(int, actual.groups())) < (int(bounds[4]), 0, 0)):
+    # package.json selects supported stable release lines, excluding odd/future
+    # majors. Parse each bounded alternative and fail closed on unknown syntax.
+    bounds = [re.fullmatch(r'>=(\d+)\.(\d+)\.(\d+) <(\d+)', part.strip())
+              for part in engine.split('||')]
+    actual = re.fullmatch(r'v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)', version)
+    if not all(bounds) or not actual or not any(
+        tuple(map(int, item.groups()[:3])) <= tuple(map(int, actual.groups())) < (int(item[4]), 0, 0)
+        for item in bounds):
         raise ValueError(f'웹 프로젝트의 Node.js 지원 범위는 {engine}입니다 (현재 {version}). IDE 빌드 런타임과 별도입니다.')
     npm = shutil.which('npm') if args.build else None
     if args.build and not npm:

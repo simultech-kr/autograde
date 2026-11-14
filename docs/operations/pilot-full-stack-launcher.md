@@ -10,13 +10,15 @@
 
 ## 처음 준비하거나 웹 코드를 갱신했을 때
 
-현재 저장소의 `.venv/bin/python`과 설치된 `autograde` 패키지, 운영에 사용하던 포털 CSV를 준비합니다. Node.js는 [웹 프로젝트의 요구 버전](../../web/package.json)인 24가 필요합니다. 사전 검사는 다른 Node 주 버전에서 실행을 중단합니다.
+현재 저장소의 `.venv/bin/python`과 설치된 `autograde` 패키지, 운영에 사용하던 포털 CSV를 준비합니다. Node.js는 [웹 프로젝트의 요구 버전](../../web/package.json)인 **26.x 또는 24.15.0 이상인 24.x**를 지원합니다. 기본 `.nvmrc`는 26.13.0이며 26.13.1도 지원 범위에 포함됩니다. 사전 검사는 지원 범위 밖 버전과 사전 배포 버전에서 실행을 중단합니다.
 
 ```sh
 ./scripts/run-portal.sh --config pilot/portal.https.local --build
 ```
 
 `--build`는 서버 시작 전에 `web/`에서 `npm ci --include=dev`와 `npm run build`를 실행합니다. TypeScript 등 빌드 의존성도 설치하고 production 모드로 빌드합니다. 최초 준비나 웹 변경 적용에 사용하고, 이후에는 첫 명령으로 기존 production build를 재사용합니다. 기본 실행은 의존성을 설치하거나 웹을 다시 빌드하지 않습니다. 설치·빌드 실패 시 Python 서버도 시작하지 않습니다. 빌드 후에는 설정과 포트를 다시 확인합니다.
+
+이전 실행기에서 Node.js 26에 대해 `>=24.0.0 <25` 오류가 표시되었다면 수정된 저장소 코드를 적용한 뒤 `--build`로 다시 시작합니다. 버전 검사를 삭제하거나 기존 CSV를 변경할 필요는 없습니다. Node 주 버전을 바꿀 때도 `--build`로 의존성과 빌드를 다시 준비합니다.
 
 ## 실행 전 확인과 종료
 

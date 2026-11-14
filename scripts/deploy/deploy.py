@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import re
 import shlex
 import shutil
 import socket
@@ -149,8 +150,14 @@ def prerequisites(profile):
     missing = [name for name, path in binaries.items() if path is None]
     if missing:
         raise ValueError('Install prerequisites first: ' + ', '.join(missing))
-    if not execute([binaries['node'], '--version'], capture=True).startswith('v24.'):
-        raise ValueError('Node.js 24 is required by the locked web application')
+    reported_node = execute([binaries['node'], '--version'], capture=True)
+    stable_node = re.fullmatch(r'v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)', reported_node)
+    node_version = tuple(map(int, stable_node.groups())) if stable_node else ()
+    # Keep the installer aligned with web/package.json. jsdom requires at
+    # least 24.15 on the 24 branch; odd and untested future branches stay out.
+    if not ((24, 15, 0) <= node_version < (25, 0, 0)
+            or (26, 0, 0) <= node_version < (27, 0, 0)):
+        raise ValueError('Node.js >=24.15.0 <25 or >=26.0.0 <27 (stable) is required by the locked web application')
     if execute([binaries['docker'], 'info', '--format', '{{.OSType}}'], capture=True, timeout=20) != 'linux':
         raise ValueError('Docker must be running Linux containers')
     inspected = json.loads(execute([binaries['docker'], 'image', 'inspect', '--format',
@@ -439,7 +446,7 @@ def main(argv=None):
             result = {'deployment': profile['deployment'], 'target_platform': profile['platform'],
                       'installation': profile['install_dir'], 'web_url': profile['web_url'], 'api_url': profile['api_url'],
                       'runtime': 'isolated Docker / SQLite / personal instructor MFA', 'will_change': False,
-                      'prerequisites': ['Python >=3.10 with venv', 'Node.js 24 and npm', 'Git', 'Linux Docker daemon with pinned runner image',
+                      'prerequisites': ['Python >=3.10 with venv', 'Node.js 24 (>=24.15.0) or 26, stable, and npm', 'Git', 'Linux Docker daemon with pinned runner image',
                                         'Nginx', 'DNS and HTTPS certificate', 'non-root installation owner'],
                       'network_changes': 'none; DNS records and proxy configuration are generated only'}
         elif args.command == 'install':

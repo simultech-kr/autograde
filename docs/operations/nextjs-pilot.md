@@ -37,7 +37,7 @@ git rev-parse --short HEAD
 .venv/bin/python -m pip install -e '.[dev]'
 ```
 
-Node.js 24 LTS와 npm을 준비하고 별도 터미널에서 실행합니다. 실제 고정 버전은 [웹 프로젝트](../../web/package.json)와 lockfile을 따릅니다. 운영 서버에서 `npm update`로 임의 갱신하지 않습니다.
+Node.js 26.x 또는 24.15.0 이상인 24.x와 npm을 준비하고 별도 터미널에서 실행합니다. 기본 버전은 `web/.nvmrc`, 지원 범위와 의존성은 [웹 프로젝트](../../web/package.json)와 lockfile을 따릅니다. 운영 서버에서 `npm update`로 임의 갱신하지 않습니다.
 
 ```sh
 cd web
@@ -50,7 +50,7 @@ npm start
 
 웹 프로세스는 내부 `127.0.0.1:18082`에서만 실행합니다. 외부 방화벽에 18082를 추가하지 않습니다. 개발 서버 대신 production build를 시험합니다. 운영 서비스 등록에는 [별도 계정 실행 예제](../../config/environments/autograde-next.service.example)를 참고하고 설치 위치와 Node 실행 경로를 실제 환경에 맞춥니다. Node 계정에는 Python 데이터·서명 키·교수자 자격 파일 접근 권한을 주지 않습니다.
 
-서비스 예제의 `/opt/autograde/web`, `/usr/bin/node`, `autograde-web` 계정은 실제 서버에 맞춰야 합니다. `ProtectHome=true`이므로 홈 디렉터리의 checkout이나 nvm 실행 파일을 그대로 지정하면 시작이 거절될 수 있습니다. 보호 옵션을 무작정 해제하지 말고 전용 설치 위치와 Node 24 경로를 준비합니다. 서비스 계정이 웹 빌드·의존성은 읽을 수 있고 Python의 데이터·키는 읽을 수 없는지 실제 파일 권한을 확인합니다.
+서비스 예제의 `/opt/autograde/web`, `/usr/bin/node`, `autograde-web` 계정은 실제 서버에 맞춰야 합니다. `ProtectHome=true`이므로 홈 디렉터리의 checkout이나 nvm 실행 파일을 그대로 지정하면 시작이 거절될 수 있습니다. 보호 옵션을 무작정 해제하지 말고 전용 설치 위치와 지원되는 Node 실행 경로를 준비합니다. 서비스 계정이 웹 빌드·의존성은 읽을 수 있고 Python의 데이터·키는 읽을 수 없는지 실제 파일 권한을 확인합니다.
 
 ## 2 기존 CSV에 시험 수업 지정
 

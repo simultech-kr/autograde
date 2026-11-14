@@ -4,7 +4,7 @@ Python·SQLite·채점 서비스를 유지하는 조회 전용 Next.js 화면입
 
 ## 실행
 
-Node.js 24.19.0과 npm을 사용합니다. 의존성은 lockfile로 고정합니다.
+Node.js 26과 npm을 사용합니다. `.nvmrc`의 기본 버전은 26.13.0이며 26.13.1 등 같은 주 버전의 패치도 지원합니다. 기존 Node.js 24는 24.15.0 이상을 지원합니다. 의존성은 lockfile로 고정합니다.
 
 ```sh
 cd web
@@ -15,7 +15,7 @@ npm run build
 npm start
 ```
 
-내부 주소는 `http://127.0.0.1:18082/app`, 상태 확인은 `/app/healthz`입니다. `npm run dev`는 개발 전용이며 production 검증을 대체하지 않습니다. 작업 환경의 기본 Node가 25 이상이면 `.nvmrc`의 Node 24 LTS로 전환합니다.
+내부 주소는 `http://127.0.0.1:18082/app`, 상태 확인은 `/app/healthz`입니다. `npm run dev`는 개발 전용이며 production 검증을 대체하지 않습니다. Node.js 지원 범위는 `>=24.15.0 <25 || >=26.0.0 <27`입니다. 25·27 등 지원 범위 밖 버전은 `.nvmrc`에 지정한 버전으로 전환합니다. Node 주 버전을 바꾼 뒤에는 의존성을 다시 설치하고 빌드합니다.
 
 실제 로그인·결과 조회는 Nginx에서 `/app`만 Next.js로, `/instructor/api/v1/`과 기존 `/instructor`, `/courses/`는 Python으로 연결한 **같은 origin**을 통해 사용합니다. Next.js 단독 주소에는 Python 인증 API가 없으므로 인증이 완료되지 않습니다. 18082는 외부에 개방하지 않습니다. [전환 계획](../docs/architecture/nextjs-migration-plan.md)의 운영 설정과 시험 조건을 먼저 확인합니다.
 

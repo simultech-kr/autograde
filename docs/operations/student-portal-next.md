@@ -138,7 +138,7 @@ IDE 요청 실패·만료를 분리한다. 학번순을 유지하며 실제 실�
 ## 서버 연결과 배포
 
 기존 Next.js 서버가 있다면 소스를 갱신한 뒤 웹 프로젝트를 다시 빌드하고 Python·Next.js를 재시작한다.
-Node.js 24 환경에서 저장소의 `web` 폴더로 이동하여 `npm ci`, `npm run build`, `npm start`를 순서대로 실행한다.
+Node.js 26.x 또는 24.15.0 이상인 24.x 환경에서 저장소의 `web` 폴더로 이동하여 `npm ci --include=dev`, `npm run build`, `npm start`를 순서대로 실행한다.
 운영 환경에서는 기존 서비스 관리 도구로 프로세스를 유지한다.
 
 `config/nginx-autograde-next.locations.conf.example`을 웹 20010 서버 블록에서 포함한다.

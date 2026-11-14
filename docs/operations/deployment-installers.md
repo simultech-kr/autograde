@@ -36,7 +36,7 @@ OS 권한까지 격리한 구성은 아니다. 상용 운영에서는 별도 웹
 기관 설치형 호스트와 클라우드 대상 Ubuntu 서버에는 다음이 필요하다.
 
 - Python 3.10 이상과 `venv`, `pip`. Ubuntu는 `python3-venv` 패키지가 필요하다.
-- Node.js 24와 npm. Ubuntu 기본 패키지의 Node 버전이 24인지 별도 확인한다.
+- Node.js 26.x 또는 24.15.0 이상인 24.x와 npm. Ubuntu 기본 패키지가 지원 범위에 포함되는지 별도 확인한다.
 - Git, Nginx, 설치 계정에서 사용할 수 있는 Linux Docker daemon
 - 승인된 고정 채점 이미지의 실제 `repository@sha256:...` 값
 - 웹·API의 서로 다른 HTTPS 주소와 두 주소를 포함하는 인증서·개인키
