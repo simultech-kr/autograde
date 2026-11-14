@@ -1,5 +1,7 @@
 # Scripts
 
+- `run-portal.sh`: 기존 포털 CSV로 Python 포털과 Next.js를 함께 실행. `./scripts/run-portal.sh --config pilot/portal.https.local`을 사용하며 최초 웹 준비는 `--build`, 실행 전 검사는 `--check`. [실행·종료·Nginx 연결 안내](../docs/operations/pilot-full-stack-launcher.md).
+
 - `deploy/ubuntu.sh`, `deploy/macos.sh`, `deploy/windows.ps1`: 기관 설치형 및 SSH 클라우드 설치형 실행기. [설치 절차](../docs/operations/deployment-installers.md).
 - `deploy/check_nginx_config.py`: 고정 Nginx 컨테이너와 합성 인증서로 기관형·클라우드형 HTTPS 설정 검사. 호스트 프록시는 시작하지 않는다.
 

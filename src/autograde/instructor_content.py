@@ -99,7 +99,7 @@ def listing(ui, course, session):
         version = 'v' + str(item.get('generation', 0)) if item.get('current_release_id') else '없음'
         rows.append((f'<a href="{_path(ui, course, item)}">{_e(item["title"])}</a>', _e(_target(item)),
                      _e(_STATE.get(item['status'], item['status'])), _e(version), str(len(item.get('files', [])))))
-    body += (result_table(('자료 모음', '초안 대상', '배포 상태', '현재 공개 버전', '초안 파일'), rows, '콘텐츠 자료 모음 목록')
+    body += (result_table(('자료 모음', '초안 대상', '배포 상태', '현재 공개 버전', '초안 파일'), rows, '강의자료 모음 목록')
              if rows else '<p>등록된 자료 모음이 없습니다.</p>')
     if course['status'] != 'archived':
         # Creation intentionally saves only identity/description. Dates and
@@ -109,7 +109,7 @@ def listing(ui, course, session):
         body += '<section><h3>새 자료 모음</h3>' + ui._form(path, session, fields) + '</section>'
     else:
         body += '<p class="notice">보관된 수업은 조회만 가능합니다.</p>'
-    return '콘텐츠', body
+    return '강의자료', body
 
 
 def _changes(collection, history):

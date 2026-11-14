@@ -9,18 +9,20 @@ from test_instructor_web import setup, BASE
 from test_instructor_portal import Elements
 
 
-@pytest.mark.parametrize(('path', 'parent'), [
-    ('', '/instructor'), ('/assignments', BASE), ('/assignments/new', BASE + '/assignments'),
-    ('/drafts/draft_example', BASE + '/assignments'),
-    ('/drafts/draft_example/downloads', BASE + '/drafts/draft_example'),
-    ('/checks/check_example', BASE + '/assignments'),
-    ('/assignments/bulk/preview', BASE + '/assignments'),
-    ('/assignments/bulk/apply', BASE + '/assignments'),
-    ('/gradebook/gbook_example', BASE + '/gradebook'),
-    ('/materials/mat_example/batch-review/mbatch_example', BASE + '/materials/mat_example'),
-    ('/submissions/bsub_example/compare/bsub_previous', BASE + '/submissions/bsub_example'),
+@pytest.mark.parametrize(('path', 'parent', 'back_label'), [
+    ('', '/instructor', '교수자 포털로 돌아가기'),
+    ('/assignments', BASE, 'come2201로 돌아가기'),
+    ('/assignments/new', BASE + '/assignments', '과제 관리로 돌아가기'),
+    ('/drafts/draft_example', BASE + '/assignments', '과제 관리로 돌아가기'),
+    ('/drafts/draft_example/downloads', BASE + '/drafts/draft_example', '과제 작성으로 돌아가기'),
+    ('/checks/check_example', BASE + '/assignments', '과제 관리로 돌아가기'),
+    ('/assignments/bulk/preview', BASE + '/assignments', '과제 관리로 돌아가기'),
+    ('/assignments/bulk/apply', BASE + '/assignments', '과제 관리로 돌아가기'),
+    ('/gradebook/gbook_example', BASE + '/gradebook', '성적표 관리로 돌아가기'),
+    ('/materials/mat_example/batch-review/mbatch_example', BASE + '/materials/mat_example', '자료 배포 상세로 돌아가기'),
+    ('/submissions/bsub_example/compare/bsub_previous', BASE + '/submissions/bsub_example', '제출 이력으로 돌아가기'),
 ])
-def test_course_hierarchy_has_safe_parent_for_each_workflow(setup, path, parent):
+def test_course_hierarchy_has_safe_parent_for_each_workflow(setup, path, parent, back_label):
     browser, _, courses, *_ = setup
     for module in ('student_materials', 'gradebook'):
         setattr(browser.web, module, object())
@@ -29,6 +31,7 @@ def test_course_hierarchy_has_safe_parent_for_each_workflow(setup, path, parent)
     rendered = browser.web._page('현재 화면', '<p>합성 자료</p>', course=course, current_path=BASE + path)
     links = Elements(rendered.body).all('a')
     assert [link['href'] for link in links if 'data-parent-link' in link] == [parent]
+    assert back_label in rendered.body
 
 
 def test_unknown_page_and_failed_form_still_have_parent_and_current_menu(setup):

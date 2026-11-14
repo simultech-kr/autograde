@@ -55,7 +55,9 @@ def test_optional_service_controls_nav_and_unknown_route(setup):
 def test_create_upload_publish_update_review_and_withdraw(cms):
     env = cms
     path = create(env)
-    assert 'aria-current=page>콘텐츠</a>' in env.browser.get(path).body
+    page = env.browser.get(path)
+    assert f'href="{ROOT}" aria-current=page>' in page.body
+    assert '<span>강의자료</span>' in page.body
     assert '파일을 1개 이상 저장한 후 공개할 수 있습니다.' in env.browser.get(path).body
     assert upload(env, path).status == 303
     assert upload(env, path, filename='reference.txt', data=b'unchanged\n').status == 303

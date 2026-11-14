@@ -106,5 +106,8 @@ def page_location(web, course, path, title):
                      for url, label in ancestors)
     crumbs += f'<span aria-current="page">{e(title)}</span>'
     url, label = ancestors[-1]
-    back = f'<a class="page-back" data-parent-link href="{e(url)}"><span aria-hidden="true">←</span> {e(label)}로 돌아가기</a>'
+    last = ord(label[-1]) if label else 0
+    # A final Hangul consonant takes 으로, except ㄹ; keep 로 for course codes.
+    particle = '으로' if 0xAC00 <= last <= 0xD7A3 and (last - 0xAC00) % 28 not in (0, 8) else '로'
+    back = f'<a class="page-back" data-parent-link href="{e(url)}"><span aria-hidden="true">←</span> {e(label)}{particle} 돌아가기</a>'
     return crumbs, back
