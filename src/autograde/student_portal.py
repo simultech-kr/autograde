@@ -228,7 +228,7 @@ def request(portal, method, path, form, cookies, origin):
             member_verifier = None
             if session.member_session:
                 _, member, _account = portal.members.session(cookies)
-                member_verifier = (member.student_key, member.password_hash)
+                member_verifier = member.member_verifier
             gradebook = portal.gradebook.student_view(course, session.credential, member_verifier=member_verifier)
         body = (_home(portal, course, session, overview) if section == 'portal'
                 else _results(portal, course, session, overview, gradebook))

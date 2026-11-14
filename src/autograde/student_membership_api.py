@@ -26,7 +26,7 @@ def payload(members, cookies):
     """Authenticated snapshot. Returning values never leaks verifiers or grants."""
     _digest, session, account = members.session(cookies)
     courses = []
-    for row in members.store.summary(account):
+    for row in members.summary(account):
         if row['course_key'] not in members.portal.services:
             continue
         enrolled = bool(row['enrolled'] and account['verified'])
@@ -45,7 +45,7 @@ def payload(members, cookies):
         })
     now = datetime.now(timezone.utc)
     return {
-        'authenticated': True, 'csrf': session.csrf,
+        'authenticated': True, 'auth_method': session.auth_method, 'csrf': session.csrf,
         'server_time': now.isoformat(),
         'expires_at': (now + timedelta(seconds=max(0, session.expires - members.portal.clock()))).isoformat(),
         'student': {'student_key': account['student_key'], 'verified': bool(account['verified'])},
@@ -137,7 +137,9 @@ def request(members, method, path, form, cookies, origin):
             account = members.store.register(form['student_key'], form['password'])
             return _open(members, account, cookies, '가입되었습니다. 수강할 수업을 선택한 뒤 교수자가 제공한 본인 확인 코드를 입력하세요.')
         if action == 'login':
-            return _open(members, members.store.authenticate(form['student_key'], form['password']), cookies, '로그인되었습니다.')
+            return _open(members, members.authenticate(form['student_key'], form['password']), cookies, '로그인되었습니다.')
+        if action in {'enroll', 'withdraw', 'activate'}:
+            members.require_member(account)
         if action == 'enroll':
             try:
                 courses = json.loads(form['course_keys'])
@@ -154,14 +156,13 @@ def request(members, method, path, form, cookies, origin):
             members.store.activate_token(account, form['token'].strip())
             return bootstrap(members, cookies, message='본인 확인이 완료되었습니다. 명단이 일치하는 신청 수업이 연결되었습니다.')
         if action == 'password':
-            confirm_password(form['new_password'], form['confirm_password'])
-            members.store.change_password(account, form['current_password'], form['new_password'])
-            return _clear(members, cookies, key=account['student_key'], message='비밀번호가 변경되어 기존 웹·IDE 인증이 종료되었습니다. 새 비밀번호로 로그인하고 새 수령 코드로 IDE를 연결하세요.')
+            members.change_password(account, form['current_password'], form['new_password'], form['confirm_password'])
+            return _clear(members, cookies, key=account['student_key'] if members.proved_identity(account) else None, message='비밀번호가 변경되어 기존 웹·IDE 인증이 종료되었습니다. 새 비밀번호로 로그인하고 새 수령 코드로 IDE를 연결하세요.')
         if action == 'reset':
             confirm_password(form['new_password'], form['confirm_password'])
             members.store.reset_password(form['student_key'], form['token'].strip(), form['new_password'])
             return _clear(members, cookies, key=form['student_key'].strip(), message='회원 비밀번호를 재설정했습니다. 새 비밀번호로 로그인하세요.')
-        return _clear(members, cookies, key=account['student_key'])
+        return _clear(members, cookies, key=account['student_key'] if members.proved_identity(account) else None)
     except (RegistrationError, PlatformAccessDenied, InvalidSignedValue, PlatformNotFound) as exc:
         status = getattr(exc, 'status', 401 if isinstance(exc, PlatformAccessDenied) else 403 if isinstance(exc, InvalidSignedValue) else 404)
         code = 'login_required' if status == 401 else 'rate_limited' if status == 429 else 'membership_conflict' if status == 409 else 'invalid_request'

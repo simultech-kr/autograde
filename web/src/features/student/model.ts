@@ -5,6 +5,7 @@ export type Course = {
 };
 export type Bootstrap = {
   authenticated: boolean; csrf: string; expires_at: string | null; server_time?: string;
+  auth_method?: "member" | "course";
   student: { student_key: string; verified: boolean } | null; courses: Course[]; api_base_url: string; message?: string;
 };
 export type Assignment = { assignment_id: string; assignment_key: string; title: string; opens_at: string | null; due_at: string | null; accepted_at: string | null };
@@ -70,6 +71,8 @@ export function unwrap(value: unknown): unknown {
 }
 export function parseBootstrap(value: unknown): Bootstrap {
   const body = object(unwrap(value)); const authenticated = bool(body.authenticated);
+  const auth_method = body.auth_method === undefined ? "member" : str(body.auth_method);
+  if (!["member", "course"].includes(auth_method)) throw new StudentContractError();
   const rawStudent = body.student === null ? null : object(body.student);
   const student = rawStudent ? { student_key: str(rawStudent.student_key, 20), verified: bool(rawStudent.verified) } : null;
   if (student && !/^\d{4,20}$/.test(student.student_key) || authenticated !== Boolean(student)) throw new StudentContractError();
@@ -86,7 +89,8 @@ export function parseBootstrap(value: unknown): Bootstrap {
       term: str(item.term ?? "", 100), year: scalar(item.year), semester: scalar(item.semester), status: status as Course["status"],
       request_status: request_status as Course["request_status"], enrolled: bool(item.enrolled), eligible: bool(item.eligible), can_withdraw: bool(item.can_withdraw) };
   });
-  return { authenticated, csrf: str(body.csrf, 256), expires_at, server_time: body.server_time === undefined ? undefined : date(body.server_time), student, courses, api_base_url: apiAddress(body.api_base_url),
+  if (auth_method === "course" && (!authenticated || !student?.verified || courses.some(course => !course.enrolled || course.can_withdraw))) throw new StudentContractError();
+  return { authenticated, auth_method: auth_method as Bootstrap["auth_method"], csrf: str(body.csrf, 256), expires_at, server_time: body.server_time === undefined ? undefined : date(body.server_time), student, courses, api_base_url: apiAddress(body.api_base_url),
     message: body.message === undefined ? undefined : str(body.message, 1000) };
 }
 function scalar(value: unknown): number | string | undefined {

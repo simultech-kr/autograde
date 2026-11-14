@@ -127,6 +127,32 @@ class StudentPrivacy:
                     consents.append({**self._read(db, credential), 'course_name': row['course_name'] or row['course_key']})
             return {'student_key': student_key, 'policy': dict(POLICY), 'consents': consents}
 
+    def overview_for_credentials(self, student_key, credentials, *, allowed_courses):
+        """Read only the course identities proved by this browser login.
+
+        A course-backed session has no student_accounts row. Its imported
+        verifiers are rechecked in the same snapshot as the returned choices;
+        an enrollment sharing the student's number is not additional proof.
+        """
+        if not credentials or len(credentials) > 20:
+            raise PlatformAccessDenied('수강 또는 인증 상태가 변경되었습니다.')
+        with self.state._connection() as db:
+            db.execute('BEGIN')
+            consents, seen = [], set()
+            for credential in credentials:
+                if credential.student_key != student_key or credential.course_key in seen:
+                    raise PlatformAccessDenied('수강 또는 인증 상태가 변경되었습니다.')
+                seen.add(credential.course_key)
+                self._authenticate(db, credential)
+                if credential.course_key not in allowed_courses:
+                    continue
+                course = db.execute('SELECT name FROM admin_courses WHERE course_key=?',
+                                    (credential.course_key,)).fetchone()
+                consents.append({**self._read(db, credential),
+                                 'course_name': course['name'] or credential.course_key})
+            consents.sort(key=lambda row: (row['course_name'], row['course_key']))
+            return {'student_key': student_key, 'policy': dict(POLICY), 'consents': consents}
+
     def record(self, credential, *, decision, policy_version, revision, member_verifier=None):
         if decision not in {'granted', 'declined'} or policy_version != POLICY_VERSION:
             raise ValueError('동의 안내와 선택 항목을 다시 확인하세요.')

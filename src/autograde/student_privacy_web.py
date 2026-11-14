@@ -73,7 +73,11 @@ def request(portal, method, path, form, cookies, origin):
                         return _json(403, code='invalid_request', message='학생 포털에서 다시 시도하세요.')
                     if form['policy_version'] != POLICY_VERSION:
                         return _json(400, code='invalid_request', message='새 안내 내용을 확인해 주세요.')
-                result = portal.privacy.overview((member.student_key, member.password_hash), allowed_courses=set(portal.services))
+                if member.course_credentials:
+                    result = portal.privacy.overview_for_credentials(member.student_key, member.course_credentials,
+                                                                     allowed_courses=set(portal.services))
+                else:
+                    result = portal.privacy.overview(member.member_verifier, allowed_courses=set(portal.services))
                 # Use the same cached WebSessions as the legacy course pages.
                 # These reminders last only for this login; no consent is stored.
                 sessions = [(row, portal._session(row['course_key'], cookies)[1]) for row in result['consents']]
@@ -117,7 +121,7 @@ def request(portal, method, path, form, cookies, origin):
             member_verifier = None
             if session.member_session:
                 _, member, _account = portal.members.session(cookies)
-                member_verifier = (member.student_key, member.password_hash)
+                member_verifier = member.member_verifier
             if method == 'POST':
                 expected = {'csrf', 'policy_version'} if dismiss else {'csrf', 'decision', 'policy_version', 'revision'}
                 if set(form) != expected or not all(isinstance(value, str) for value in form.values()):

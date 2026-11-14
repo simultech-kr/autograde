@@ -63,7 +63,7 @@ def test_legacy_claim_is_already_logged_out_and_only_offers_reauthentication(por
     web, _, _, _, _ = portal
     status, headers, body = login(web, 'come3105')
     assert status == 200
-    assert '/courses/come3105/activate-account' in LinksAndForms(body).links
+    assert '/courses/come3105/password' in LinksAndForms(body).links
     token = cookie(headers)
     status, _, home = request(web, '/courses/come3105/portal', cookie=token)
     assert status == 200

@@ -26,6 +26,16 @@ class MemberSession:
     csrf: str
     expires: float
     privacy_prompt_dismissed: dict[str, str] = field(default_factory=dict, compare=False, repr=False)
+    course_credentials: tuple = field(default=(), repr=False)
+    course_revisions: tuple = field(default=(), repr=False)
+
+    @property
+    def auth_method(self):
+        return 'course' if self.course_credentials else 'member'
+
+    @property
+    def member_verifier(self):
+        return None if self.course_credentials else (self.student_key, self.password_hash)
 
 
 class StudentMembership:
@@ -51,24 +61,68 @@ class StudentMembership:
             session = self.sessions.get(digest)
         if session is None:
             raise PlatformAccessDenied('로그인이 만료되었습니다. 다시 로그인하세요.')
-        account = self.store.account(session.student_key)
-        if not hmac.compare_digest(session.password_hash, account['password_hash']):
+        try:
+            if session.course_credentials:
+                from . import student_course_identity
+                account = student_course_identity.validate(self.store,
+                    student_course_identity.account(session.course_credentials, session.course_revisions), self.portal.services)
+            else:
+                account = self.store.account(session.student_key)
+                if not hmac.compare_digest(session.password_hash, account['password_hash']):
+                    raise PlatformAccessDenied('회원 인증 상태가 변경되었습니다.')
+        except PlatformAccessDenied:
             with self.lock:
                 self.sessions.pop(digest, None)
-            raise PlatformAccessDenied('회원 인증 상태가 변경되었습니다.')
+            raise
         return digest, session, account
+
+    def authenticate(self, key, password):
+        from .student_course_identity import authenticate
+        return authenticate(self.store, key, password, self.portal.services)
+
+    def summary(self, account):
+        if account.get('_course_credentials'):
+            from .student_course_identity import summary
+            return summary(self.store, account)
+        return self.store.summary(account)
+
+    @staticmethod
+    def require_member(account):
+        if account.get('_course_credentials'):
+            raise RegistrationError('수업 계정으로 연결된 수업을 바로 이용할 수 있습니다. 수강 신청은 개인 비밀번호 설정 후 이용하세요.', 409)
+
+    @staticmethod
+    def proved_identity(account):
+        return bool(account.get('_course_credentials') or (account['verified'] and account['student_id'] is not None))
+
+    def change_password(self, account, current_password, password, confirmation):
+        confirm_password(password, confirmation)
+        if account.get('_course_credentials'):
+            proof = self.authenticate(account['student_key'], current_password)
+            if not proof.get('_course_credentials'):
+                raise PlatformAccessDenied('학생 인증 상태가 변경되었습니다.')
+            previous = {c.enrollment_id for c in account['_course_credentials']}
+            credential = next((c for c in proof['_course_credentials'] if c.enrollment_id in previous), None)
+            if credential is None:
+                raise PlatformAccessDenied('현재 수업 비밀번호를 확인하세요.')
+            self.store.setup_password(credential, password, confirmation)
+        else:
+            self.store.change_password(account, current_password, password)
 
     def open(self, account, cookies):
         self.portal._revoke_browser_sessions(cookies)
         with self.lock:
             for key in [k for k, value in self.sessions.items()
-                        if value.expires <= self.portal.clock() or value.student_key == account['student_key']]:
+                        if value.expires <= self.portal.clock() or
+                        (value.student_key == account['student_key'] and
+                         (self.proved_identity(account) or not value.course_credentials))]:
                 self.sessions.pop(key, None)
             if len(self.sessions) >= 200:
                 raise RegistrationError('접속이 많습니다. 잠시 후 다시 로그인하세요.', 503)
             raw = new_api_token()
             self.sessions[secret_digest(self.portal.secret, 'member-session', raw)] = MemberSession(
-                account['student_key'], account['password_hash'], new_api_token(), self.portal.clock() + 600)
+                account['student_key'], account['password_hash'], new_api_token(), self.portal.clock() + 600,
+                course_credentials=account.get('_course_credentials', ()), course_revisions=account.get('_course_revisions', ()))
         return PlatformResponse(303, None, {'Location': '/student/account', 'Set-Cookie': (
             self.cookie('', clear=True, name=ENTRY_COOKIE), self.cookie(raw))})
 
@@ -77,25 +131,24 @@ class StudentMembership:
         entry = sign_browser_value(self.portal.secret, 'member-entry', {'action': action, 'csrf': csrf}, lifetime_seconds=600)
         registering = action == 'register'
         body = ('<p>학번·비밀번호로 먼저 가입합니다. 다음 화면에서 수강할 수업을 선택하고 교수자가 제공한 본인 확인 코드를 입력하세요.</p>'
-                if registering else '<p>직접 가입할 때 정한 비밀번호로 로그인하세요. 수강 명단과 연결된 여러 교과목에서 함께 사용합니다.</p>')
+                if registering else '<p>교수자가 제공한 수업 비밀번호 또는 직접 설정한 개인 비밀번호로 로그인하세요. 기존 수업 계정은 별도 회원가입 없이 이용할 수 있습니다.</p>')
         if message:
             body += f'<p class="error" role="alert">{escape(message)}</p>'
         course_field = ''
         body += (f'<form method="post" action="/student/{action}"><input type="hidden" name="csrf" value="{csrf}">'
             '<label>학번<input name="student_key" inputmode="numeric" pattern="[0-9]{4,20}" minlength="4" maxlength="20" autocomplete="off" required></label>'
-            '<label>비밀번호<input name="password" type="password" minlength="8" maxlength="128" autocomplete="off" required></label>'
-            '<p><small>8~128자. 공용 PC에는 비밀번호를 저장하지 마세요.</small></p>'
+            f'<label>비밀번호<input name="password" type="password" minlength="{8 if registering else 6}" maxlength="128" autocomplete="off" required></label>'
+            '<p><small>기존 수업 비밀번호는 6자리부터, 새 개인 비밀번호는 8~128자입니다. 공용 PC에는 비밀번호를 저장하지 마세요.</small></p>'
             + course_field + f'<button>{"회원가입" if registering else "로그인"}</button></form>'
-            '<nav class="assignment-links"><a href="/student/login">회원 로그인</a><a href="/student/register">회원가입</a>'
+            '<nav class="assignment-links"><a href="/student/login">학생 로그인</a><a href="/student/register">회원가입</a>'
             '<a href="/student/reset">회원 비밀번호 찾기</a><a href="/courses">기존 학생 · 수업 선택</a></nav>'
-            '<p class="portal-help">이미 교수자에게 6자리 비밀번호를 받은 학생은 먼저 수업에 로그인한 뒤 '
-            '“회원 계정 만들기”를 선택하세요. 학번만으로 기존 계정의 비밀번호를 바꿀 수 없습니다.</p>')
+            '<p class="portal-help">교수자에게 비밀번호를 받은 학생은 바로 로그인하세요. 이미 개인 비밀번호를 설정했다면 개인 비밀번호를 사용합니다.</p>')
         return self.portal._page('학생 회원가입' if registering else '학생 로그인', body, status=status,
                                  cookie=self.cookie(entry, name=ENTRY_COOKIE))
 
     def account_page(self, cookies, message=''):
         _key, session, account = self.session(cookies)
-        rows = self.store.summary(account)
+        rows = self.summary(account)
         body = f'<p>학번 <strong>{escape(account["student_key"])}</strong> · 로그인 후 10분 동안 이용할 수 있습니다.</p>'
         if message:
             body += f'<p role="status">{escape(message)}</p>'
@@ -129,7 +182,8 @@ class StudentMembership:
         body += '</div>'
         if not count:
             body += '<p role="status">현재 운영 중인 교과목이 없습니다.</p>'
-        body += (f'<p><a href="/student/account">명단 연결 상태 새로고침</a> · <a href="/student/password">회원 비밀번호 변경</a></p><form method="post" action="/student/logout">'
+        password_label = '개인 비밀번호 설정' if account.get('_course_credentials') else '회원 비밀번호 변경'
+        body += (f'<p><a href="/app/student">학생 포털 열기</a> · <a href="/student/account">명단 연결 상태 새로고침</a> · <a href="/student/password">{password_label}</a></p><form method="post" action="/student/logout">'
                  f'<input type="hidden" name="csrf" value="{session.csrf}"><button class="secondary">로그아웃</button></form>')
         return self.portal._page('내 수강 교과목', body, wide=True)
 
@@ -142,17 +196,27 @@ class StudentMembership:
         except PlatformAccessDenied as exc:
             # Never fall back to a previous student's legacy course grant when
             # a common-login cookie is present but no longer authenticates.
-            raise PlatformAPIError(403, 'login_required', '회원 로그인이 만료되었습니다. 다시 로그인하세요.') from exc
+            raise PlatformAPIError(403, 'login_required', '학생 로그인이 만료되었습니다. 다시 로그인하세요.') from exc
         if not account['verified']:
             raise PlatformAPIError(403, 'identity_verification_required', '교수자가 제공한 코드로 본인 확인을 완료하세요.')
         if account['student_id'] is None:
             raise PlatformAPIError(403, 'login_required', '수강 명단과 학번이 일치해야 합니다.')
+        if member.course_credentials and course not in {c.course_key for c in member.course_credentials}:
+            raise PlatformAPIError(403, 'course_access_denied', '이 수업의 비밀번호로 다시 로그인하세요.')
         try:
             credential = self.store.state.get_student_password_credential(student_key=account['student_key'], course_key=course)
         except PlatformNotFound as exc:
             raise PlatformAPIError(403, 'login_required', '수강 명단과 학번이 일치해야 합니다.') from exc
         if credential.student_id != account['student_id']:
             raise PlatformAPIError(403, 'login_required', '회원 인증 상태를 확인하세요.')
+        if member.course_credentials:
+            proved = next(c for c in member.course_credentials if c.course_key == course)
+            if (credential.enrollment_id != proved.enrollment_id
+                    or not hmac.compare_digest(credential.password_hash, proved.password_hash)):
+                raise PlatformAPIError(403, 'login_required', '수업 인증 상태가 변경되었습니다. 다시 로그인하세요.')
+            # A concurrent roster rotation must not upgrade the old login to
+            # the new verifier. Downstream operations validate this exact proof.
+            credential = proved
         from .platform_portal import WebSession
         key = secret_digest(self.portal.secret, 'member-course', cookies[COOKIE] + ':' + course)
         session = self.portal.sessions.get(key)
@@ -249,7 +313,7 @@ class StudentMembership:
                 if entry.get('action') != action:
                     raise RegistrationError('화면을 새로 열고 다시 시도하세요.', 403)
                 self._csrf(form, entry.get('csrf', ''))
-                account = self.store.register(form['student_key'], form['password']) if action == 'register' else self.store.authenticate(form['student_key'], form['password'])
+                account = self.store.register(form['student_key'], form['password']) if action == 'register' else self.authenticate(form['student_key'], form['password'])
                 return self.open(account, cookies)
             if path == '/student/reset':
                 return self.reset_form(method, form, cookies)
@@ -264,6 +328,8 @@ class StudentMembership:
             if set(form) != expected:
                 raise RegistrationError('입력 형식을 확인하세요.')
             self._csrf(form, session.csrf)
+            if path in {'/student/activate', '/student/withdraw', '/student/enroll'}:
+                self.require_member(account)
             if path == '/student/activate':
                 self.store.activate_token(account, form['token'].strip())
                 return self.account_page(cookies, '본인 확인이 완료되었습니다. 신청한 수업의 명단을 확인했습니다.')
@@ -271,10 +337,9 @@ class StudentMembership:
                 self.store.withdraw_course(account, form['course_key'])
                 return self.account_page(cookies, '확인 대기 중인 수강 신청을 취소했습니다.')
             if path == '/student/password':
-                confirm_password(form['new_password'], form['confirm_password'])
-                self.store.change_password(account, form['current_password'], form['new_password'])
+                self.change_password(account, form['current_password'], form['new_password'], form['confirm_password'])
                 from .student_membership_api import _clear
-                cleared = _clear(self, cookies, key=account['student_key'])
+                cleared = _clear(self, cookies, key=account['student_key'] if self.proved_identity(account) else None)
                 return PlatformResponse(303, None, {'Location': '/student/login', 'Set-Cookie': cleared.headers['Set-Cookie']})
             if path == '/student/enroll':
                 if form['course_key'] not in self.portal.services:
@@ -283,9 +348,10 @@ class StudentMembership:
                 return self.account_page(cookies, '선택한 수업의 명단을 확인했습니다. 학번이 일치하면 바로 이용할 수 있고, 일치하지 않으면 교수자의 명단 등록을 기다립니다.')
             if path == '/student/logout':
                 self.portal._revoke_browser_sessions(cookies)
-                with self.portal.lock:
-                    for course_key in [k for k, value in self.portal.sessions.items() if value.credential.student_key == account['student_key']]:
-                        self.portal.sessions.pop(course_key, None)
+                if self.proved_identity(account):
+                    with self.portal.lock:
+                        for course_key in [k for k, value in self.portal.sessions.items() if value.credential.student_key == account['student_key']]:
+                            self.portal.sessions.pop(course_key, None)
                 return PlatformResponse(303, None, {'Location': '/student', 'Set-Cookie': (
                     self.cookie('', clear=True, name=ENTRY_COOKIE), self.cookie('', clear=True))})
             raise PlatformNotFound()

@@ -58,7 +58,7 @@ def request(portal, method, path, form, cookies, origin):
                 return _json(400, code='invalid_request', message='불필요한 조회 조건이 있습니다.')
             overview = submission_overview(service.state, session.credential)
             gradebook = portal.gradebook.student_view(course, session.credential,
-                member_verifier=(member.student_key, member.password_hash)) if portal.gradebook else None
+                member_verifier=member.member_verifier) if portal.gradebook else None
             details = portal.courses.get_course(course) if portal.courses else {}
             base = '/courses/' + course
             links = {'assignments': base + '/assignments'}
