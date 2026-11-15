@@ -8,22 +8,27 @@ import hmac
 from .platform_state import PlatformAccessDenied, utc_iso
 
 
-def submission_overview(state, credential, *, limit=100):
+def validate_credential(db, credential):
+    """Recheck the exact password proof inside the projection's DB snapshot."""
+    current = db.execute(
+        '''SELECT c.password_hash, c.locked_until FROM platform_student_passwords c
+           JOIN platform_enrollments e ON e.id=c.enrollment_id
+           JOIN platform_students s ON s.id=e.student_id
+           WHERE e.id=? AND e.student_id=? AND e.course_key=? AND s.student_key=?
+             AND e.active=1 AND s.active=1''',
+        (credential.enrollment_id, credential.student_id, credential.course_key, credential.student_key),
+    ).fetchone()
+    if (current is None or not hmac.compare_digest(current['password_hash'], credential.password_hash)
+            or (current['locked_until'] and current['locked_until'] > utc_iso())):
+        raise PlatformAccessDenied('student portal credential is no longer active')
+
+
+def submission_overview(state, credential, *, limit=100, include_history=True):
     if type(limit) is not int or not 1 <= limit <= 100:
         raise ValueError('invalid student portal history limit')
     with state._connection() as db:
         db.execute('BEGIN')
-        current = db.execute(
-            '''SELECT c.password_hash, c.locked_until FROM platform_student_passwords c
-               JOIN platform_enrollments e ON e.id=c.enrollment_id
-               JOIN platform_students s ON s.id=e.student_id
-               WHERE e.id=? AND e.student_id=? AND e.course_key=? AND s.student_key=?
-                 AND e.active=1 AND s.active=1''',
-            (credential.enrollment_id, credential.student_id, credential.course_key, credential.student_key),
-        ).fetchone()
-        if (current is None or not hmac.compare_digest(current['password_hash'], credential.password_hash)
-                or (current['locked_until'] and current['locked_until'] > utc_iso())):
-            raise PlatformAccessDenied('student portal credential is no longer active')
+        validate_credential(db, credential)
         has_deletions = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='instructor_assignment_deletions'").fetchone()
         deletion_guard = ('AND NOT EXISTS (SELECT 1 FROM instructor_assignment_deletions d '
                           'WHERE d.assignment_id=a.assignment_id)') if has_deletions else ''
@@ -57,7 +62,7 @@ def submission_overview(state, credential, *, limit=100):
         scope = (credential.student_id, credential.course_key)
         history = db.execute(base + '''SELECT submission_id, assignment_id, title, assignment_key,
             received_at, state, code_version, score, max_score, published_at, version
-            FROM owned ORDER BY received_at DESC, receipt_order DESC LIMIT ?''', (*scope, limit + 1)).fetchall()
+            FROM owned ORDER BY received_at DESC, receipt_order DESC LIMIT ?''', (*scope, limit + 1)).fetchall() if include_history else []
         latest = db.execute(base + '''SELECT o.submission_id, o.assignment_id, o.title, o.assignment_key,
             o.received_at, o.state, o.code_version, o.score, o.max_score, o.published_at, o.version,
             b.submission_id AS previous_best_id, b.score AS previous_best_score,

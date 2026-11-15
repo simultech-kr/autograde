@@ -1,3 +1,5 @@
+import {parseMaterialCatalog, type MaterialCatalog} from "./workbench.ts";
+
 export type Course = {
   course_key: string; code: string; name: string; year?: number | string; semester?: number | string;
   section: string; term?: string; status: "available" | "pending" | "matched" | "suspended";
@@ -17,6 +19,7 @@ export type Receipt = {
 export type CourseData = {
   student_key: string;
   gradebook?: Gradebook | null;
+  materials?: MaterialCatalog;
   course: Pick<Course, "course_key" | "name" | "code" | "section" | "year" | "semester" | "term">;
   overview: { assignments: Assignment[]; latest: Receipt[]; history: Receipt[]; history_truncated: boolean; latest_truncated: boolean; assignments_truncated: boolean; limit: number };
   links: { assignments: string; materials?: string; exam_papers?: string }; csrf: string; server_time: string; api_base_url: string;
@@ -26,6 +29,10 @@ export type Gradebook = {
   items: {key: string; label: string; value: number | string | null}[];
 };
 export type Claim = { code: string; expires_at: string; api_url: string; assignment_id: string; title: string };
+export type LearningHome = {
+  student_key: string; server_time: string; courses_truncated: boolean;
+  courses: {course_key: string; overview: Pick<CourseData["overview"], "assignments" | "latest" | "assignments_truncated" | "latest_truncated" | "limit">}[];
+};
 export class StudentContractError extends Error {
   constructor() { super("서버 응답을 확인할 수 없습니다. 화면을 다시 열고, 반복되면 교수자에게 문의하세요."); }
 }
@@ -107,12 +114,30 @@ function receipt(value: unknown): Receipt {
     published_at: dateOrNull(item.published_at), version, previous_best_id: nullableString(item.previous_best_id), previous_best_score: numeric(item.previous_best_score),
     previous_best_max_score: numeric(item.previous_best_max_score), previous_best_at: dateOrNull(item.previous_best_at) };
 }
+function assignment(value: unknown): Assignment {
+  const item = object(value);
+  return {assignment_id: identifier(item.assignment_id), assignment_key: str(item.assignment_key), title: str(item.title), opens_at: dateOrNull(item.opens_at), due_at: dateOrNull(item.due_at), accepted_at: dateOrNull(item.accepted_at)};
+}
+export function parseLearningHome(value: unknown, expectedStudent: string, allowedCourses: string[]): LearningHome {
+  const body = object(unwrap(value)), seen = new Set<string>();
+  if (body.student_key !== expectedStudent || body.schema_version !== 1) throw new StudentContractError();
+  const items = list(body.courses);
+  if (items.length > 20) throw new StudentContractError();
+  return {student_key: str(body.student_key, 20), server_time: date(body.server_time), courses_truncated: bool(body.courses_truncated), courses: items.map(value => {
+    const item = object(value), key = courseKey(item.course_key), overview = object(item.overview);
+    if (!allowedCourses.includes(key) || seen.has(key)) throw new StudentContractError();
+    seen.add(key);
+    const assignments = list(overview.assignments).map(assignment), latest = list(overview.latest).map(receipt);
+    if (assignments.length > 100 || latest.length > 100 || new Set(assignments.map(item => item.assignment_id)).size !== assignments.length || new Set(latest.map(item => item.assignment_id)).size !== latest.length) throw new StudentContractError();
+    return {course_key:key, overview:{assignments, latest, assignments_truncated:bool(overview.assignments_truncated), latest_truncated:bool(overview.latest_truncated), limit:numeric(overview.limit) ?? 100}};
+  })};
+}
 export function parseCourse(value: unknown, expected: string, expectedStudent: string): CourseData {
   const body = object(unwrap(value)), raw = object(body.course), key = courseKey(raw.course_key);
   if (key !== courseKey(expected) || body.student_key !== expectedStudent) throw new StudentContractError();
   const overview = object(body.overview), links = object(body.links);
-  return { student_key: str(body.student_key, 20), gradebook: parseGradebook(body.gradebook), course: { course_key: key, name: str(raw.name ?? ""), code: str(raw.code ?? key), section: str(raw.section ?? ""), year: scalar(raw.year), semester: scalar(raw.semester), term: str(raw.term ?? "") },
-    overview: { assignments: list(overview.assignments).map(value => { const item = object(value); return { assignment_id: identifier(item.assignment_id), assignment_key: str(item.assignment_key), title: str(item.title), opens_at: dateOrNull(item.opens_at), due_at: dateOrNull(item.due_at), accepted_at: dateOrNull(item.accepted_at) }; }),
+  return { student_key: str(body.student_key, 20), gradebook: parseGradebook(body.gradebook), materials: parseMaterialCatalog(body.materials, key), course: { course_key: key, name: str(raw.name ?? ""), code: str(raw.code ?? key), section: str(raw.section ?? ""), year: scalar(raw.year), semester: scalar(raw.semester), term: str(raw.term ?? "") },
+    overview: { assignments: list(overview.assignments).map(assignment),
       latest: list(overview.latest).map(receipt), history: list(overview.history).map(receipt), history_truncated: bool(overview.history_truncated), latest_truncated: bool(overview.latest_truncated), assignments_truncated: bool(overview.assignments_truncated), limit: numeric(overview.limit) ?? 100 },
     links: { assignments: courseLink(key, links.assignments, "assignments"), ...(links.materials ? { materials: courseLink(key, links.materials, "materials") } : {}), ...(links.exam_papers ? { exam_papers: courseLink(key, links.exam_papers, "exam-papers") } : {}) },
     csrf: str(body.csrf, 256), server_time: date(body.server_time), api_base_url: apiAddress(body.api_base_url) };

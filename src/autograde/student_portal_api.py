@@ -20,6 +20,10 @@ def _json(status, result=None, *, code=None, message=None):
 
 
 def request(portal, method, path, form, cookies, origin):
+    from .student_workbench_api import material_catalog, request as workbench_request
+    response = workbench_request(portal, method, path, form, cookies, origin)
+    if response is not None:
+        return response
     match = _PATH.fullmatch(path)
     if match is None:
         return None
@@ -66,11 +70,13 @@ def request(portal, method, path, form, cookies, origin):
                 links['materials'] = base + '/materials'
             if portal.exam_papers is not None:
                 links['exam_papers'] = base + '/exam-papers'
+            materials = material_catalog(portal, course, session.credential)
+            portal._session(course, cookies)
             return _json(200, {
                 'schema_version': 1,
                 'student_key': session.credential.student_key,
                 'course': {key: details.get(key, '') for key in ('name', 'code', 'section', 'year', 'semester')} | {'course_key': course},
-                'overview': overview, 'gradebook': gradebook, 'links': links, 'csrf': session.csrf,
+                'overview': overview, 'gradebook': gradebook, 'materials': materials, 'links': links, 'csrf': session.csrf,
                 'server_time': utc_iso(), 'api_base_url': portal.api_url,
             })
     except PlatformAPIError as exc:

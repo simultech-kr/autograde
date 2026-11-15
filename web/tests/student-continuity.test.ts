@@ -16,6 +16,11 @@ const stamp = (milliseconds: number) => new Date(now + milliseconds).toISOString
 const course = {course_key: courseKey, code: "COME2201", name: "소프트웨어 설계", section: "01", status: "matched", request_status: "matched", enrolled: true, eligible: true, can_withdraw: false};
 const bootstrap = () => ({ok: true, result: {authenticated: true, csrf: "synthetic_csrf", expires_at: stamp(600000), server_time: stamp(0), student: {student_key: studentKey, verified: true}, api_base_url: "https://example.test:20000", courses: [{...course}]}});
 const courseResult = () => ({ok: true, result: {student_key: studentKey, course, csrf: "synthetic_csrf", server_time: stamp(0), api_base_url: "https://example.test:20000", links: {assignments: `/courses/${courseKey}/assignments`}, overview: {assignments: [{assignment_id: "assignment_01", assignment_key: "week09", title: "Iterator 실습", opens_at: null, due_at: stamp(86400000), accepted_at: stamp(-86400000)}], latest: [], history: [], history_truncated: false, latest_truncated: false, assignments_truncated: false, limit: 100}}});
+const homeResult = () => ({ok:true, result:{schema_version:1, student_key:studentKey, server_time:stamp(0), courses_truncated:false,
+  courses:[{course_key:courseKey, overview:courseResult().result.overview}]}});
+const materialResult = () => ({items:[{id:"mat_iterator",kind:"material",title:"Iterator 실습 안내",filename:"20260001.zip",format:"zip",size_bytes:120,
+  updated_at:stamp(-3600000),opens_at:stamp(-3600000),closes_at:stamp(86400000),availability:"open",revision:1,file_revision:1,edition:1,
+  instructions:"공개 예제로 실습을 확인하세요.",change_note:"",requested:false,download_path:`/student/api/course/${courseKey}/materials/mat_iterator/download`}],truncated:false});
 const claimResult = (expiry = stamp(180000)) => ({ok: true, result: {student_key: studentKey, claim: {assignment_id: "assignment_01", title: "Iterator 실습", code, expires_at: expiry, api_url: "https://example.test:20000"}}});
 const privacyResult = (decision = "unanswered", revision = 0) => ({ok: true, result: {student_key: studentKey, course_key: courseKey, decision, revision,
   updated_at: revision ? stamp(0) : null, research_allowed: decision === "granted", history: [],
@@ -77,7 +82,7 @@ async function mount(handler?: Handler, query = `?course_key=${courseKey}`) {
   const intervals = new Map<number, () => void>(); let timer = 0;
   for (const [key, value] of Object.entries({window: dom.window, document: dom.window.document, navigator: dom.window.navigator, HTMLElement: dom.window.HTMLElement, FormData: dom.window.FormData, IS_REACT_ACT_ENVIRONMENT: true, matchMedia: () => ({matches: false}), requestAnimationFrame: (callback: FrameRequestCallback) => {callback(0); return 1;}, setInterval: (callback: () => void) => {intervals.set(++timer, callback); return timer;}, clearInterval: (id: number) => intervals.delete(id)})) bind(key, value);
   const requests: {url: string; options?: RequestInit}[] = [];
-  bind("fetch", async (url: string, options?: RequestInit) => {requests.push({url, options}); return handler ? handler(url, options) : Response.json(url.endsWith("/claims") ? claimResult() : url.endsWith("/bootstrap") ? bootstrap() : courseResult());});
+  bind("fetch", async (url: string, options?: RequestInit) => {requests.push({url, options}); return handler ? handler(url, options) : Response.json(url.endsWith("/claims") ? claimResult() : url.endsWith("/bootstrap") ? bootstrap() : url === "/student/api/home" ? homeResult() : courseResult());});
   const {createRoot} = await import("react-dom/client");
   const root = createRoot(dom.window.document.getElementById("root")!);
   await act(async () => root.render(createElement(loadPortal())));
@@ -138,21 +143,99 @@ test("React: learning actions retain the selected course across materials and sc
   const app = await mount(async url => {
     if (url === "/student/api/privacy") return Response.json(privacyOverview("declined", 1));
     if (url.endsWith("/bootstrap")) return Response.json(bootstrap());
+    if (url === "/student/api/home") return Response.json(homeResult());
     const value = courseResult();
-    Object.assign(value.result.links, {materials:`/courses/${courseKey}/materials`, exam_papers:`/courses/${courseKey}/exam-papers`});
-    return Response.json(value);
+    return Response.json({...value,result:{...value.result,materials:materialResult()}});
   }, "");
   try {
-    assert.match(app.document.body.textContent!, /오늘의 실습을 이어가세요/);
-    await app.click("학습 자료");
+    assert.match(app.document.body.textContent!, /지금 확인할 실습/);
+    assert.equal(app.requests.filter(item=>item.url === "/student/api/home").length, 1);
+    await app.click("자료 받기");
     assert.match(app.document.defaultView!.location.search, /course_key=come2201&view=materials/);
-    assert.equal(app.document.querySelector('a[href="/courses/come2201/materials"]')?.textContent?.trim(), "내 자료 다운로드 →");
-    assert.equal(app.document.querySelector('a[href="/courses/come2201/exam-papers"]')?.textContent?.trim(), "시험지 다운로드 →");
+    assert.equal(app.document.querySelector('a[href="/courses/come2201/materials"]'), null);
+    const material = app.document.querySelector('article[aria-label="Iterator 실습 안내 자료"]')!;
+    assert.match(material.textContent!, /20260001.zip/);
+    assert.match(material.textContent!, /120 B/);
+    assert.equal(material.querySelector<HTMLButtonElement>('button[aria-label="Iterator 실습 안내 ZIP 다운로드"]')?.disabled, false);
     assert.doesNotMatch(app.document.body.textContent!, /공식 제출 이력/);
     await app.click("내 점수"); assert.match(app.document.defaultView!.location.search, /course_key=come2201&view=scores/);
     await app.click("정보 활용 설정"); assert.equal(app.document.defaultView!.location.search, "?view=privacy");
     await app.click("내 계정"); assert.match(app.document.body.textContent!, /새 회원 비밀번호 확인/);
     assert.equal(app.requests.filter(r => r.options?.method === "POST").length, 0);
+  } finally {await app.dispose();}
+});
+
+test("React: a home task clears an earlier completed filter and focuses the chosen assignment", async () => {
+  const app = await mount(async url => Response.json(url.endsWith("/bootstrap") ? bootstrap()
+    : url === "/student/api/home" ? homeResult()
+    : url === "/student/api/privacy" ? privacyOverview("declined", 1) : courseResult()));
+  try {
+    const filter = Array.from(app.document.querySelectorAll("select")).find(select=>select.querySelector('option[value="completed"]'))!;
+    assert.ok(filter);
+    await act(async()=>{filter.value="completed";filter.dispatchEvent(new app.document.defaultView!.Event("change",{bubbles:true}));});
+    assert.equal(app.document.querySelector('[data-assignment="assignment_01"]'),null);
+    await app.click("내 수업");
+    const task = app.document.querySelector<HTMLButtonElement>('button[aria-label="Iterator 실습 · 실습 이어가기"]')!;
+    assert.ok(task);
+    await act(async()=>task.click());
+    const assignment = app.document.querySelector<HTMLElement>('[data-assignment="assignment_01"]')!;
+    assert.ok(assignment);
+    assert.equal(app.document.activeElement,assignment);
+    assert.match(app.document.defaultView!.location.search,/assignment=assignment_01/);
+    const restored = Array.from(app.document.querySelectorAll("select")).find(select=>select.querySelector('option[value="completed"]'))!;
+    assert.equal(restored.value,"all");
+    assert.equal(app.requests.filter(item=>item.options?.method === "POST").length,0);
+  } finally {await app.dispose();}
+});
+
+test("React: a late home response cannot cross logout and a different student's login", async () => {
+  let current:string|null=studentKey, complete:(response:Response)=>void=()=>{};
+  const identity=()=>{
+    const value=bootstrap();
+    return {...value,result:{...value.result,authenticated:current!==null,
+      student:current ? {student_key:current,verified:true} : null,
+      expires_at:current ? value.result.expires_at : null,
+      csrf:current===studentKey ? "synthetic_csrf" : current ? "second_session_csrf" : "entry_csrf"}};
+  };
+  const app=await mount(async(url,options)=>{
+    if(url==="/student/api/bootstrap") return Response.json(identity());
+    if(url==="/student/api/logout") {
+      assert.equal(new URLSearchParams(String(options?.body)).get("csrf"),"synthetic_csrf");
+      current=null; return Response.json(identity());
+    }
+    if(url==="/student/api/login") {
+      const fields=new URLSearchParams(String(options?.body));
+      assert.equal(fields.get("csrf"),"entry_csrf");
+      assert.equal(fields.get("student_key"),"20260002");
+      current="20260002"; return Response.json(identity());
+    }
+    if(url==="/student/api/home") {
+      if(current===studentKey) return new Promise<Response>(resolve=>{complete=resolve;});
+      const value=homeResult();value.result.student_key="20260002";
+      value.result.courses[0].overview.assignments[0].title="둘째 학생 전용 실습";
+      return Response.json(value);
+    }
+    if(url==="/student/api/privacy") return Response.json({...privacyOverview(),result:{...privacyOverview().result,student_key:current,csrf:identity().result.csrf,consents:[]}});
+    throw new Error(`Unexpected request ${url}`);
+  },"");
+  try {
+    const first=app.requests.find(request=>request.url==="/student/api/home")!;
+    assert.ok(first);
+    assert.equal(app.document.body.textContent!.includes("Iterator 실습"),false);
+    await app.click("로그아웃");
+    assert.equal(first.options?.signal?.aborted,true);
+    assert.equal(app.document.querySelector("main h1")?.textContent,"학생 로그인");
+    const form=app.document.querySelector("form")!;
+    form.querySelector<HTMLInputElement>('input[name="student_key"]')!.value="20260002";
+    form.querySelector<HTMLInputElement>('input[name="password"]')!.value="654321";
+    await act(async()=>form.requestSubmit());
+    assert.match(app.document.body.textContent!,/둘째 학생 전용 실습/);
+    await act(async()=>complete(Response.json(homeResult())));
+    assert.match(app.document.body.textContent!,/둘째 학생 전용 실습/);
+    assert.doesNotMatch(app.document.body.textContent!,/Iterator 실습|20260001/);
+    assert.equal(app.requests.filter(request=>request.url==="/student/api/home").length,2);
+    assert.equal(app.document.defaultView!.localStorage.length,0);
+    assert.equal(app.document.defaultView!.sessionStorage.length,0);
   } finally {await app.dispose();}
 });
 
@@ -298,11 +381,11 @@ test("React: a valid code from another account is removed on return", async () =
 
 test("React: a late claim after navigation cannot restore a discarded code", async () => {
   let complete: (response: Response) => void = () => {};
-  const app = await mount(async url => url.endsWith("/claims") ? new Promise<Response>(resolve => {complete = resolve;}) : Response.json(url.endsWith("/bootstrap") ? bootstrap() : courseResult()));
+  const app = await mount(async url => url.endsWith("/claims") ? new Promise<Response>(resolve => {complete = resolve;}) : Response.json(url.endsWith("/bootstrap") ? bootstrap() : url === "/student/api/home" ? homeResult() : courseResult()));
   try {
     await app.click("이 실습 연결 코드 발급"); await app.click("내 수업");
     await act(async () => complete(Response.json(claimResult()))); assert.equal(app.code(), null);
-    assert.match(app.document.body.textContent!, /오늘의 실습을 이어가세요/);
+    assert.match(app.document.body.textContent!, /지금 확인할 실습/);
   } finally {await app.dispose();}
 });
 
@@ -385,6 +468,8 @@ test("React: teacher gradebook shows own values, escapes text, and removes withd
   } : null}});
   const app = await mount(async url => Response.json(url.endsWith("/bootstrap") ? bootstrap() : url.endsWith("/privacy") ? privacyOverview("declined", 1) : result()), `?course_key=${courseKey}&view=scores`);
   try {
+    assert.equal(app.document.querySelector('[data-gradebook-item]'), null);
+    await app.click("시험·출석 성적");
     assert.equal(app.document.querySelector('[data-gradebook-item="mid"] dd')?.textContent, "0");
     assert.equal(app.document.querySelector('[data-gradebook-item="final"] dd')?.textContent, "미입력");
     assert.equal(app.document.querySelector('[data-gradebook-item="attendance"] dd')?.textContent, "9.5");

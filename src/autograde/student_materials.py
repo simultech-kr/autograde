@@ -628,7 +628,9 @@ class StudentMaterialService:
 
     file_for_instructor_snapshot = file_snapshot_for_instructor
 
-    def list_for_student(self, course_key, student_id):
+    def list_for_student(self, course_key, student_id, *, limit=None):
+        if limit is not None and (type(limit) is not int or not 1 <= limit <= 201):
+            raise ValueError('invalid material listing limit')
         with self.state._connection() as db:
             db.execute("BEGIN")
             _student(db, course_key, student_id)
@@ -638,13 +640,15 @@ class StudentMaterialService:
                                   "JOIN student_material_versions v ON v.material_id=m.material_id "
                                   "JOIN student_material_files f ON f.material_id=m.material_id "
                                   "LEFT JOIN student_material_requests r ON r.material_id=m.material_id AND r.student_id=f.student_id "
-                                  "WHERE m.course_key=? AND m.status='published' AND f.student_id=? ORDER BY m.opens_at,m.material_id",
-                                  (course_key, student_id)):
+                                  "WHERE m.course_key=? AND m.status='published' AND f.student_id=? "
+                                  + ("ORDER BY CASE WHEN m.opens_at<=? AND m.closes_at>? THEN 0 ELSE 1 END,m.updated_at DESC,m.material_id LIMIT ?"
+                                     if limit is not None else "ORDER BY m.opens_at,m.material_id"),
+                                  (course_key, student_id, now, now, limit) if limit is not None else (course_key, student_id)):
                 material = dict(row)
                 availability = _availability(material, now)
                 result.append({key: material[key] for key in ("material_id", "course_key", "title", "opens_at", "closes_at", "status",
                                                                "revision", "published_at", "filename", "format", "size_bytes", "edition",
-                                                               "change_note", "request_count", "file_revision")} |
+                                                               "change_note", "request_count", "file_revision", "updated_at")} |
                               dict(requested=material["request_count"] > 0, file_updated=material["file_revision"] > 1) |
                               dict(instructions=material["instructions"] if availability == "open" else "", availability=availability))
             return result
@@ -652,11 +656,14 @@ class StudentMaterialService:
     def download(self, course_key, material_id, student_id):
         return self.download_snapshot(course_key, material_id, student_id)[0]
 
-    def download_snapshot(self, course_key, material_id, student_id):
+    def download_snapshot(self, course_key, material_id, student_id, *, expected_revision=None, expected_file_revision=None):
         with self.state._write() as db:
             _student(db, course_key, student_id)
             material = _material(db, course_key, material_id)
             file = self._file(db, material_id, student_id)
+            if ((expected_revision is not None and material['revision'] != expected_revision)
+                    or (expected_file_revision is not None and file['file_revision'] != expected_file_revision)):
+                raise PlatformConflict('자료가 수정되었습니다. 목록을 새로고침한 뒤 다시 다운로드하세요.')
             if material["superseded_by"]:
                 raise PlatformConflict("수정본이 배포되었습니다. 자료 목록을 새로고침한 뒤 최신 자료를 다운로드하세요.")
             if material["status"] != "published":

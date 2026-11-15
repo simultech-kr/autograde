@@ -275,27 +275,34 @@ class ExamPaperService:
             with self._directory() as descriptor:
                 return self._verify_file(descriptor, paper)
 
-    def list_for_student(self, course_key, student_id):
+    def list_for_student(self, course_key, student_id, *, limit=None):
+        if limit is not None and (type(limit) is not int or not 1 <= limit <= 201):
+            raise ValueError('invalid exam listing limit')
         now = self._now()
         with self.state._connection() as db:
             db.execute("BEGIN")
             _student(db, course_key, student_id)
             result = []
             for row in db.execute("SELECT * FROM exam_papers WHERE course_key=? AND status='published' "
-                                  "ORDER BY opens_at,paper_id", (course_key,)):
+                                  + ("ORDER BY CASE WHEN opens_at<=? AND closes_at>? THEN 0 ELSE 1 END,updated_at DESC,paper_id LIMIT ?"
+                                     if limit is not None else "ORDER BY opens_at,paper_id"),
+                                  (course_key, now, now, limit) if limit is not None else (course_key,)):
                 paper = dict(row)
                 availability = _availability(paper, now)
                 # Expose schedule metadata, not file paths/hashes or sealed instructions.
                 result.append({key: paper[key] for key in ("paper_id", "course_key", "title", "opens_at", "closes_at",
-                                                          "status", "revision", "published_at")} |
+                                                          "status", "revision", "published_at", "updated_at")} |
                               dict(instructions=paper["instructions"] if availability == "open" else "",
+                                   size_bytes=paper['pdf_size_bytes'] if availability == 'open' else None,
                                    availability=availability))
             return result
 
-    def download(self, course_key, paper_id, student_id):
+    def download(self, course_key, paper_id, student_id, *, expected_revision=None):
         with self.state._write() as db:
             _student(db, course_key, student_id)
             paper = _paper(db, course_key, paper_id)
+            if expected_revision is not None and paper['revision'] != expected_revision:
+                raise PlatformConflict('자료가 수정되었습니다. 목록을 새로고침한 뒤 다시 다운로드하세요.')
             now = self._now()  # Take time after acquiring the lock, not before queueing.
             if paper["status"] != "published":
                 raise PlatformNotFound("수령 가능한 시험지를 찾을 수 없습니다.")
