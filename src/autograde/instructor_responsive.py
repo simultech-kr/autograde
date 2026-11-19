@@ -41,6 +41,9 @@ RESPONSIVE_CSS = """
 .responsive-instructor summary{cursor:pointer;min-height:44px;padding:8px 0}
 .responsive-instructor .page-actions{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center}
 .responsive-instructor .page-actions a,.result-table a{display:inline-block;padding:8px 0;min-height:44px}
+.responsive-instructor .material-page-count{margin:8px 0}
+.responsive-instructor nav.material-pagination{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:8px 0 12px;padding:0}
+.responsive-instructor .material-pagination a{display:inline-flex;align-items:center;justify-content:center;min-width:64px;min-height:44px;padding:9px 14px;margin:0}
 .results-region{width:100%;min-width:0;margin:16px 0}
 .result-table{display:table;width:100%;max-width:100%;table-layout:fixed;border-collapse:collapse;overflow:visible}
 .result-table caption{text-align:left;font-weight:400;font-size:.9rem;padding:8px 0 12px;color:var(--muted)}

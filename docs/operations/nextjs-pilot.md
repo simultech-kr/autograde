@@ -6,6 +6,28 @@ Python 포털과 Next.js를 한 터미널에서 함께 실행하려면 `./script
 
 기능은 기본적으로 꺼져 있습니다. 기존 서버 설치를 갱신하고 시험할 수업을 지정한 뒤 내부 Next.js 프로세스와 프록시를 연결합니다. 이 절차는 일반 학생 코드 실행의 보안 승인을 대신하지 않습니다.
 
+## 메뉴 연결 적용 · 2026-11-19
+
+학생 시작 버튼과 교수자 메뉴의 학생 포털은 `/app/student`로 연결한다. 교수자 결과 메뉴는
+허용된 수업에서 `/app?course_key=...`로 연결하며, 기존 `/courses/{course}/instructor/submissions`
+주소도 같은 화면으로 이동한다. 과제 선택·검색·페이지의 알려진 조회 조건만 전달하며 담당 수업 인증은 유지한다.
+Next.js 장애 시 새 결과 화면의 `화면 이용에 문제가 있나요?`에서 기존 화면을 열거나
+기존 제출 현황 주소에 `?legacy=1`을 붙인다. 기능 비활성화 시 기본 메뉴는 기존 화면을 사용한다.
+
+기존 CSV가 비활성화 상태라면 서버에서 다음 명령으로 필요한 변경을 검토하고 적용한다.
+이 명령은 두 Next 설정만 바꾸며 원본 CSV를 같은 폴더에 백업한다. 수업 권한·인증 방식·DB·포트·Nginx는 바꾸지 않는다.
+명시한 목록이 새 화면을 허용할 전체 목록이며 `course_key`는 실제 서버 키여야 한다.
+
+```sh
+.venv/bin/python scripts/configure_portal_ui.py --config pilot/portal.https.local --courses come2201 come3105
+.venv/bin/python scripts/configure_portal_ui.py --config pilot/portal.https.local --courses come2201 come3105 --apply
+./scripts/run-portal.sh --config pilot/portal.https.local --build
+```
+
+이미 실행 중인 통합 실행기는 먼저 정상 종료한 뒤 다시 실행한다. 백업 경로는 적용 결과의 `backup` 필드에 표시된다.
+활성화 후 교수자 로그인 → 수업 → `제출·채점 현황`에서 새 화면과 실제 자료 조회까지 확인한다.
+학생은 포털 안내 → `학생 포털 시작` → 로그인 → 내 수업에서 과제·자료·점수를 확인한다.
+
 ## 0 Git 업데이트와 적용 전 확인
 
 서버 적용은 운영자가 직접 수행합니다. **`git pull`만으로 새 화면이 공개되지는 않습니다.** Python 갱신·재시작, Node 빌드·실행, 20010 Nginx 경로 추가, CSV 활성화가 필요합니다. 학생 API 20000과 기존 `/instructor`의 경로는 변경하지 않습니다.

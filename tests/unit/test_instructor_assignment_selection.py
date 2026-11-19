@@ -18,13 +18,16 @@ class Control {
   }
   addEventListener(type, handler) { (this.listeners[type] ||= []).push(handler); }
   fire(type, event = {}) { for (const handler of this.listeners[type] || []) handler(event); }
+  focus() { this.focused = true; }
 }
 class BulkForm {
   constructor(states) {
     this.choices = states.map(archived => new Control({dataset: {archived}, checked: true}));
     this.toggle = new Control({checked: true});
     this.clear = new Control({hidden: true});
-    this.status = new Control();
+    this.status = new Control({hidden: true});
+    this.hint = new Control();
+    this.controls = new Control({open: false});
     this.label = new Control({hidden: true});
     this.archive = new Control({value: 'archive'});
     this.delete = new Control({value: 'delete'});
@@ -37,6 +40,8 @@ class BulkForm {
   querySelector(selector) {
     return ({'[data-assignment-select-all]': this.toggle,
       '[data-assignment-clear]': this.clear,
+      '[data-assignment-selection-hint]': this.hint,
+      '[data-assignment-bulk-controls]': this.controls,
       '[data-assignment-selection-status]': this.status})[selector] || null;
   }
   select(index, checked) { this.choices[index].checked = checked; this.choices[index].fire('change'); }
@@ -49,6 +54,7 @@ const empty = new BulkForm([]);
 const forms = [mixed, archived, oversized, empty];
 const window = new Control();
 const document = new Control();
+document.querySelector = () => null;
 document.querySelectorAll = selector => selector === 'form[data-assignment-bulk]' ? forms : [];
 const context = {window, document};
 for (const key of ['fetch', 'localStorage', 'sessionStorage', 'indexedDB']) {
@@ -60,6 +66,11 @@ vm.runInNewContext(source, context);
 for (const form of forms) {
   assert.equal(form.label.hidden, false);
   assert.equal(form.clear.hidden, false);
+  assert.equal(form.controls.hidden, true, 'zero selections hide the contextual actions');
+  assert.equal(form.controls.open, true, 'progressive enhancement opens the no-JS disclosure');
+  assert.equal(form.controls.dataset.enhanced, 'true');
+  assert.equal(form.status.hidden, false);
+  assert.equal(form.status.textContent, '0개 선택됨');
   assert.equal(form.archive.disabled, true);
   assert.equal(form.delete.disabled, true);
   assert.equal(form.clear.disabled, true);
@@ -70,6 +81,7 @@ for (const form of forms) {
 assert.equal(empty.toggle.disabled, true);
 
 mixed.select(0, true);
+assert.equal(mixed.controls.hidden, false);
 assert.equal(mixed.archive.disabled, false);
 assert.equal(mixed.delete.disabled, false);
 assert.equal(mixed.toggle.indeterminate, true);
@@ -80,7 +92,7 @@ assert.ok(archived.choices.every(choice => !choice.checked), 'selection stays in
 mixed.select(1, true);
 assert.equal(mixed.archive.disabled, false);
 assert.equal(mixed.delete.disabled, true);
-assert.match(mixed.status.textContent, /먼저 보관/);
+assert.match(mixed.hint.textContent, /먼저 보관/);
 mixed.select(1, false);
 assert.equal(mixed.delete.disabled, false);
 mixed.selectAll(true);
@@ -93,7 +105,9 @@ assert.ok(mixed.choices.every(choice => !choice.checked));
 assert.equal(mixed.toggle.checked, false);
 assert.equal(mixed.archive.disabled, true);
 assert.equal(mixed.delete.disabled, true);
-assert.match(mixed.status.textContent, /현재 페이지에서 과제를 선택/);
+assert.equal(mixed.controls.hidden, true);
+assert.equal(mixed.toggle.focused, true, 'clearing selection moves focus outside the hidden toolbar');
+assert.match(mixed.status.textContent, /0개 선택됨/);
 
 archived.selectAll(true);
 assert.equal(archived.archive.disabled, false, 'archiving an archived selection is valid');
@@ -101,6 +115,7 @@ assert.equal(archived.delete.disabled, false);
 archived.selectAll(false);
 assert.equal(archived.archive.disabled, true);
 assert.equal(archived.delete.disabled, true);
+assert.equal(archived.controls.hidden, true);
 
 oversized.selectAll(true);
 assert.equal(oversized.choices.filter(choice => choice.checked).length, 20);
@@ -109,6 +124,7 @@ assert.equal(oversized.archive.disabled, false);
 oversized.select(20, true);
 assert.equal(oversized.archive.disabled, true);
 assert.equal(oversized.delete.disabled, true);
+assert.equal(oversized.controls.hidden, false, 'invalid selection keeps the corrective controls available');
 assert.match(oversized.status.textContent, /최대 20개/);
 
 archived.selectAll(true);
@@ -119,6 +135,7 @@ for (const form of forms) {
   assert.equal(form.toggle.indeterminate, false);
   assert.equal(form.archive.disabled, true);
   assert.equal(form.delete.disabled, true);
+  assert.equal(form.controls.hidden, true);
 }
 archived.select(0, true);
 window.fire('pageshow', {persisted: false});

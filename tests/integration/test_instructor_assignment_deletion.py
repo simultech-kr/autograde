@@ -167,7 +167,8 @@ def test_trash_search_and_pagination_remain_in_deleted_scope(setup):
     result = filtered(browser, **dict(search['fields'], q='CLI'))
     assert '<h2>과제 휴지통</h2>' in result.body
     assert '<caption>삭제된 과제 21건</caption>' in result.body
-    page_links = [unescape(href) for href in re.findall(r'href="([^"]+)"', result.body) if 'page=' in href]
+    pagination = re.search(r'<nav class="catalog-actions[^>]+>(.*?)</nav>', result.body, re.S)[1]
+    page_links = [unescape(href) for href in re.findall(r'href="([^"]+)"', pagination) if 'page=' in href]
     assert len(page_links) == 1
     query = parse_qs(urlsplit(page_links[0]).query)
     assert query == {'q': ['CLI'], 'visibility': ['deleted'], 'page': ['2']}

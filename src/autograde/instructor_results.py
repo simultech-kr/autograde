@@ -20,6 +20,47 @@ def _e(value):
     return escape(str(value if value is not None else ''), quote=True)
 
 
+def assignment_labels(rows):
+    """Use titles for people and retain release IDs only as stable internal keys.
+
+    Build from the full course scope before view filtering. Repeated student
+    rows and their changing submission order must not renumber equal titles.
+    """
+    assignments = {}
+    for row in rows:
+        assignments.setdefault(row['assignment_id'], row)
+    groups = {}
+    for assignment_id, row in assignments.items():
+        title = str(row.get('title') or '').strip() or '제목 없는 과제'
+        groups.setdefault(title, []).append(assignment_id)
+    labels = {}
+    for title, ids in groups.items():
+        for index, assignment_id in enumerate(sorted(ids), 1):
+            labels[assignment_id] = title + (f' · 동명 과제 {index}' if len(ids) > 1 else '')
+    return labels
+
+
+def legacy_results_links(body, course_base, query):
+    """Keep the explicit fallback on native links before JavaScript starts.
+
+    These fixed data hooks belong to this renderer; no arbitrary destinations
+    or return URL are copied from a request. Live fragments are repaired by the
+    browser using its current fallback context after each refresh.
+    """
+    target = course_base + '/submissions'
+    flags = {'legacy': '1'}
+    if isinstance(query.get('sort'), str) and query['sort'] in {'recent', 'student', 'assignment'}:
+        flags['sort'] = query['sort']
+    refresh = {key: value for key, value in query.items()
+               if key in {'assignment_id', 'result_view', 'status', 'student', 'sort', 'page'}
+               and isinstance(value, str)}
+    refresh['legacy'] = '1'
+    body = body.replace(f'data-results-choice href="{_e(target)}?',
+                        f'data-results-choice href="{_e(target)}?{_e(urlencode(flags))}&amp;')
+    return body.replace(f'data-results-refresh href="{_e(target)}"',
+                        f'data-results-refresh href="{_e(target + "?" + urlencode(refresh))}"')
+
+
 def _time(value):
     try:
         parsed = datetime.fromisoformat(str(value).replace('Z', '+00:00'))
@@ -75,6 +116,7 @@ def _score_cell(row, *, has_submission, waiting, valid):
 
 def assignment_summaries(rows, course_base):
     """Count current-enrolment rows per release, before any browser view filter."""
+    labels = assignment_labels(rows)
     assignments = {}
     for row in rows:
         group = assignments.setdefault(row['assignment_id'], {'item': row, 'students': {}, 'submitted': set()})
@@ -85,10 +127,12 @@ def assignment_summaries(rows, course_base):
     for assignment_id, group in sorted(assignments.items(), key=lambda entry: (
             entry[1]['item']['assignment_key'], entry[1]['item']['release_id'], entry[0])):
         row = group['item']
+        technical_key = hashlib.sha256(str(assignment_id).encode()).hexdigest()[:24]
         total, submitted = len(group['students']), len(group['submitted'])
         history_only = not row.get('assignment_ready', True)
         missing = '' if history_only else total - submitted
-        label = f"{row['assignment_key']} · {row['release_id']} — {row['title']}"
+        title = labels[assignment_id]
+        label = title
         if history_only:
             label += ' · 숨김 · 제출 이력만'
         base = course_base + '/submissions'
@@ -104,13 +148,18 @@ def assignment_summaries(rows, course_base):
         sections.append(f'<section class="assignment-participation" data-result-assignment-summary '
             f'data-assignment-id="{_e(assignment_id)}" data-assignment-label="{_e(label)}" '
             f'data-total="{total}" data-submitted="{submitted}" data-unsubmitted="{missing}">'
-            f'<h3>{_e(row["title"])}</h3><p class="result-assignment-meta">{_e(row["assignment_key"])} · {_e(row["release_id"])}</p>'
-            f'<div class="participation-links">{links}</div>{note}</section>')
+            f'<h3>{_e(title)}</h3>'
+            f'<div class="participation-links">{links}</div>{note}'
+            f'<details id="assignment-technical-{technical_key}" class="result-assignment-technical">'
+            '<summary>과제 기술 정보</summary>'
+            f'<p>과제 ID: {_e(assignment_id)}<br>과제 키: {_e(row["assignment_key"])}<br>'
+            f'릴리스 ID: {_e(row["release_id"])}</p></details></section>')
     return '<div class="assignment-participation-list">' + ''.join(sections) + '</div>'
 
 
 def fragment(dashboard, *, portal, diagnostics):
     rows = ordered_rows(dashboard['rows'])
+    labels = assignment_labels(rows)
     submitted = [row for row in rows if row.get('latest_submission_id')]
     pending = sum(row['state'] in PENDING for row in submitted)
     complete = sum(row['state'] in {'graded', 'published'} and _valid_score(row) for row in submitted)
@@ -149,7 +198,7 @@ def fragment(dashboard, *, portal, diagnostics):
         stamp = row.get('latest_received_at') if has_submission else None
         formatted = _time(stamp).astimezone(timezone(timedelta(hours=9))).strftime('%m-%d %H:%M:%S') if stamp else '—'
         cells.append((_e(row['student_key']),
-            _e(row['title']) + '<small class="result-assignment-meta">' + _e(row['assignment_key']) + '</small>',
+            _e(labels[row['assignment_id']]),
             _score_cell(row, has_submission=has_submission, waiting=waiting, valid=valid),
             f'<span class="result-status {tone}">{_e(label)}</span>',
             f'<time datetime="{_e(stamp or "")}" title="{_e(stamp or "")}">{_e(formatted)}</time>',
@@ -237,6 +286,8 @@ STYLE = """
 [data-live-results] [hidden]{display:none!important}
 [data-live-results] .result-table small{font-weight:400;color:var(--muted)}
 .result-assignment-meta{display:block;margin-top:4px;font-size:.8rem;color:var(--muted)}
+.result-assignment-technical{margin-top:12px;font-size:.8rem;color:var(--muted);overflow-wrap:anywhere}
+.result-assignment-technical summary{cursor:pointer;min-height:24px}
 .result-score-value{display:block;font-size:1.25rem;font-weight:700;line-height:1.4;font-variant-numeric:tabular-nums}
 .result-score-value.is-pending,.result-score-value.is-unavailable{font-size:1rem;font-weight:600;color:var(--muted)}
 .result-score-unit{font-size:.8rem;font-weight:400;margin-left:4px}

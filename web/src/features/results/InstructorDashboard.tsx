@@ -7,12 +7,13 @@ import { ContractError, type Bootstrap, type Results } from "../../lib/contracts
 import { availableModules } from "../registry";
 import { selectedCourse } from "../navigation";
 import { defaultQuery, filterKey, formatTime, pageURL, parseQuery, pollDelay, statusNames, statuses, type ResultsQuery, type Sort, type Status } from "./query";
-import { AssignmentDownloadsLink, refreshPresentation, ResultsTable, SummaryCards } from "./ResultsView";
+import { AssignmentDownloadsLink, refreshPresentation, ResultsOverview, ResultsTable } from "./ResultsView";
+import { assignmentLabels } from "./assignmentLabels";
 import styles from "./dashboard.module.css";
 
 type Failure = { message: string; requestId: string; code: string; terminal: boolean };
 function failure(error: unknown): Failure {
-  if (error instanceof ApiError) return { message: error.status === 401 ? "교수자 로그인이 필요합니다. 로그인 후 담당 수업을 다시 선택해 주세요." : error.code === "next_ui_disabled" ? "새 현황 화면이 중단되었거나 이 수업에는 아직 허용되지 않았습니다. 기존 교수자 화면을 사용해 주세요." : error.message,
+  if (error instanceof ApiError) return { message: error.status === 401 ? "교수자 로그인이 필요합니다. 로그인 후 담당 수업을 다시 선택해 주세요." : error.code === "next_ui_disabled" ? "이 수업의 새 결과 화면 사용 설정을 확인해야 합니다. 교수자 포털에서 기존 결과를 확인하고, 운영자에게 수업별 화면 연결을 요청하세요." : error.message,
     requestId: error.requestId, code: error.code, terminal: terminalError(error) };
   if (error instanceof ContractError) return { message: error.message, requestId: "", code: "contract_mismatch", terminal: true };
   return { message: "서버에 연결하지 못했습니다. 마지막 확인 시각을 확인하고 연결 상태를 점검해 주세요.", requestId: "", code: "network_error", terminal: false };
@@ -33,6 +34,7 @@ export function InstructorDashboard() {
   const [lastSuccess, setLastSuccess] = useState("");
   const [bootEpoch, setBootEpoch] = useState(0);
   const [refreshEpoch, setRefreshEpoch] = useState(0);
+  const studentSearch = useRef<HTMLInputElement>(null);
   const version = useRef<{ scope: string; value: string } | null>(null);
   const automaticRef = useRef(true);
   const pollControl = useRef<() => void>(() => {});
@@ -121,21 +123,27 @@ export function InstructorDashboard() {
     version.current = null; setData(null); setLastSuccess(""); setError(null); setCourse(key); setQuery(defaultQuery); setStudentInput("");
   }
   function changeFilters(patch: Partial<ResultsQuery>) { setQuery(q => ({ ...q, ...patch, page: 1 })); }
+  function resetFilters() { setQuery(defaultQuery); setStudentInput(""); studentSearch.current?.focus(); }
   function refresh() { version.current = null; setData(null); setChanged(false); setQuery(q => ({ ...q, page: 1 })); setRefreshEpoch(n => n + 1); }
   function search(event: FormEvent<HTMLFormElement>) { event.preventDefault(); changeFilters({ student: studentInput.trim() }); }
   const assignments = visibleData?.assignments || [];
   const unknownAssignment = query.assignment && !assignments.some(a => a.assignment_id === query.assignment);
   const selectedAssignment = assignments.find(a => a.assignment_id === query.assignment);
-  const assignmentLabel = query.assignment ? selectedAssignment?.title || selectedAssignment?.assignment_key || "선택한 과제" : "전체 과제";
+  const labels = assignmentLabels(assignments);
+  const assignmentLabel = query.assignment ? labels.get(query.assignment) || "선택한 과제" : "전체 과제";
+  const activeCourse = selectedCourse(identity?.courses, course);
+  const classicParams = new URLSearchParams({legacy: "1"});
+  if (query.assignment) classicParams.set("assignment_id", query.assignment);
+  const classicURL = activeCourse ? `/courses/${activeCourse.course_key}/instructor/submissions?${classicParams}` : "/instructor";
   const refreshState = refreshPresentation({ changed, paused, automatic, failed: Boolean(error), loading, lastSuccess });
+  const hasFilters = query.assignment !== defaultQuery.assignment || query.status !== defaultQuery.status ||
+    query.student !== defaultQuery.student || query.sort !== defaultQuery.sort || query.page !== defaultQuery.page;
 
   return (
     <AppShell testId="dashboard" course={selectedCourse(identity?.courses, course)} section="results" portalNavigation={identity?.portal_navigation} resultsEnabled={identity?.capabilities.includes("results.read")}>
       <PageHeading
-        eyebrow="수업 운영 / 제출 현황"
         title="제출·채점 현황"
-        description="최신 제출 점수와 이력을 수업·분반별로 확인합니다."
-        label="조회 전용 · 파일럿"
+        description="학생별 최신 제출 점수와 이전 최고점을 구분해 확인합니다."
       />
 
       {error && (
@@ -144,7 +152,7 @@ export function InstructorDashboard() {
           <p>{error.message}</p>
           {error.requestId && <p className={styles.requestId}>문의용 요청 ID: {error.requestId}</p>}
           <div className={styles.messageActions}>
-            {(error.terminal || !identity) && (
+            {error.code !== "next_ui_disabled" && (error.terminal || !identity) && (
               <a data-testid="auth-entry" className={styles.button} href={entryURL(course)}>
                 교수자 인증
               </a>
@@ -194,12 +202,12 @@ export function InstructorDashboard() {
               {!identity.courses.length && <option value="">허용된 수업 없음</option>}
               {identity.courses.map(c => (
                 <option key={c.course_key} value={c.course_key}>
-                  {c.name || c.code || c.course_key}{c.section ? ` · ${c.section}` : ""} ({c.course_key})
+                  {c.name || c.code || c.course_key}{c.section ? ` · ${c.section.replace(/분반$/, "")}분반` : ""}{c.name && c.code ? ` (${c.code})` : ""}
                 </option>
               ))}
             </select>
             <span className={styles.identity}>
-              {identity.principal.display_name || "교수자"} · {identity.principal.mode === "shared" ? "공유 인증" : "개인 인증"} · 시각 KST
+              {identity.principal.display_name || "교수자"} · {identity.principal.mode === "shared" ? "공유 인증" : "개인 인증"}
             </span>
           </section>
 
@@ -212,22 +220,13 @@ export function InstructorDashboard() {
           {course && (
             <>
               {visibleData && (
-                <section className={styles.summary} aria-labelledby="summary-heading">
-                  <div className={styles.summaryHeading}>
-                    <h2 id="summary-heading">제출 현황 요약</h2>
-                    <p>집계 범위: <strong>{visibleData.summary.scope === "course" ? "선택 수업·분반 전체" : assignmentLabel}</strong></p>
-                  </div>
-                  <SummaryCards summary={visibleData.summary} />
-                  <p className={styles.summaryNote}>
-                    명: 중복 제외 학생 · 건: 학생 × 과제 최신 상태 · 상태·학생 검색은 집계 제외 · 누적 제출 {visibleData.summary.submission_attempts.toLocaleString("ko-KR")}회
-                  </p>
-                </section>
+                <ResultsOverview summary={visibleData.summary} assignmentLabel={assignmentLabel} />
               )}
 
               <section className={styles.results} aria-label="학생 결과">
                 <div className={styles.sectionHeading}>
                   <h2>학생별 제출 결과</h2>
-                  <p>이전 최고점은 현재 제출 제외 · 평가 항목·코드는 이력에서 확인</p>
+                  <p>접수·채점 대기는 0점이 아닙니다.</p>
                 </div>
                 <form data-testid="filter-form" aria-label="학생 결과 필터" className={styles.filters} onSubmit={search}>
                   <label>
@@ -239,11 +238,11 @@ export function InstructorDashboard() {
                     >
                       <option value="">전체 과제</option>
                       {unknownAssignment && (
-                        <option value={query.assignment}>선택한 과제 ({query.assignment})</option>
+                        <option value={query.assignment}>선택한 과제 · 조회 대기</option>
                       )}
                       {assignments.map(a => (
                         <option key={a.assignment_id} value={a.assignment_id}>
-                          {a.title || a.assignment_key}{!a.ready ? " · 비공개" : ""}
+                          {labels.get(a.assignment_id)}{!a.ready ? " · 비공개" : ""}
                         </option>
                       ))}
                     </select>
@@ -273,6 +272,7 @@ export function InstructorDashboard() {
                   <label className={styles.search}>
                     학생 검색
                     <input
+                      ref={studentSearch}
                       data-testid="student-search"
                       type="search"
                       maxLength={100}
@@ -290,6 +290,7 @@ export function InstructorDashboard() {
                   <strong>목록 조건</strong> {assignmentLabel} · {statusNames[query.status]}
                   {query.student && <> · 학생 검색: <strong>{query.student}</strong></>}
                   {visibleData && <span>조건에 맞는 결과 <strong>{visibleData.total.toLocaleString("ko-KR")}건</strong></span>}
+                  {hasFilters && <button type="button" data-testid="reset-filters" className={`${styles.secondary} ${styles.resetFilters}`} onClick={resetFilters}>필터 초기화</button>}
                   <AssignmentDownloadsLink courseKey={course} assignment={selectedAssignment} />
                 </p>
 
@@ -322,7 +323,7 @@ export function InstructorDashboard() {
                       onClick={refresh}
                       disabled={loading}
                     >
-                      새로고침
+                      {loading ? "확인 중…" : "새로고침"}
                     </button>
                   </div>
                 </div>
@@ -339,7 +340,7 @@ export function InstructorDashboard() {
                   {loading && !visibleData ? (
                     <p role="status" className={styles.loading}>제출 결과를 불러오고 있습니다…</p>
                   ) : visibleData ? (
-                    <ResultsTable rows={visibleData.rows} courseKey={visibleData.course_key} />
+                    <ResultsTable rows={visibleData.rows} assignments={visibleData.assignments} courseKey={visibleData.course_key} />
                   ) : !error && !changed ? (
                     <p className={styles.loading}>연결되면 결과를 표시합니다.</p>
                   ) : null}
@@ -377,7 +378,11 @@ export function InstructorDashboard() {
       )}
 
       <footer className={styles.footnote}>
-        <p>접수·채점 대기·오류는 0점이 아닙니다. 이전 최고점은 현재 제출을 제외한 결과입니다.</p>
+        <details className={styles.helpDetails}>
+          <summary>점수 안내·화면 도움말</summary>
+          <p>접수·채점 대기·오류는 0점이 아닙니다. 이전 최고점은 현재 제출을 제외한 결과입니다. 평가 항목·코드는 제출 이력에서 확인하세요.</p>
+          {identity && <a href={classicURL}>기존 제출·채점 화면 열기</a>}
+        </details>
         {identity?.principal.mode === "personal" ? <p>공용 기기에서는 <a href="/instructor/account">내 계정·로그아웃</a>에서 접속을 종료하세요.</p> : <p>공유 인증을 사용한 공용 PC에서는 사용 후 모든 브라우저 창을 종료하세요.</p>}
       </footer>
     </AppShell>

@@ -7,6 +7,34 @@ from __future__ import annotations
 
 from html import escape
 import re
+from urllib.parse import urlencode
+
+
+def results_url(web, course, query=None):
+    """Choose the reviewed results UI without changing any course permission.
+
+    The canonical HTML route also uses this as a gateway for existing bookmarks.
+    A fixed legacy=1 switch provides an escape hatch if the Next process is down.
+    Only known display filters cross the boundary; never accept a return URL.
+    """
+    query = query or {}
+    base = web._base(course) + '/submissions'
+    if query.get('legacy') == '1' or course['course_key'] not in web.next_ui_policy():
+        return base
+    params = {'course_key': course['course_key']}
+    for key, limit in (('assignment_id', 200), ('student', 100)):
+        value = query.get(key, '')
+        if isinstance(value, str) and 0 < len(value) <= limit and not any(ord(c) < 32 or ord(c) == 127 for c in value):
+            params[key] = value
+    for key, allowed in (('status', {'all', 'submitted', 'unsubmitted', 'pending', 'completed', 'attention'}),
+                         ('sort', {'recent', 'student', 'assignment'})):
+        value = query.get(key)
+        if isinstance(value, str) and value in allowed:
+            params[key] = value
+    page = query.get('page', '')
+    if isinstance(page, str) and re.fullmatch(r'[1-9][0-9]{0,5}|1000000', page):
+        params['page'] = page
+    return '/app?' + urlencode(params)
 
 
 COURSE_GROUPS = (
@@ -37,6 +65,9 @@ def course_groups(web, course):
         items = [dict(id=key, label=title, href=base + ('/' + segment if segment else ''))
                  for key, segment, title, capability in definitions
                  if capability is None or getattr(web, capability, None) is not None]
+        for item in items:
+            if item['id'] == 'results':
+                item['href'] = results_url(web, course)
         if items:
             groups.append(dict(label=label, items=items))
     return groups
@@ -56,7 +87,7 @@ def portal_groups(web):
             items.append(dict(id='accounts', label='교수자 계정 관리', href='/instructor/accounts'))
         groups.append(dict(label='계정', items=items))
     groups.append(dict(label='다른 포털', items=[dict(id='portal-home', label='포털 안내', href='/'),
-                                               dict(id='student', label='학생 포털', href='/student')]))
+                                               dict(id='student', label='학생 포털', href='/app/student')]))
     return groups
 
 
@@ -66,7 +97,7 @@ def navigation_groups(web, course):
     return [(group['label'], [(item['href'], item['label']) for item in group['items']]) for group in groups]
 
 
-def page_ancestors(web, course, path):
+def page_ancestors(web, course, path, *, query=None):
     """Ordered ancestor destinations, including an explicit nearest parent."""
     ancestors = [('/instructor', '교수자 포털')]
     if course:
@@ -79,8 +110,11 @@ def page_ancestors(web, course, path):
         segment = parts[0]
         mapped = 'assignments' if segment in {'drafts', 'checks', 'assignment-templates', 'grading-templates'} else segment
         item = next((item for group in course_groups(web, course) for item in group['items']
-                     if item['href'] == base + '/' + mapped), None)
-        if item and item['href'] != path:
+                     if item['id'] == ('results' if mapped == 'submissions' else mapped)), None)
+        if mapped == 'assignments' and item:
+            from .instructor_assignment_catalog import assignment_catalog_context, assignment_catalog_url
+            item = dict(item, href=assignment_catalog_url(base, assignment_catalog_context(query or {})))
+        if item and base + '/' + mapped != path:
             ancestors.append((item['href'], item['label']))
         # Only known detail pages may be parents; POST actions are never links.
         if len(parts) > 2 and parts[1] not in {'bulk', 'new', 'import'} and re.fullmatch(r'[A-Za-z0-9_-]+', parts[1]):
@@ -88,7 +122,11 @@ def page_ancestors(web, course, path):
                       'exam-papers': '시험지 상세', 'content': '강의자료 상세',
                       'submissions': '제출 이력', 'gradebook': '성적표 검토'}
             if segment in labels:
-                ancestors.append((base + '/' + segment + '/' + parts[1], labels[segment]))
+                parent = base + '/' + segment + '/' + parts[1]
+                if segment in {'assignments', 'drafts'}:
+                    from .instructor_assignment_catalog import assignment_context_url
+                    parent = assignment_context_url(parent, query or {})
+                ancestors.append((parent, labels[segment]))
         return ancestors
     if path == '/instructor':
         return [('/', '포털 안내')]
@@ -99,8 +137,8 @@ def page_ancestors(web, course, path):
     return ancestors
 
 
-def page_location(web, course, path, title):
-    ancestors = page_ancestors(web, course, path)
+def page_location(web, course, path, title, *, query=None):
+    ancestors = page_ancestors(web, course, path, query=query)
     e = lambda value: escape(str(value), quote=True)
     crumbs = ''.join(f'<a href="{e(url)}">{e(label)}</a><span aria-hidden="true">/</span>'
                      for url, label in ancestors)

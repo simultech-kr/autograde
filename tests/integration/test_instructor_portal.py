@@ -36,7 +36,7 @@ def test_portal_is_read_only_and_admin_registration_remains_an_explicit_destinat
     elements = Elements(home.body)
     assert {a['data-course-key'] for a in elements.all('article')} == {'come2201', 'come3105'}
     links = {link['href'] for link in elements.all('a')}
-    assert {'/', '/student', '/instructor/admin', '/instructor/admin#course-registration', BASE,
+    assert {'/', '/app/student', '/instructor/admin', '/instructor/admin#course-registration', BASE,
             BASE + '/assignments', BASE + '/submissions', BASE + '/classroom'} <= links
     for private in ('private-student-key', 'Private Student Name', '123456', 'password_hash'):
         assert private not in home.body
@@ -54,9 +54,14 @@ def test_portal_filters_course_cards_without_changing_global_scoped_summary(setu
     assert [a['data-course-key'] for a in Elements(filtered.body).all('article')] == [course['course_key']]
     assert '<dt>운영 수업</dt><dd>2</dd>' in filtered.body
     assert '2026학년도 · 2학기 · 02분반' in filtered.body
+    assert '검색 초기화</a>' in filtered.body
     empty = query(browser.web, {'q': 'not-a-course'})
     assert '조건에 맞는 수업이 없습니다' in empty.body
     assert Elements(empty.body).all('article') == []
+    assert 'href="/instructor">전체 수업 보기</a>' in empty.body
+    reset = query(browser.web, {})
+    assert len(Elements(reset.body).all('article')) == 3
+    assert '검색 초기화</a>' not in reset.body
     courses.set_status('come2201', 'archived')
     archived = query(browser.web, {'status': 'archived'})
     assert [a['data-course-key'] for a in Elements(archived.body).all('article')] == ['come2201']

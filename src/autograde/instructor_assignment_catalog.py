@@ -1,5 +1,40 @@
 """Read-only, course-scoped assignment view model (no private grading material)."""
+from urllib.parse import urlencode
+
 from .platform_state import PlatformNotFound, utc_iso
+
+
+_VISIBILITIES = {'all', 'draft', 'open', 'closed', 'scheduled', 'hidden', 'inactive', 'deleted'}
+
+
+def assignment_catalog_context(form):
+    """Carry only bounded list filters, never a caller-supplied destination.
+
+    Invalid optional context must not prevent opening a valid detail page.
+    The catalog itself still reports invalid search/filter input to its user.
+    """
+    context = {key: form[key] for key in ('q', 'visibility', 'page') if key in (form or {})}
+    search = context.get('q', '')
+    visibility = context.get('visibility', 'all')
+    page = context.get('page', '1')
+    if (not isinstance(search, str) or len(search) > 200 or
+            not isinstance(visibility, str) or visibility not in _VISIBILITIES or
+            not isinstance(page, str) or not page.isascii() or not page.isdecimal() or
+            len(page) > 5 or not 1 <= int(page) <= 10000):
+        return {}
+    if 'page' in context:
+        context['page'] = str(int(page))
+    return context
+
+
+def assignment_context_url(path, context):
+    """Append validated list context to a trusted, server-constructed path."""
+    query = urlencode(assignment_catalog_context(context))
+    return path + ('?' + query if query else '')
+
+
+def assignment_catalog_url(base, context):
+    return assignment_context_url(base + '/assignments', context)
 
 
 class InstructorAssignmentCatalog:
@@ -43,7 +78,7 @@ class InstructorAssignmentCatalog:
     def list(self, course, *, search='', visibility='all', page=1, assignment_id=None, include_deleted=False):
         if not isinstance(search, str) or len(search) > 200:
             raise ValueError('검색어는 200자 이하로 입력하세요.')
-        if visibility not in {'all', 'draft', 'open', 'closed', 'scheduled', 'hidden', 'inactive', 'deleted'}:
+        if visibility not in _VISIBILITIES:
             raise ValueError('과제 상태를 다시 선택하세요.')
         if isinstance(page, bool) or not isinstance(page, int) or not 1 <= page <= 10000:
             raise ValueError('목록 페이지를 확인하세요.')

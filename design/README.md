@@ -1,5 +1,8 @@
 # Design
 
+- [공통 UX 설계·개발 지침](portal-ux-guidelines.md): 앞으로 개발하는 포털·IDE·실행기·플러그인에 적용할 필수/권장 규칙, 정보 구조·접근성·상태·복구·공용 PC·출시 기준.
+- [UX 설계·검토 양식](templates/ux-design-review.md): 기능별로 복사해 사용자 과업·화면 상태·인수 조건·검증 증거·예외를 기록한다.
+
 - [Autograde 전용 IDE 개념연구](../docs/architecture/autograde-ide.md): SQLite 유지, Code-OSS와 내장 확장, 학습 홈, AI 정책과 OS·네트워크 통제의 분리, SES 클라이언트 대안과 배포 전 검증.
 
 - [Next.js 웹 전환 계획](../docs/architecture/nextjs-migration-plan.md): 공통 UI와 업무별 모듈, 기존 Python 서비스 경계, 단계별 전환·완료 기준과 복구 계획.

@@ -77,7 +77,7 @@ summary{display:list-item;min-height:44px;padding:8px 0}
 summary{cursor:pointer;font-weight:600}.secondary{border:1px solid var(--border)}
 @media(max-width:640px){main{margin:0;min-height:100vh;padding:20px 16px;border-radius:0}}
 @media(max-height:450px){.claim-action{position:static}}
-.privacy-dialog{width:min(680px,calc(100vw - 32px));max-height:calc(100dvh - 48px);overflow:auto;padding:28px;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:var(--text);box-shadow:0 16px 60px #0004}
+.privacy-dialog{width:min(680px,calc(100vw - 32px));max-height:calc(100dvh - 48px);overflow:auto;padding:28px;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:var(--text);box-shadow:none}
 .privacy-dialog::backdrop{background:#0b142c99}.privacy-dialog h2{font-size:1.35rem;line-height:1.5;margin-top:0}.privacy-dialog h3{font-size:1rem;margin:16px 0 6px}.privacy-dialog p{line-height:1.7}.privacy-dialog .privacy-prompt-summary{padding:4px 18px;background:var(--soft);border:1px solid var(--border);border-radius:6px}.privacy-dialog details{margin:12px 0}.privacy-dialog summary{cursor:pointer;padding:10px 0}.privacy-choice-buttons{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:16px 0 10px}.privacy-dialog [data-privacy-later]{background:transparent;color:var(--muted);border-color:transparent}.privacy-dialog a{color:var(--link)}.privacy-dialog button:focus-visible,.privacy-dialog a:focus-visible{outline:3px solid var(--focus);outline-offset:3px}.privacy-dialog button:disabled{opacity:.65;cursor:default}
 @media(max-width:560px){.privacy-dialog{padding:20px;max-height:calc(100dvh - 24px);width:calc(100vw - 24px)}.privacy-choice-buttons{grid-template-columns:1fr}}
 """
@@ -104,8 +104,9 @@ def navigation(course, current, *, materials=False, exams=False):
 def role_landing(*, instructors=True):
     body = ('<p class="portal-intro">학생은 과제와 자료를 받고 제출 현황을 확인합니다. '
             '교수자는 수업을 구성하고 실습 진행과 평가를 관리합니다.</p><div class="portal-grid">'
-            '<section class="portal-card"><h2>학생 포털</h2><p>학번·비밀번호로 가입 → 교과목 선택 → 수강 명단 일치 → 과제·자료 확인</p>'
-            '<a href="/student">학생 포털 시작</a></section>')
+            '<section class="portal-card"><h2>학생 포털</h2><p>학번·비밀번호로 로그인하고 내 수업의 과제·자료·점수를 확인하세요. 기존 수업 계정은 별도 가입 없이 이용합니다.</p>'
+            '<a href="/app/student">학생 포털 시작</a>'
+            '<details><summary>학생 포털이 열리지 않나요?</summary><a href="/student">기존 수업 로그인 이용</a></details></section>')
     if instructors:
         body += ('<section class="portal-card"><h2>교수자 포털</h2><p>수업과 학생 관리, 과제 등록, 실시간 교실, 제출·평가 확인</p>'
                  '<a href="/instructor">교수자 포털 시작</a></section>')
@@ -113,7 +114,10 @@ def role_landing(*, instructors=True):
 
 
 def course_chooser(courses):
-    body = ('<div class="portal-grid"><section class="portal-card"><h2>학생 회원</h2>'
+    body = ('<section class="portal-card"><h2>내 수업에서 시작하세요</h2>'
+            '<p>수업 비밀번호와 개인 비밀번호 모두 학생 포털에서 로그인할 수 있습니다.</p>'
+            '<a href="/app/student">학생 포털 열기</a></section>'
+            '<div class="portal-grid"><section class="portal-card"><h2>기존 회원 화면</h2>'
             '<p>학번·비밀번호로 가입하고 수업을 선택하세요. 교수자의 명단과 학번이 일치하면 이용할 수 있습니다.</p>'
             '<nav class="assignment-links"><a href="/student/register">회원가입</a><a href="/student/login">로그인</a>'
             '<a href="/student/account">내 수강 교과목</a></nav></section></div>'

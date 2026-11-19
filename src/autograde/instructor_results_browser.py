@@ -93,7 +93,15 @@ SCRIPT = r"""(() => {
       `선택한 과제 · 현재 명단 ${visible}명 · 제출·미제출 인원은 보기 조건과 관계없이 해당 과제 전체를 기준으로 표시합니다.` :
       `전체 과제 · 현재 명단 ${visible}건 · 같은 학생도 과제마다 별도 행으로 표시합니다.`;
     content.querySelectorAll('[data-results-choice]').forEach(link => {
-      const params = new URL(link.href, window.location.href).searchParams;
+      const destination = new URL(link.href, window.location.href);
+      const context = new URL(window.location.href).searchParams;
+      if (context.get('legacy') === '1' && destination.origin === window.location.origin &&
+          destination.pathname === window.location.pathname) {
+        destination.searchParams.set('legacy', '1');
+        if (['recent', 'student', 'assignment'].includes(context.get('sort'))) destination.searchParams.set('sort', context.get('sort'));
+        link.href = destination.href;
+      }
+      const params = destination.searchParams;
       if (selectedAssignment === params.get('assignment_id') && filter.value === params.get('result_view')) link.setAttribute('aria-current', 'true');
       else link.removeAttribute('aria-current');
     });

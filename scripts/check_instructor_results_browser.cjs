@@ -333,6 +333,40 @@ const assignmentRows = () => row('a-one', 'yes', 'yes', 'no', 'Student One', 'as
     checks++; assignmentChecks++;
   }
   {
+    const e = environment({html: fragment(assignmentRows()), pageURL: pageURL + '?legacy=1&sort=student&assignment_id=assignment-a&result_view=submitted'});
+    const checkFallback = () => {
+      for (const link of [e.find('[data-results-refresh]'), ...e.document.querySelectorAll('[data-results-choice]')]) {
+        const address = new URL(link.href);
+        assert.equal(address.pathname, new URL(pageURL).pathname);
+        assert.equal(address.searchParams.get('legacy'), '1');
+        assert.equal(address.searchParams.get('sort'), 'student');
+      }
+      assert.equal(e.window.location.searchParams.get('legacy'), '1');
+    };
+    checkFallback();
+    e.find('[data-results-filter]').value = 'unsubmitted'; e.find('[data-results-filter]').dispatch('change');
+    e.find('[data-results-assignment]').value = 'assignment-b'; e.find('[data-results-assignment]').dispatch('change');
+    checkFallback();
+    const native = e.document.querySelector('[data-results-choice]');
+    assert.equal(e.click(native, {ctrlKey: true}).defaultPrevented, false);
+    assert.equal(new URL(native.href).searchParams.get('legacy'), '1', 'new-tab links retain the explicit fallback');
+    e.responses.push({data: payload(fragment(assignmentRows() + row('b-three', 'no', 'no', 'no', 'New student', 'assignment-b')))});
+    await e.advance(5000);
+    checkFallback(); // Fresh server fragments have no browser fallback context.
+    const restoredAddress = e.window.location.href;
+    e.window.dispatch('pagehide');
+    e.window.dispatch('pageshow', {persisted: true});
+    assert.equal(e.window.location.href, restoredAddress);
+    assert.deepEqual(visibleKeys(e), ['b-one', 'b-three']);
+    checkFallback();
+    const reloaded = environment({html: fragment(assignmentRows()), pageURL: restoredAddress});
+    assert.equal(reloaded.find('[data-results-assignment]').value, 'assignment-b');
+    assert.equal(reloaded.find('[data-results-filter]').value, 'unsubmitted');
+    assert.equal(reloaded.window.location.searchParams.get('legacy'), '1');
+    assert.equal(reloaded.window.location.searchParams.get('sort'), 'student');
+    checks++; assignmentChecks++;
+  }
+  {
     const e = environment({html: fragment(assignmentRows()), pageURL: pageURL + '?assignment_id=assignment-a&result_view=unknown', historyBlocked: true});
     assert.equal(e.find('[data-results-filter]').value, 'all');
     assert.deepEqual(visibleKeys(e), ['a-one', 'a-two']);

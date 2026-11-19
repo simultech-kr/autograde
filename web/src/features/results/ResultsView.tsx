@@ -1,6 +1,7 @@
 import { MetricCard, StatusBadge, type StatusTone } from "../../components/InstructorUI";
 import type { Assignment, ResultRow, Summary } from "../../lib/contracts/instructor";
 import { assignmentDownloadsURL, submissionDownloadURL } from "./downloads";
+import { assignmentLabels, assignmentTitle } from "./assignmentLabels";
 import { formatTime } from "./query";
 import styles from "./dashboard.module.css";
 
@@ -38,6 +39,24 @@ export function SummaryCards({ summary }: { summary: Summary }) {
         description="오류·만점 미달 등 · 완료와 중복 가능"
       />
     </section>
+  );
+}
+
+export function ResultsOverview({ summary, assignmentLabel }: { summary: Summary; assignmentLabel: string }) {
+  return (
+    <details className={styles.summary} data-testid="results-summary">
+      <summary>
+        <span><strong>제출 요약</strong><span className={styles.summaryScope}>{summary.scope === "course" ? "수업·분반 전체" : assignmentLabel}</span></span>
+        <span className={styles.summaryCounts}>제출 학생 <strong>{summary.submitted_students.toLocaleString("ko-KR")}명</strong> · 접수·채점 중 <strong>{summary.pending.toLocaleString("ko-KR")}건</strong> · 확인 필요 <strong>{summary.attention.toLocaleString("ko-KR")}건</strong></span>
+        <span className={styles.summaryIndicator} aria-hidden="true">⌄</span>
+      </summary>
+      <div className={styles.summaryBody}>
+        <SummaryCards summary={summary} />
+        <p className={styles.summaryNote}>
+          명: 중복 제외 학생 · 건: 학생 × 과제 최신 상태 · 상태·학생 검색은 집계 제외 · 누적 제출 {summary.submission_attempts.toLocaleString("ko-KR")}회
+        </p>
+      </div>
+    </details>
   );
 }
 
@@ -90,13 +109,16 @@ export function AssignmentDownloadsLink({ courseKey, assignment }: { courseKey: 
   return (
     <a className={styles.assignmentDownloadsLink} href={url} data-testid="assignment-downloads">
       등록 파일·제출물 다운로드
-      <span className="sr-only">: {assignment.title || assignment.assignment_key}</span>
+      <span className="sr-only">: {assignmentTitle(assignment)}</span>
     </a>
   );
 }
 
 // A course is omitted in the synthetic preview so sample receipts stay inert.
-export function ResultsTable({ rows, courseKey = "" }: { rows: ResultRow[]; courseKey?: string }) {
+export function ResultsTable({ rows, courseKey = "", assignments = rows }: {
+  rows: ResultRow[]; courseKey?: string; assignments?: Pick<Assignment, "assignment_id" | "title">[];
+}) {
+  const labels = assignmentLabels(assignments);
   if (!rows.length) {
     return (
       <div className={styles.empty}>
@@ -123,6 +145,7 @@ export function ResultsTable({ rows, courseKey = "" }: { rows: ResultRow[]; cour
       </thead>
       <tbody role="rowgroup">
         {rows.map(row => {
+          const title = labels.get(row.assignment_id) || assignmentTitle(row);
           const presentation = resultPresentation(row);
           // Use the displayed receipt, including when a newer result is waiting
           // to be applied. Never resolve a student's mutable "latest" receipt.
@@ -134,10 +157,16 @@ export function ResultsTable({ rows, courseKey = "" }: { rows: ResultRow[]; cour
               {row.student_name && <span className={styles.secondaryLine}>{row.student_key}</span>}
             </th>
             <td role="cell" data-label="실습 과제">
-              <strong className={styles.assignmentTitle}>{row.title || row.assignment_key}</strong>
-              <span className={styles.secondaryLine}>
-                {row.assignment_key}{!row.assignment_ready && " · 비공개"}
-              </span>
+              <strong className={styles.assignmentTitle}>{title}</strong>
+              {!row.assignment_ready && <span className={styles.secondaryLine}>비공개 · 제출 이력만</span>}
+              <details className={styles.assignmentTechnical}>
+                <summary>과제 기술 정보</summary>
+                <dl>
+                  <dt>과제 ID</dt><dd>{row.assignment_id}</dd>
+                  <dt>과제 키</dt><dd>{row.assignment_key}</dd>
+                  <dt>릴리스 ID</dt><dd>{row.release_id}</dd>
+                </dl>
+              </details>
             </td>
             <td role="cell" data-label="최신 제출">
               <StatusBadge tone={presentation.tone}>
@@ -164,14 +193,14 @@ export function ResultsTable({ rows, courseKey = "" }: { rows: ResultRow[]; cour
                   {row.detail_url && (
                     <a className={styles.detailLink} href={row.detail_url}>
                       이력·코드 확인
-                      <span className="sr-only">: {row.student_key}, {row.assignment_key}</span>
+                      <span className="sr-only">: {row.student_key}, {title}</span>
                       <span aria-hidden="true"> ↗</span>
                     </a>
                   )}
                   {downloadURL && (
                     <a className={styles.detailLink} href={downloadURL} download data-testid="submission-download">
                       제출 ZIP 받기
-                      <span className="sr-only">: {row.student_key}, {row.assignment_key}, 현재 표시된 제출</span>
+                      <span className="sr-only">: {row.student_key}, {title}, 현재 표시된 제출</span>
                     </a>
                   )}
                 </div>

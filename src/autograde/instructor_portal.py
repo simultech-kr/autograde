@@ -10,7 +10,7 @@ from html import escape
 
 from .portal_runtime_view import STATES as RUNTIME_STATES, overview as runtime_overview, time_label
 from .instructor_design import navigation_icon, task_card
-from .instructor_navigation import can_manage_courses, navigation_groups
+from .instructor_navigation import can_manage_courses, navigation_groups, results_url
 
 
 STATUS = {'active': '운영', 'preparation': '준비', 'archived': '보관'}
@@ -78,6 +78,8 @@ def navigation(web, course, current_path):
     base = web._base(course) if course else ''
     if course and any(current_path.startswith(base + '/' + segment) for segment in ('drafts', 'checks', 'assignment-templates', 'grading-templates')):
         selected = base + '/assignments'
+    if course and current_path.startswith(base + '/submissions'):
+        selected = results_url(web, course)
     active = None
     for _, links in groups:
         for url, _ in links:
@@ -100,12 +102,14 @@ def _metrics(values, label):
 
 def _filters(query, status):
     options = [('all', '모든 수업'), ('active', '운영 중'), ('preparation', '준비 중'), ('archived', '보관됨')]
+    reset = ('<a class="ui-action quiet" href="/instructor">검색 초기화</a>'
+             if query.strip() or status != 'all' else '')
     return ('<form method="get" action="/instructor" class="portal-tools" role="search">'
             f'<div><label for="portal-search">수업 찾기</label><input id="portal-search" name="q" type="search" maxlength="200" '
             f'value="{_e(query)}" placeholder="수업명 · 교과목 코드 · 분반"></div>'
             '<div><label for="portal-status">운영 상태</label><select id="portal-status" name="status">' +
             ''.join(f'<option value="{value}" {"selected" if status == value else ""}>{label}</option>' for value, label in options) +
-            '</select></div><button type="submit">조회</button></form>')
+            '</select></div><button type="submit" class="secondary">수업 검색</button>' + reset + '</form>')
 
 
 def portal_home(web, query):
@@ -118,7 +122,7 @@ def portal_home(web, query):
     body += _metrics([('운영 수업', len(active)), ('수강 중', sum(c['active_students'] for c in active)),
                       ('채점·공개 대기', sum(c['waiting'] for c in active)),
                       ('처리 오류', sum(c['errors'] for c in active))], '운영 중인 담당 수업 요약')
-    body += '<p class="portal-summary-note">수강 중은 수업별 등록 건수입니다. 제출 현황은 활성 학생 × 활성 공개 과제의 최신 접수본 기준이며, 재제출 횟수를 합산하지 않습니다. 채점·공개 대기와 처리 오류는 해당 학생·과제 건수입니다.</p>'
+    body += '<details class="portal-summary-detail"><summary>운영 현황 집계 기준</summary><p class="portal-summary-note">수강 중은 수업별 등록 건수입니다. 제출 현황은 활성 학생 × 활성 공개 과제의 최신 접수본 기준이며, 재제출 횟수를 합산하지 않습니다. 채점·공개 대기와 처리 오류는 해당 학생·과제 건수입니다.</p></details>'
     body += _filters(search, status)
     search = search.casefold().strip()
     selected = [c for c in courses if (status == 'all' or c['status'] == status) and
@@ -133,6 +137,8 @@ def portal_home(web, query):
                    if not courses and not can_manage_courses(web) else '등록된 수업이 없습니다. 교과목·분반 관리에서 첫 수업을 등록하세요.'
                    if not courses else '조건에 맞는 수업이 없습니다. 검색어나 운영 상태를 바꿔 보세요.')
         body += f'<div class="portal-empty" role="status">{message}</div>'
+        if courses:
+            body += '<p><a class="ui-action" href="/instructor">전체 수업 보기</a></p>'
     else:
         body += '<div class="portal-course-grid">'
         for course in selected:
@@ -149,7 +155,7 @@ def portal_home(web, query):
                      f'<div class="actions"><a class="primary" href="{_e(base)}">수업 열기</a>')
             if web.assignments is not None:
                 body += f'<a href="{_e(base)}/assignments">과제 관리</a>'
-            body += (f'<a href="{_e(base)}/submissions">제출·채점 현황</a>'
+            body += (f'<a href="{_e(results_url(web, course))}">제출·채점 현황</a>'
                      f'<a href="{_e(base)}/classroom">실습 교실</a></div></article>')
         body += '</div>'
     if can_manage_courses(web):
@@ -158,7 +164,7 @@ def portal_home(web, query):
                  '<a class="ui-action" href="/instructor/admin">교과목·분반 관리</a></div>')
     body += ('<div class="ui-task-launcher"><div><h3>학생에게 안내할 화면이 필요한가요?</h3>'
              '<p>학생 포털에서 로그인과 과제 수령 절차를 확인하세요. 교수자 계정은 그대로 유지됩니다.</p></div>'
-             '<a class="ui-action" href="/student">학생 시작 화면 보기</a></div>')
+             '<a class="ui-action" href="/app/student">학생 시작 화면 보기</a></div>')
     return '교수자 포털', body
 
 
@@ -177,7 +183,7 @@ def course_workflows(web, course):
                 (base + '/environments', '실습 환경 확인', '학생별 실행공간과 서버 저장·종료 상태를 확인합니다.')]
     if web.extension_distribution is not None:
         teaching.append((base + '/extensions', 'IDE 확장 업데이트', '수업에 필요한 확장을 승인하고 설치·업데이트를 전달합니다.'))
-    review = [(base + '/submissions', '제출·점수 확인', '최신 제출과 이전 최고점을 비교하고, 미제출 학생·코드·제출 이력을 확인합니다.')]
+    review = [(results_url(web, course), '제출·점수 확인', '최신 제출과 이전 최고점을 비교하고, 미제출 학생·코드·제출 이력을 확인합니다.')]
     if getattr(web, 'gradebook', None) is not None:
         review.append((base + '/gradebook', '엑셀 성적표 공개', '중간·기말·출석 등 엑셀 항목을 학번으로 연결해 학생에게 본인 점수만 공개합니다.'))
     if web.rubrics:
@@ -214,7 +220,7 @@ def environment_page(web, course):
     body = ('<p class="portal-intro">학생은 IDE에서 자신의 실습 공간을 준비하고 C/C++·Python 코드를 실행합니다. '
             '이 화면은 현재 수업의 연결·저장·종료 상태를 조회하며, 공식 제출과 채점 현황은 별도로 관리합니다.</p>'
             f'<div class="actions"><a href="{_e(base)}/environments">상태 새로고침</a>'
-            f'<a href="{_e(base)}/classroom">실습 교실</a><a href="{_e(base)}/submissions">공식 제출 확인</a></div>')
+            f'<a href="{_e(base)}/classroom">실습 교실</a><a href="{_e(results_url(web, course))}">공식 제출 확인</a></div>')
     if state['status'] == 'disabled':
         body += ('<div class="portal-runtime-status" data-state="disabled" role="status"><strong>원격 실습 환경 미설정</strong>'
                  '<p>학생별 Linux 실행공간이 아직 연결되지 않았습니다. 서버 운영자가 실행 관리자를 준비하고 '

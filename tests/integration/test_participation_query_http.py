@@ -1,7 +1,7 @@
 """Participation bookmarks survive the actual HTTP query allowlist."""
 from html.parser import HTMLParser
 import json
-from urllib.parse import urlencode, urlsplit
+from urllib.parse import parse_qs, urlencode, urlsplit
 
 import pytest
 
@@ -16,12 +16,15 @@ class ParticipationLinks(HTMLParser):
     def __init__(self, body):
         super().__init__()
         self.links = []
+        self.refresh = None
         self.feed(body)
 
     def handle_starttag(self, tag, attrs):
         attrs = dict(attrs)
         if tag == 'a' and 'data-results-choice' in attrs:
             self.links.append(attrs['href'])
+        if tag == 'a' and 'data-results-refresh' in attrs:
+            self.refresh = attrs['href']
 
 
 @pytest.fixture(params=['admin', 'legacy', 'single'])
@@ -61,6 +64,30 @@ def test_generated_participation_links_and_bookmarked_filters_load(query_server)
     if context['mode'] == 'legacy':
         assert request(server, BASE + '?assignment_id=participation_a&result_view=unsubmitted',
                        authorization=AUTH)[0] == 200
+
+
+@pytest.mark.parametrize('query_server', ['admin'], indirect=True)
+@pytest.mark.parametrize('fragment', [False, True])
+def test_fallback_native_filter_and_refresh_links_stay_on_legacy_renderer(query_server, fragment):
+    context = query_server
+    web, service = context['browser'].web, context['service']
+    web.next_ui_policy = lambda: frozenset({COURSE})
+    web.submissions = lambda key, auth: service.instructor_dashboard_page(auth, portal=True, fragment=fragment)
+    fields = {'legacy': '1', 'assignment_id': 'participation_a', 'result_view': 'submitted', 'sort': 'student'}
+    page = context['page'] + '?' + urlencode(fields)
+    status, _, body = request(context['server'], page, authorization=AUTH)
+    assert status == 200
+    links = ParticipationLinks(body.decode())
+    assert parse_qs(urlsplit(links.refresh).query) == {key: [value] for key, value in fields.items()}
+    for target in [links.refresh, *links.links]:
+        query = parse_qs(urlsplit(target).query)
+        assert query['legacy'] == ['1'] and query['sort'] == ['student']
+        status, headers, html = request(context['server'], target, authorization=AUTH)
+        assert status == 200 and 'Location' not in headers
+        assert b'data-live-results' in html
+    # Returning to the saved history URL after a detail visit stays in fallback.
+    status, headers, _ = request(context['server'], page, authorization=AUTH)
+    assert status == 200 and 'Location' not in headers
 
 
 def test_participation_query_validation_remains_narrow(query_server):

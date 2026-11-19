@@ -240,7 +240,9 @@ def test_initial_and_live_participation_are_identical_and_read_only_without_qr(p
         assert 'assignment-qr' not in live.body['html'] and '과제 수령 QR' not in live.body['html']
     settings = browser.get(BASE + '/settings')
     for html in (initial.body, service.instructor_dashboard_page(AUTH).body, settings.body):
-        assert '<svg' not in html and '과제 수령 QR' not in html and '학생 접속 QR 코드' not in html
+        # Decorative navigation icons are SVG too; only assignment QR UI is
+        # excluded from this read-only results/settings flow.
+        assert '과제 수령 QR' not in html and '학생 접속 QR 코드' not in html
         assert 'id="assignment-qr"' not in html
     assert WEB + '/courses/come2201' in settings.body
     assert [state.get_bundle_submission(item.submission_id) for item in (first, latest, other)] == before

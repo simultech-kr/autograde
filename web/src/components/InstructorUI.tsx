@@ -32,28 +32,35 @@ export function AppShell({ children, testId, course, section, resultsEnabled = f
         </a>
         <nav className={styles.portalNav} aria-label="포털 이동">
           <a href="/">포털 홈</a>
-          <a href="/student">학생 포털</a>
+          <a href="/app/student">학생 포털</a>
         </nav>
       </header>
       <div className={styles.workspace} data-navigation-visible={groups.length > 0}>
       {groups.length > 0 && <aside className={styles.courseBar} data-testid={course ? "course-navigation" : "portal-navigation"}>
         {course && <p className={styles.courseContext}>
           <span>선택한 수업</span>
-          <strong>{course.name || course.code || course.course_key}{course.section ? ` · ${course.section}분반` : ""}</strong>
-          <span className={styles.courseCode}>{course.course_key}</span>
+          <strong>{course.name || course.code || course.course_key}{course.section ? ` · ${course.section.replace(/분반$/, "")}분반` : ""}</strong>
+          <span className={styles.courseCode}>{course.code || course.course_key}</span>
         </p>}
-        <details className={styles.courseMenu} ref={menu} open>
+        <details className={styles.courseMenu} ref={menu} open onKeyDown={event => {
+          if (event.key === "Escape" && menu.current?.open && !window.matchMedia("(min-width: 1101px)").matches) {
+            event.preventDefault();
+            menu.current.open = false;
+            menu.current.querySelector("summary")?.focus();
+          }
+        }}>
         <summary><span>{course ? "수업 메뉴" : "교수자 메뉴"}</span><strong>{current?.label || "교수자 포털"}</strong><span aria-hidden="true">⌄</span></summary>
         <nav className={styles.courseNav} aria-label={course ? "수업 메뉴" : "교수자 메뉴"}>
           {groups.map(group => <div className={styles.navGroup} key={group.label}>
             <p className={styles.navLabel}>{group.label}</p>
             {group.items.map(link =>
-              <a key={link.id} href={link.href} aria-current={link.current ? "page" : undefined}><NavigationIcon name={link.id}/><span>{link.label}</span></a>)}
+              <a key={link.id} href={link.href} aria-current={link.current ? "page" : undefined}><NavigationIcon name={link.id}/><span>{link.label}</span>{link.current && <span className={styles.currentMarker} aria-hidden="true">현재</span>}</a>)}
           </div>)}
         </nav>
         </details>
       </aside>}
       <main id="main" tabIndex={-1} className={styles.main}>
+        <div className={styles.locationRow}>
         <a className={styles.back} data-parent-link href={course ? `/courses/${course.course_key}/instructor` : "/instructor"}>
           <span aria-hidden="true">←</span> {course ? "수업 개요" : "교수자 포털"}로 돌아가기
         </a>
@@ -61,6 +68,7 @@ export function AppShell({ children, testId, course, section, resultsEnabled = f
           {course && <><span aria-hidden="true">/</span><a href={`/courses/${course.course_key}/instructor`}>{course.name || course.code}</a></>}
           {current && <><span aria-hidden="true">/</span><span aria-current="page">{current.label}</span></>}
         </nav>
+        </div>
         {children}
       </main>
       </div>
@@ -96,7 +104,7 @@ export function PageHeading({
   description,
   label,
 }: {
-  eyebrow: string;
+  eyebrow?: string;
   title: string;
   description: string;
   label?: string;
@@ -104,7 +112,7 @@ export function PageHeading({
   return (
     <div className={styles.heading}>
       <div className={styles.headingCopy}>
-        <p className={styles.eyebrow}>{eyebrow}</p>
+        {eyebrow && <p className={styles.eyebrow}>{eyebrow}</p>}
         <h1>{title}</h1>
         <p className={styles.description}>{description}</p>
       </div>

@@ -5,6 +5,7 @@ changes authorization, storage or browser persistence.
 """
 
 from html import escape
+from urllib.parse import urlsplit
 
 _ICONS = {
     'home': '<path d="m3 10 9-7 9 7v10H3z"/><path d="M9 20v-7h6v7"/>',
@@ -25,12 +26,12 @@ def icon(name):
 
 
 def navigation_icon(url):
-    segment = url.rstrip('/').split('/')[-1]
+    segment = urlsplit(url).path.rstrip('/').split('/')[-1]
     name = {'students': 'students', 'registrations': 'students', 'assignments': 'assignments',
             'submissions': 'results', 'rubrics': 'results', 'classroom': 'classroom',
             'environments': 'classroom', 'operations': 'classroom', 'settings': 'settings',
             'content': 'folder', 'materials': 'folder', 'exam-papers': 'folder', 'gradebook': 'results',
-            'extensions': 'folder', 'instructor': 'home', 'student': 'students'}.get(segment, 'grid')
+            'extensions': 'folder', 'instructor': 'home', 'student': 'students', 'app': 'results'}.get(segment, 'grid')
     return icon(name)
 
 
@@ -43,8 +44,8 @@ def task_card(url, title, description, *, action='열기'):
 
 
 STYLE = """
-.responsive-instructor{font-size:15px;line-height:1.6;-webkit-font-smoothing:antialiased}
-.responsive-instructor .instructor-header{min-height:80px;padding:16px max(24px,calc((100vw - 1600px)/2 + 24px));gap:20px;border-bottom:1px solid var(--border)}
+.responsive-instructor{font-size:16px;line-height:1.6;-webkit-font-smoothing:antialiased}
+.responsive-instructor .instructor-header{min-height:80px;padding:12px max(24px,calc((100vw - 1600px)/2 + 24px));gap:16px;border-bottom:1px solid var(--border)}
 .instructor-brand{display:flex;align-items:center;gap:12px;color:var(--text);text-decoration:none}
 .instructor-brand-mark{display:grid;place-items:center;flex:none;width:36px;height:36px;border-radius:4px;background:var(--accent);color:var(--on-accent);font-size:19px;font-weight:750}
 .instructor-brand h1{font-size:18px;letter-spacing:-.025em;margin:0;line-height:1.3}
@@ -52,25 +53,25 @@ STYLE = """
 .instructor-header .course-switch{flex:0 1 430px}
 .instructor-header .course-switch label{font-size:12px;color:var(--muted);font-weight:500;margin:0 0 4px}
 .instructor-header .course-switch .actions{flex-wrap:nowrap;gap:8px}
-.instructor-header .course-switch select{width:100%;flex:1;max-width:100%;font-size:13px;min-height:40px;padding:8px 10px}
-.instructor-header .course-switch button{font-size:13px;min-height:40px;padding:8px 12px;background:var(--surface);border:1px solid var(--control-border);color:var(--text)}
+.instructor-header .course-switch select{width:100%;flex:1;max-width:100%;font-size:14px;min-height:44px;padding:8px 12px}
+.instructor-header .course-switch button{font-size:14px;min-height:44px;padding:8px 12px;background:var(--surface);border:1px solid var(--control-border);color:var(--text)}
 .responsive-instructor .instructor-header+.shell{max-width:1600px;grid-template-columns:232px minmax(0,1fr);min-height:calc(100vh - 80px)}
 .portal-menu{margin:0;background:var(--surface);border-right:1px solid var(--border);min-width:0}
 .portal-menu>summary{display:none}
-.portal-menu nav.portal-navigation{padding:24px 12px;display:block}
-.portal-menu .portal-nav-group{margin-bottom:24px}
-.portal-menu .portal-nav-label{font-size:11px;letter-spacing:.05em;font-weight:650;margin:0 12px 8px;color:var(--muted)}
-.portal-menu nav a{display:flex;align-items:center;gap:10px;min-height:44px;border:1px solid transparent;border-radius:4px;margin:2px 0;padding:10px 12px;color:var(--muted);text-decoration:none;font-size:13px;font-weight:500;line-height:1.5}
+.portal-menu nav.portal-navigation{padding:16px 12px;display:block}
+.portal-menu .portal-nav-group{margin-bottom:16px}
+.portal-menu .portal-nav-label{font-size:12px;letter-spacing:.02em;font-weight:650;margin:0 12px 4px;color:var(--muted)}
+.portal-menu nav a{display:flex;align-items:center;gap:10px;min-height:44px;border:1px solid transparent;border-inline-start:3px solid transparent;border-radius:4px;margin:2px 0;padding:9px 12px;color:var(--muted);text-decoration:none;font-size:14px;font-weight:500;line-height:1.5}
 .portal-menu nav a:hover{color:var(--text);background:var(--surface-raised)}
-.portal-menu nav a[aria-current=page]{background:var(--soft);color:var(--link);border-color:transparent;font-weight:700}
+.portal-menu nav a[aria-current=page]{background:var(--soft);color:var(--link);border-inline-start-color:var(--accent);font-weight:700}
 .ui-icon{width:18px;height:18px;flex:none;vertical-align:middle}
 .portal-account{border-top:1px solid var(--border);padding-top:12px;margin-top:24px}
-.responsive-instructor .instructor-header+.shell>main{padding:28px 32px;min-width:0;background:var(--page)}
-.page-heading{padding:0 0 20px;margin:0 0 20px;border-bottom:1px solid var(--border)}
-.page-back{display:inline-flex;align-items:center;gap:6px;min-height:44px;margin:0 0 8px;color:var(--link);font-size:14px;text-decoration:none}.page-back:hover{text-decoration:underline}
-.page-heading h2{font-size:26px;font-weight:700;letter-spacing:-.035em;line-height:1.3;margin:8px 0 0}
-.page-breadcrumb{display:flex;align-items:center;gap:8px;flex-wrap:wrap;color:var(--muted);font-size:12px;margin:0;padding:0}
-.page-breadcrumb a{color:var(--muted);text-decoration:none;min-height:24px;display:inline-flex;align-items:center}
+.responsive-instructor .instructor-header+.shell>main{padding:20px 32px 32px;min-width:0;background:var(--page)}
+.page-heading{display:grid;grid-template-columns:auto minmax(0,1fr);align-items:center;gap:0 24px;padding:0 0 16px;margin:0 0 16px;border-bottom:1px solid var(--border)}
+.page-back{display:inline-flex;align-items:center;gap:6px;min-height:44px;margin:0;color:var(--link);font-size:14px;text-decoration:none}.page-back:hover{text-decoration:underline}
+.page-heading h2{grid-column:1/-1;font-size:28px;font-weight:700;letter-spacing:-.035em;line-height:1.3;margin:8px 0 0}
+.page-heading nav.page-breadcrumb{display:flex;align-items:center;justify-content:flex-end;gap:4px 8px;flex-wrap:wrap;min-width:0;color:var(--muted);font-size:13px;margin:0;padding:0}
+.page-heading .page-breadcrumb a{color:var(--muted);text-decoration:none;min-height:44px;padding:8px 4px;display:inline-flex;align-items:center}
 .page-breadcrumb a:hover{text-decoration:underline;color:var(--link)}
 .ui-muted{color:var(--muted);font-size:13px}.ui-toolbar{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px;margin:20px 0}
 .ui-actions{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
@@ -82,6 +83,7 @@ STYLE = """
 .responsive-instructor .button, .responsive-instructor button{font-size:14px;border:1px solid transparent;min-height:44px;font-weight:600}
 .responsive-instructor button.secondary{background:var(--surface);border-color:var(--border);color:var(--text)}
 .responsive-instructor input:not([type=checkbox]):not([type=radio]),.responsive-instructor select,.responsive-instructor textarea{font-size:14px;padding:10px 12px}
+.responsive-instructor select{height:44px;line-height:1.4}
 .responsive-instructor label{font-size:13px;font-weight:600;color:var(--text)}
 .responsive-instructor .shell main .ui-panel,.responsive-instructor .shell main>section{padding:24px;background:var(--surface);border:1px solid var(--border);border-radius:4px;margin:0 0 20px}
 .responsive-instructor .shell main>section>h3{font-size:17px;letter-spacing:-.02em;margin-bottom:16px}
@@ -108,10 +110,10 @@ STYLE = """
 .operations-health-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,240px),1fr));gap:20px;margin:0}
 .operations-health-grid dt{font-size:12px;color:var(--muted);margin-bottom:6px}.operations-health-grid dd{margin:0;font-weight:600;font-variant-numeric:tabular-nums}
 .responsive-instructor .results-region{border:1px solid var(--border);background:var(--surface);border-radius:4px;padding:0 16px}
-.responsive-instructor .result-table{font-size:13px}
+.responsive-instructor .result-table{font-size:14px}
 .responsive-instructor .result-table caption{padding:16px 0;font-size:12px}
 .responsive-instructor .result-table th,.responsive-instructor .result-table td{padding:14px 12px}
-.responsive-instructor .result-table thead th{font-size:12px;font-weight:600;background:var(--surface-raised)}
+.responsive-instructor .result-table thead th{font-size:13px;font-weight:600;background:var(--surface-raised)}
 .responsive-instructor .result-table tbody tr:last-child>*{border-bottom:0}
 .responsive-instructor .result-table tbody tr:hover{background:var(--surface-raised)}
 .responsive-instructor .result-table tbody th{background:transparent}
@@ -121,6 +123,9 @@ STYLE = """
 .responsive-instructor .notice{border:1px solid var(--border);border-left:3px solid var(--accent);padding:14px 16px;font-size:13px;border-radius:3px}
 .responsive-instructor .notice.warning{border-left-color:var(--warning)}.responsive-instructor .notice.error{border-left-color:var(--error)}
 .responsive-instructor .portal-metrics{gap:12px;border:0}.responsive-instructor .portal-metrics>div{background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:20px}
+.responsive-instructor .shell main>details.portal-summary-detail{margin:8px 0 16px;padding:0;border:0;background:transparent;color:var(--muted)}
+.responsive-instructor .shell main>details.portal-summary-detail>summary{padding:8px 0;font-size:13px;font-weight:500;min-height:44px}
+.portal-summary-detail .portal-summary-note{margin:0 0 8px;max-width:80ch}
 .responsive-instructor .portal-tools,.responsive-instructor .catalog-tools{background:var(--surface);padding:16px 20px;border:1px solid var(--border);border-radius:4px;margin:20px 0}
 .responsive-instructor .portal-tools label,.responsive-instructor .catalog-tools label{margin-top:0}
 .responsive-instructor .portal-course-card,.responsive-instructor .portal-workflow-card{border-radius:4px;padding:24px}
@@ -159,15 +164,16 @@ STYLE = """
 @media(min-width:1101px){.portal-menu nav{position:sticky;top:0;max-height:100vh;overflow-y:auto}}
 @media(max-width:1100px){.responsive-instructor .results-region{padding:0 12px 12px}.responsive-instructor .result-table th,.responsive-instructor .result-table td{padding:10px 0}}
 @media(max-width:1100px){
- .responsive-instructor .instructor-header{padding:16px 20px}.responsive-instructor .instructor-header+.shell{display:block}
+ .responsive-instructor .instructor-header{padding:12px 20px}.responsive-instructor .instructor-header+.shell{display:block}
  .portal-menu{border-right:0;border-bottom:1px solid var(--border)}.portal-menu>summary{display:flex;align-items:center;justify-content:space-between;padding:12px 20px;font-weight:600;font-size:13px;min-height:44px;list-style:none}.portal-menu>summary::-webkit-details-marker{display:none}
  .portal-menu>summary:after{content:'+';font-size:20px;font-weight:400}.portal-menu[open]>summary:after{content:'−'}
  .portal-menu nav.portal-navigation{padding:12px 20px;display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:16px}.portal-menu .portal-nav-group{margin:0}.portal-menu .portal-account{margin:0}
- .responsive-instructor .instructor-header+.shell>main{padding:24px}.page-heading h2{font-size:24px}
+ .responsive-instructor .instructor-header+.shell>main{padding:16px 24px 24px}.page-heading h2{font-size:26px}
 }
 @media(max-width:600px){
- .responsive-instructor .instructor-header{padding:16px;gap:16px}.instructor-brand h1{font-size:17px}.instructor-header .course-switch{flex-basis:100%}
- .responsive-instructor .instructor-header+.shell>main{padding:20px 16px}.page-heading{margin-bottom:16px;padding-bottom:16px}.page-heading h2{font-size:22px}
+ .responsive-instructor .instructor-header{padding:12px 16px;gap:12px}.instructor-brand h1{font-size:17px}.instructor-header .course-switch{flex-basis:100%}
+ .responsive-instructor .instructor-header+.shell>main{padding:16px}.page-heading{grid-template-columns:minmax(0,1fr);margin-bottom:16px;padding-bottom:16px}.page-heading h2{font-size:24px}
+ .page-heading nav.page-breadcrumb{justify-content:flex-start;font-size:12px;gap:0 4px}.page-heading .page-breadcrumb a{padding:8px 2px}
  .responsive-instructor .shell main .ui-panel,.responsive-instructor .shell main>section{padding:16px}
  .ui-metrics{gap:8px}.ui-metrics>div{padding:14px}.ui-metrics dd{font-size:24px}
  .ui-toolbar{align-items:stretch}.ui-toolbar .ui-actions{width:100%}.ui-toolbar .ui-action{flex:1}
@@ -181,6 +187,10 @@ STYLE = """
  .responsive-instructor .shell main .ui-subject-card{padding:20px}
 }
 @media(prefers-reduced-motion:reduce){.responsive-instructor *{scroll-behavior:auto!important}}
+@media(pointer:coarse){
+ .responsive-instructor button,.responsive-instructor .button,.responsive-instructor .ui-action,.portal-menu nav a,.page-back,.page-heading .page-breadcrumb a{min-height:48px}
+ .responsive-instructor select{height:48px}
+}
 @media(forced-colors:active){.ui-action,.ui-badge,.instructor-brand-mark,.portal-menu nav a[aria-current=page]{border:1px solid CanvasText}}
 .classroom-readiness .readiness-heading{display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:16px}
 .classroom-readiness .readiness-heading h2{font-size:21px;letter-spacing:-.025em;margin:0 0 4px}

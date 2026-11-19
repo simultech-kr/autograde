@@ -16,7 +16,8 @@ class InstructorUploadUnavailable(RuntimeError):
 
 
 def parse_instructor_upload(content_type: str, body: bytes, *, file_limit: int, capture_filename=False,
-                            allow_content_path=False, allow_roster_mode=False, allow_gradebook=False) -> dict:
+                            allow_content_path=False, allow_roster_mode=False, allow_gradebook=False,
+                            allow_material_filters=False, allow_assignment_filters=False) -> dict:
     try:
         from python_multipart import MultipartParser
         from python_multipart.multipart import parse_options_header
@@ -40,7 +41,7 @@ def parse_instructor_upload(content_type: str, body: bytes, *, file_limit: int, 
     def part_begin():
         nonlocal count
         count += 1
-        if count > 7:
+        if count > (10 if allow_assignment_filters else 9 if allow_material_filters else 7):
             raise ValueError("업로드 항목이 너무 많습니다.")
         headers.clear()
         data.clear()
@@ -70,6 +71,10 @@ def parse_instructor_upload(content_type: str, body: bytes, *, file_limit: int, 
             allowed.add("mode")
         if allow_gradebook:
             allowed.update({'title', 'orientation', 'sheet_name', 'student_column'})
+        if allow_material_filters:
+            allowed.update({'q', 'assignment', 'requested', 'student_status', 'recipients_page', 'requests_page'})
+        if allow_assignment_filters:
+            allowed.update({'q', 'visibility', 'page'})
         if disposition != b"form-data" or name not in allowed or name in result:
             raise ValueError("중복되거나 허용되지 않은 업로드 항목입니다.")
         is_file = b"filename" in attrs

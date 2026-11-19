@@ -26,4 +26,4 @@ def test_results_browser_state_machine():
     assert result.returncode == 0, result.stdout + result.stderr
     assert 'live results behavior scenarios passed' in result.stdout
     assignment_scenarios = re.search(r'(\d+) assignment filter scenarios passed', result.stdout)
-    assert assignment_scenarios and int(assignment_scenarios[1]) >= 7, result.stdout
+    assert assignment_scenarios and int(assignment_scenarios[1]) >= 8, result.stdout

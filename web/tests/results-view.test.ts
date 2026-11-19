@@ -9,13 +9,14 @@ import { renderToStaticMarkup } from "react-dom/server";
 import ts from "typescript";
 import type { ResultRow } from "../src/lib/contracts/instructor.ts";
 import { assignmentDownloadsURL, submissionDownloadURL } from "../src/features/results/downloads.ts";
+import { assignmentLabels, assignmentTitle } from "../src/features/results/assignmentLabels.ts";
 import { sampleBootstrap, sampleResults } from "./fixtures.ts";
 
 // Node's native TypeScript runner does not transform JSX or CSS modules. Load
 // only these repository presentation modules in memory; no app, network,
 // browser globals, generated files, or new test dependency is needed.
 const sourceRoot = fileURLToPath(new URL("../src/", import.meta.url));
-const allowed = ["features/results/ResultsView.tsx", "components/InstructorUI.tsx", "features/results/query.ts", "features/results/downloads.ts", "features/navigation.ts"]
+const allowed = ["features/results/ResultsView.tsx", "components/InstructorUI.tsx", "features/results/query.ts", "features/results/downloads.ts", "features/navigation.ts", "features/results/assignmentLabels.ts"]
   .map(file => resolve(sourceRoot, file));
 const require = createRequire(import.meta.url);
 const cache = new Map<string, { exports: unknown }>();
@@ -41,8 +42,8 @@ function load(file: string): unknown {
   new Function("require", "module", "exports", compiled)(localRequire, module, module.exports);
   return module.exports;
 }
-const { AssignmentDownloadsLink, ResultsTable, SummaryCards, resultPresentation, refreshPresentation } = load(allowed[0]) as typeof import("../src/features/results/ResultsView");
-const { AppShell } = load(allowed[1]) as typeof import("../src/components/InstructorUI");
+const { AssignmentDownloadsLink, ResultsTable, ResultsOverview, SummaryCards, resultPresentation, refreshPresentation } = load(allowed[0]) as typeof import("../src/features/results/ResultsView");
+const { AppShell, PageHeading } = load(allowed[1]) as typeof import("../src/components/InstructorUI");
 const row = (patch: Partial<ResultRow> = {}): ResultRow => ({ ...sampleResults.rows[0], ...patch });
 const render = (value: ResultRow) => renderToStaticMarkup(createElement(ResultsTable, { rows: [value] }));
 const renderCourse = (value: ResultRow, courseKey = sampleResults.course_key) =>
@@ -58,7 +59,7 @@ test("public portal shell exposes audience entries without any course or student
   assert.match(html, /href="\/instructor"/);
   assert.match(html, /교수자 포털/);
   assert.match(html, /href="\/"[^>]*>포털 홈/);
-  assert.match(html, /href="\/student"[^>]*>학생 포털/);
+  assert.match(html, /href="\/app\/student"[^>]*>학생 포털/);
   assert.doesNotMatch(html, /course-navigation|\/courses\/|course_key=|csrf|SAMPLE-001|로그아웃/);
   assert.match(html, /<main id="main" tabindex="-1"/);
 });
@@ -87,6 +88,31 @@ test("account and portal navigation remain reachable with no selected course", (
   assert.match(html, /href="\/instructor\/account"/);
   assert.match(html, /data-parent-link="true" href="\/instructor"/);
   assert.doesNotMatch(html, /\/courses\//);
+});
+
+test("compact shell keeps an explicit parent, current location and readable course section", () => {
+  const html = renderToStaticMarkup(createElement(AppShell, {
+    children: createElement(PageHeading, { title: "제출·채점 현황", description: "최신 제출 확인" }),
+    course: sampleBootstrap.courses[0], section: "results", resultsEnabled: true,
+  }));
+  assert.match(html, /class="locationRow"[\s\S]*data-parent-link="true"[\s\S]*aria-label="현재 위치"/);
+  assert.match(html, /aria-current="page"[^>]*>[\s\S]*class="currentMarker" aria-hidden="true">현재/);
+  assert.doesNotMatch(html, /분반분반|class="eyebrow"/);
+  assert.equal((html.match(/<h1>/g) || []).length, 1);
+});
+
+test("closed overview keeps actionable totals visible and detailed count definitions available", () => {
+  const html = renderToStaticMarkup(createElement(ResultsOverview, {
+    summary: sampleResults.summary, assignmentLabel: "선택한 과제",
+  }));
+  assert.match(html, /^<details class="summary" data-testid="results-summary"><summary>/);
+  const summary = html.split("</summary>")[0];
+  assert.match(summary, /수업·분반 전체/);
+  assert.match(summary, /제출 학생 <strong>3명<\/strong>/);
+  assert.match(summary, /접수·채점 중 <strong>1건<\/strong>/);
+  assert.match(summary, /확인 필요 <strong>2건<\/strong>/);
+  assert.match(html, /상태·학생 검색은 집계 제외/);
+  assert.match(html, /완료와 중복 가능/);
 });
 
 test("summary separates student headcount from five latest-state metrics and explains overlapping totals", () => {
@@ -183,7 +209,7 @@ test("submission downloads target the displayed receipt, independently of histor
     const html = renderCourse(value);
     assert.match(html, /href="\/courses\/come2201\/instructor\/submissions\/bsub_displayed-2\/download\.zip" download=""/);
     assert.match(html, /제출 ZIP 받기/);
-    assert.match(html, /SAMPLE-001, Week04-Problem01, 현재 표시된 제출/);
+    assert.match(html, /SAMPLE-001, Observer · Decorator 패턴 구현, 현재 표시된 제출/);
     assert.doesNotMatch(html, /sample-submission-1\/download|latest\/download/);
     assert.match(html, /이력·코드 확인/);
   }
@@ -225,6 +251,40 @@ test("untrusted row text remains escaped and empty filtered results remain expli
   const empty = renderToStaticMarkup(createElement(ResultsTable, { rows: [] }));
   assert.match(empty, /표시할 결과가 없습니다/);
   assert.doesNotMatch(empty, /<table/);
+});
+
+test("assignment titles replace internal keys and remain available to screen readers", () => {
+  const value = row({ title: "Week10Practicum", assignment_key: "draft_internal", release_id: "revision_internal", detail_url: "/courses/come2201/instructor/submissions/bsub_current", submission_id: "bsub_current" });
+  const html = renderCourse(value);
+  assert.match(html, /<strong class="assignmentTitle">Week10Practicum<\/strong>/);
+  assert.match(html, /<details class="assignmentTechnical"><summary>과제 기술 정보<\/summary>/);
+  assert.match(html, /과제 키<\/dt><dd>draft_internal/);
+  assert.match(html, /릴리스 ID<\/dt><dd>revision_internal/);
+  const collapsed = html.replace(/<details\b[^>]*>[\s\S]*?<\/details>/g, "");
+  assert.doesNotMatch(collapsed, /draft_internal|revision_internal/);
+  assert.match(collapsed, /SAMPLE-001, Week10Practicum, 현재 표시된 제출/);
+  assert.match(collapsed, /bsub_current\/download.zip/);
+  assert.match(render(row({ assignment_ready: false })), /비공개 · 제출 이력만/);
+  assert.equal(assignmentTitle({ title: "  " }), "제목 없는 과제");
+});
+
+test("duplicate titles use distinct human labels stable across result order and pagination", () => {
+  const assignments = [
+    { assignment_id: "basn_second", title: "Week10Practicum" },
+    { assignment_id: "basn_first", title: "Week10Practicum" },
+  ];
+  const labels = assignmentLabels(assignments);
+  assert.equal(labels.get("basn_first"), "Week10Practicum · 동명 과제 1");
+  assert.equal(labels.get("basn_second"), "Week10Practicum · 동명 과제 2");
+  assert.deepEqual(assignmentLabels([...assignments].reverse()), labels);
+  assert.deepEqual(assignmentLabels([...assignments, assignments[0]]), labels);
+  // The first assignment has no student row on this page; labels still agree
+  // with the selector's complete assignment list.
+  const html = renderToStaticMarkup(createElement(ResultsTable, {
+    rows: [row({ assignment_id: "basn_second", title: "Week10Practicum" })], assignments,
+  }));
+  assert.match(html, /<strong class="assignmentTitle">Week10Practicum · 동명 과제 2<\/strong>/);
+  assert.equal(assignmentLabels([{ assignment_id: "empty", title: "" }]).get("empty"), "제목 없는 과제");
 });
 
 const fresh = { changed: false, paused: false, automatic: true, failed: false, loading: false, lastSuccess: "2026-10-10T04:50:00Z" };

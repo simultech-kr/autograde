@@ -68,8 +68,12 @@ class MaterialService:
     def upload(self, *args, **kwargs):
         self.calls.append(('upload', args, kwargs))
 
-    def upload_batch(self, *args, **kwargs):
-        self.calls.append(('upload_batch', args, kwargs))
+    def prepare_batch(self, *args, **kwargs):
+        self.calls.append(('prepare_batch', args, kwargs))
+        return {'review_id': 'mbatch_' + 'b' * 32}
+
+    def pending_batches(self, *args, **kwargs):
+        return None
 
     def publish(self, *args, **kwargs):
         self.calls.append(('publish', args, kwargs))
@@ -127,7 +131,7 @@ def test_instructor_detail_guides_mapping_batch_partial_delivery_and_escapes(ui)
 
 def test_instructor_listing_links_student_destination_and_draft(ui):
     _, body = instructor.listing(ui, COURSE, {'csrf': 'csrf-token'})
-    assert f'{WEB}{BASE}' in body
+    assert f'{WEB}/app/student?course_key=come2201&amp;view=materials' in body
     assert '&lt;script&gt;paper&lt;/script&gt;' in body
     assert '초안 저장 · 학생별 파일 등록으로' in body
 
@@ -150,7 +154,7 @@ def test_upload_delegates_bytes_revision_and_original_filename(ui, action):
     response = instructor.request(ui, 'POST', COURSE, f'materials/{ID}/{action}', form, {'csrf': 'x'})
     assert response.status == 303
     call = ui.student_materials.calls[0]
-    assert call[0] == action.replace('-', '_')
+    assert call[0] == ('prepare_batch' if action == 'upload-batch' else 'upload')
     assert call[1] == ('come2201', ID)
     assert call[2]['revision'] == 3 and call[2]['data'] == b'private-file'
     if action == 'upload':

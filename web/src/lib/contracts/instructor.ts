@@ -71,7 +71,8 @@ function navigationGroups(value: unknown, key?: string): NavigationGroup[] {
   const seen = new Set<string>();
   const coursePaths = ["", "classroom", "assignments", "submissions", "gradebook", "rubrics", "content", "materials", "exam-papers", "students", "registrations", "environments", "extensions", "settings"];
   const allowed = new Set(key ? coursePaths.map(path => `/courses/${key}/instructor${path ? `/${path}` : ""}`)
-    : ["/instructor", "/instructor/admin", "/instructor/operations", "/instructor/account", "/instructor/accounts", "/", "/student"]);
+    : ["/instructor", "/instructor/admin", "/instructor/operations", "/instructor/account", "/instructor/accounts", "/", "/student", "/app/student"]);
+  if (key) allowed.add(`/app?${new URLSearchParams({course_key: key})}`);
   return array(value, entry => {
     const group = object(entry);
     return { label: str(group.label), items: array(group.items, entry => {

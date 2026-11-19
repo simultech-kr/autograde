@@ -805,6 +805,9 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
         facade = self.platform_server.facade
         participation_fields = {'assignment_id', 'result_view'}
         portal_path = parameters.get('path', '') if route == 'portal' else ''
+        if getattr(facade, 'instructor', None) is not None and re.fullmatch(
+                r'/courses/[a-z0-9_-]{1,96}/instructor/submissions', portal_path):
+            participation_fields |= {'status', 'student', 'sort', 'page', 'legacy'}
         participation_page = route == 'instructor_page' or bool(
             re.fullmatch(r'/courses/[A-Za-z0-9][A-Za-z0-9._~-]{0,127}/instructor/submissions', portal_path)
             or (getattr(facade, 'instructor', None) is None and
@@ -831,7 +834,8 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
                             {'assignment_id'} if re.fullmatch(r'/courses/[a-z0-9_-]{1,96}/instructor/classroom', path) else
                             {'revision', 'save_request', 'save_kind'} if re.fullmatch(r'/courses/[a-z0-9_-]{1,96}/instructor/drafts/[A-Za-z0-9_-]+/save-state', path) else
                             {'q', 'page', 'change', 'view', 'columns', 'cell'} if re.fullmatch(r'/courses/[a-z0-9_-]{1,96}/instructor/gradebook/gbook_[A-Za-z0-9_-]+', path) else
-                            {'q', 'visibility', 'page'} if re.fullmatch(r'/courses/[a-z0-9_-]{1,96}/instructor/assignments', path) else set())
+                            {'q', 'assignment', 'requested', 'student_status', 'recipients_page', 'requests_page'} if re.fullmatch(r'/courses/[a-z0-9_-]{1,96}/instructor/materials/mat_[A-Za-z0-9_-]+(?:/batch-review/mbatch_[0-9a-f]{32})?', path) else
+                            {'q', 'visibility', 'page'} if re.fullmatch(r'/courses/[a-z0-9_-]{1,96}/instructor/(?:assignments(?:/[A-Za-z0-9_-]+(?:/(?:document|downloads))?)?|drafts/[A-Za-z0-9_-]+(?:/downloads)?|checks/[A-Za-z0-9_-]+)', path) else set())
             if query and (self.command != 'GET' or
                           (getattr(facade, 'instructor', None) is None and not participation_page) or
                           not set(query) <= query_fields):
@@ -890,7 +894,9 @@ class PlatformRequestHandler(BaseHTTPRequestHandler):
                                                                capture_filename=bool(material_upload or content_upload or extension_upload or gradebook_upload),
                                                                allow_content_path=bool(content_upload),
                                                                allow_roster_mode=bool(membership_roster_upload),
-                                                               allow_gradebook=bool(gradebook_upload))
+                                                               allow_gradebook=bool(gradebook_upload),
+                                                               allow_assignment_filters=bool(upload),
+                                                               allow_material_filters=bool(material_upload))
                             except InstructorUploadUnavailable as exc:
                                 emit_operator_event("instructor_upload_unavailable", component="http", exception=exc.__cause__ or exc)
                                 raise PlatformHTTPError(503, "upload_unavailable", str(exc)) from exc

@@ -5,8 +5,9 @@ The material service remains responsible for matching and enforcing file access.
 """
 from datetime import datetime, timezone
 import re
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 
+from .instructor_material_filters import MaterialFilters, attention_summary
 from .instructor_responsive import result_table
 from .instructor_web import _button, _checkbox, _e, _field, _grid, _textarea, _timestamp, _utc, _value
 from .platform_service import PlatformFileResponse, PlatformBinaryResponse
@@ -27,11 +28,25 @@ def _actor(ui):
     return ui.principal.user_id if ui.principal else 'shared-instructor'
 
 
+def _student_link(ui, course):
+    target = ui.web_url + '/app/student?' + urlencode({'course_key': course['course_key'], 'view': 'materials'})
+    return f'<a class="ui-action secondary" href="{_e(target)}">학생 자료 페이지 열기</a>'
+
+
+def _work_area(identifier, title, content, *, expanded=False, step=False):
+    if step:
+        return f'<section id="{identifier}" class="material-step" tabindex="-1"><h3>{title}</h3>{content}</section>'
+    return (f'<details id="{identifier}" class="material-work-area" tabindex="-1"{" open" if expanded else ""}>'
+            f'<summary>{title}</summary><div class="material-work-content">{content}</div></details>')
+
+
 def _batch_path(ui, course, material, review):
     return _path(ui, course, material) + '/batch-review/' + review['review_id']
 
 
-def batch_review(ui, course, material, review, session):
+def batch_review(ui, course, material, review, session, filters=None):
+    filters = filters or MaterialFilters()
+    context = filters.hidden()
     path = _batch_path(ui, course, material, review)
     counts = {kind: sum(row['change'] == kind for row in review['rows']) for kind in ('new', 'replace', 'unchanged')}
     body = ('<p>업로드 완료 → 파일 검사 완료 → <strong>학생 매칭 검토</strong> → 반영</p>'
@@ -52,15 +67,15 @@ def batch_review(ui, course, material, review, session):
     if review['stale'] or course['status'] == 'archived':
         body += '<p class="notice warning" role="alert">검토 후 자료가 변경되어 바로 반영할 수 없습니다. 최신 명단·배정으로 다시 검토하세요.</p>'
         if course['status'] != 'archived':
-            body += ui._form(path + '/refresh', session, _button('업로드한 ZIP으로 다시 검토'))
+            body += ui._form(path + '/refresh', session, context + _button('업로드한 ZIP으로 다시 검토'))
     else:
         consequence = ('확인 후 반영하면 공개 중인 학생 자료가 즉시 갱신됩니다.' if material['status'] == 'published'
                        else '반영 후에도 학생 비공개 초안입니다. 자료 편집 화면에서 공개할 수 있습니다.')
         body += '<section><h3>검토 결과 반영</h3><p>' + consequence + '</p>'
-        body += ui._form(path + '/apply', session,
+        body += ui._form(path + '/apply', session, context +
             _checkbox('confirm', '파일 내용과 학번·이름의 매칭을 확인했습니다.') +
             _button(f'검토한 {len(rows)}명에게 반영')) + '</section>'
-    body += ui._form(path + '/cancel', session, '<p class="hint">취소해도 현재 학생 자료는 유지됩니다.</p>' +
+    body += ui._form(path + '/cancel', session, context + '<p class="hint">취소해도 현재 학생 자료는 유지됩니다.</p>' +
                      _button('이번 업로드 취소', danger=True))
     return '학생별 자료 업로드 검토', body
 
@@ -172,7 +187,7 @@ def _file_history(ui, course, material):
     return body + '</section>'
 
 
-def _revision_controls(ui, course, material, session):
+def _revision_controls(ui, course, material, session, filters=None, recovery_action=''):
     path = _path(ui, course, material)
     if material.get('superseded_by'):
         latest = _path(ui, course, {'material_id': material['superseded_by']})
@@ -193,13 +208,14 @@ def _revision_controls(ui, course, material, session):
                 '수정본에서 계속 편집하거나, 수정본을 보관한 뒤 이 배포를 직접 수정하세요. '
                 '기존 배포본은 수정본을 공개하기 전까지 유지됩니다.</p>'
                 f'<p><a href="{target}">작성 중인 수정본 열기</a></p></section>')
-    fields = (_revision_field(material) +
+    fields = (_revision_field(material) + (filters.hidden() if filters else '') +
               '<label for="change_note">학생에게 표시할 변경 내용 (최대 1,000자)</label>'
               '<textarea id="change_note" name="change_note" required maxlength="1000" '
               'placeholder="예: 2번 문제 입력 조건 정정. 새 파일로 다시 확인하세요."></textarea>' +
               _checkbox('confirm', '기존 배포본을 유지한 채 파일과 배정을 복사한 수정본 초안을 만듭니다.') +
               _button('수정본 만들기'))
-    return ('<details><summary>고급: 검토 후 별도 수정본으로 배포</summary><p>직접 수정 대신 '
+    return ('<details id="material-revision" tabindex="-1"' + (' open' if recovery_action.endswith('/revise') else '') +
+            '><summary>고급: 검토 후 별도 수정본으로 배포</summary><p>직접 수정 대신 '
             '변경 사항을 모아 검토한 뒤 한 번에 공개하려는 경우에만 사용하세요. '
             '수정본을 작성·검토한 뒤 공개하면 기존 배포본을 보관하고 새 버전으로 배포합니다. '
             '수정본 공개 전까지 기존 파일은 원래 배포 기간에 계속 제공됩니다.</p>' +
@@ -212,8 +228,7 @@ def listing(ui, course, session):
             '학생은 학번·전용 비밀번호로 로그인하여 자신에게 배정된 PDF 또는 ZIP만 내려받습니다. '
             '자료 배포는 과제 수락·제출·자동 채점과 별도입니다.</p>'
             '<p>1. 안내·기간 저장 → 2. 학번별 파일 등록·대상 확인 → 3. 공개</p>')
-    student_url = ui.web_url + '/courses/' + quote(course['course_key'], safe='') + '/materials'
-    body += f'<p>학생 개인 자료 로그인: <a href="{_e(student_url)}">{_e(student_url)}</a></p>'
+    body += '<div class="material-share">' + _student_link(ui, course) + '<p class="hint">링크 주소를 복사해 학생에게 안내하세요. 학생은 본인에게 배정된 자료만 확인합니다.</p></div>'
     materials = ui.student_materials.list_for_instructor(course['course_key'])
     if materials:
         rows = [(f'<a href="{_path(ui, course, row)}">{_e(row["title"])}</a><br><small>{_e(_edition_label(row))}</small>', _e(_availability(row)),
@@ -227,57 +242,33 @@ def listing(ui, course, session):
         body += ui._form(path, session, _fields({}) + _button('초안 저장 · 학생별 파일 등록으로')) + '</section>'
     else:
         body += '<p class="notice">보관된 수업은 조회만 가능합니다.</p>'
-    return '학생별 자료 배포', body
+    return '학생별 자료 배포', '<div class="material-workspace">' + body + '</div>'
 
 
-def detail(ui, course, material, session):
-    path = _path(ui, course, material)
-    revision = _revision_field(material)
-    writable = course['status'] != 'archived'
-    draft = material['status'] == 'draft'
-    editable = _editable(course, material)
-    recipients = ui.student_materials.recipients(course['course_key'], material['material_id'])
-    assigned = [row for row in recipients if row.get('filename')]
-    missing = sum(1 for row in recipients if row.get('active', True) and not row.get('filename'))
-    body = f'<p><a href="{_path(ui, course)}">자료 배포 목록</a></p>'
-    body += (f'<p>상태: <strong>{_e(_availability(material))}</strong> · {_e(_edition_label(material))}'
-             f' <small>(편집 번호 {_e(material["revision"])})</small></p>')
-    body += ('<div class="notice">자료 배포는 성적·과제 채점과 무관합니다. 공개 후에도 안내·기간과 학생별 파일을 직접 수정할 수 있습니다. '
-             '개별 저장·파일 교체·배정 제외는 즉시 반영됩니다. ZIP 일괄 업로드는 학생 매칭을 검토한 뒤 반영합니다. 이전 파일과 당시 요청 이력은 보존합니다. '
-             '이미 다운로드한 파일은 회수하거나 자동으로 바꿀 수 없습니다.</div>')
-    if material.get('change_note'):
-        body += '<p><strong>변경 안내:</strong> ' + _e(material['change_note']).replace('\n', '<br>') + '</p>'
-    if material.get('previous_material_id') and not draft:
-        previous = _path(ui, course, {'material_id': material['previous_material_id']})
-        body += f'<p><a href="{previous}">이전 배포본의 파일·요청 기록 보기</a></p>'
-    body += _revision_controls(ui, course, material, session)
-    body += '<section><h3>1. 자료 안내·배포 기간</h3>'
+def _metadata_content(ui, course, material, session, revision, editable):
     if editable:
-        pending = ui.student_materials.pending_batches(course['course_key'], material['material_id'], actor=_actor(ui))
-        if pending:
-            body += (f'<div class="notice"><strong>반영하지 않은 ZIP 검토본이 있습니다.</strong> '
-                     f'<a href="{_batch_path(ui, course, material, pending)}">학생 매칭 검토 이어가기</a> '
-                     '· 새 ZIP을 정상 업로드하면 이전 검토본을 교체합니다.</div>')
-        body += ui._form(path, session, revision + _fields(material) +
-                         _button('안내·기간 저장' if draft else '안내·기간 수정 즉시 반영'))
-    else:
-        body += (f'<p><strong>{_e(material["title"])}</strong></p><pre>{_e(material["instructions"])}</pre>'
-                 f'<p>한국 표준시(KST): {_e(_timestamp(material["opens_at"]).replace("T", " "))}'
-                 f' ~ {_e(_timestamp(material["closes_at"]).replace("T", " "))}</p>')
-    body += '</section><section><h3>2. 학생별 파일 등록·대상 확인</h3>'
-    body += ('<p>파일명을 <code>학번.pdf</code> 또는 <code>학번.zip</code>으로 지정하세요. '
-             '예: <code>20260001.pdf</code>, <code>20260002.zip</code>. 학번의 앞자리 0도 그대로 유지하세요. '
-             '수강 명단에 등록된 학번과 정확히 일치해야 하며, 학생당 파일 1개·최대 25 MiB입니다.</p>'
-             '<p>일부 학생에게만 배포할 수 있습니다. 파일이 없는 학생에게는 이 자료가 표시되지 않습니다. '
-             '다른 학생의 정보나 교수자용 정답이 섞이지 않았는지 공개 전에 확인하세요.</p>')
+        return ui._form(_path(ui, course, material), session, revision + _fields(material) +
+                        _button('안내·기간 저장' if material['status'] == 'draft' else '안내·기간 수정 즉시 반영'))
+    return (f'<p><strong>{_e(material["title"])}</strong></p><pre>{_e(material["instructions"])}</pre>'
+            f'<p>한국 표준시(KST): {_e(_timestamp(material["opens_at"]).replace("T", " "))}'
+            f' ~ {_e(_timestamp(material["closes_at"]).replace("T", " "))}</p>')
+
+
+def _upload_content(ui, course, material, session, revision, editable):
+    body = ('<p>파일명을 <code>학번.pdf</code> 또는 <code>학번.zip</code>으로 지정하세요. '
+            '예: <code>20260001.pdf</code>, <code>20260002.zip</code>. 학번의 앞자리 0도 그대로 유지하세요. '
+            '수강 명단에 등록된 학번과 정확히 일치해야 하며, 학생당 파일 1개·최대 25 MiB입니다.</p>'
+            '<p>일부 학생에게만 배포할 수 있습니다. 파일이 없는 학생에게는 이 자료가 표시되지 않습니다. '
+            '다른 학생의 정보나 교수자용 정답이 섞이지 않았는지 공개 전에 확인하세요.</p>')
     if editable:
-        # Distinct IDs avoid ambiguous labels when both upload forms appear together.
+        path = _path(ui, course, material)
         single = (revision + '<label for="material-file">개별 파일 (학번.pdf 또는 학번.zip)</label>'
                   '<input id="material-file" name="file" type="file" accept="application/pdf,application/zip,.pdf,.zip" required>' +
                   '<p class="hint">동일 학생의 파일을 다시 올리면 해당 학생의 현재 파일을 교체합니다. '
                   '공개 중이라면 즉시 새 파일이 제공됩니다. 변경된 파일을 아직 요청하지 않은 학생에게 다시 받기 안내를 표시합니다.</p>' +
-                  _button('개별 파일 저장·교체' if draft else '개별 파일 교체·즉시 반영'))
-        body += ui._form(path + '/upload', session, single, multipart=True)
+                  _button('개별 파일 저장·교체' if material['status'] == 'draft' else '개별 파일 교체·즉시 반영'))
+        body += '<div class="material-upload-option"><h4>학생 한 명의 파일 등록·교체</h4>'
+        body += ui._form(path + '/upload', session, single, multipart=True) + '</div>'
         batch = (revision + '<label for="material-batch">일괄 등록용 ZIP</label>'
                  '<input id="material-batch" name="file" type="file" accept="application/zip,.zip" required>' +
                  '<p class="hint">ZIP의 최상위에 학번.pdf 또는 학번.zip을 넣으세요. 폴더 없이 최대 200명, '
@@ -287,38 +278,70 @@ def detail(ui, course, material, session):
                  '<p data-upload-progress role="status" aria-live="polite">ZIP 선택 → 업로드·검사 → 학생 매칭 검토 → 반영</p>' +
                  '<progress data-upload-meter max="100" value="0" hidden aria-label="ZIP 업로드 진행률"></progress>' +
                  _button('ZIP 업로드 · 학생 매칭 검토'))
-        body += ui._form(path + '/upload-batch', session, batch, multipart=True).replace('<form ', '<form data-material-batch-upload ', 1)
-    body += ('<p class="hint">서버는 일괄 등록용 바깥 ZIP에서 배정 파일만 읽습니다. '
-             '학생용 ZIP 내부 파일을 서버에 풀거나 실행하지 않습니다.</p>'
-             f'<p>파일 배정 {len(assigned)}명 · 활성 수강 중 미배정 {missing}명</p>')
-    if editable:
-        body += ('<p class="hint">학번을 잘못 지정했거나 배포 대상이 바뀌면 해당 행에서 배정을 제외한 뒤 '
-                 '올바른 파일을 등록하세요. 제외된 학생에게는 이 자료가 표시되지 않습니다. '
-                 '원본 파일은 서버의 비공개 저장소에 남지만 학생에게 제공되지 않습니다. '
-                 '공개 중인 자료에서 배정을 제외하면 해당 학생의 접근이 즉시 종료됩니다.</p>')
+        body += '<div class="material-upload-option"><h4>여러 학생의 파일 일괄 등록</h4>'
+        body += ui._form(path + '/upload-batch', session, batch, multipart=True).replace('<form ', '<form data-material-batch-upload ', 1) + '</div>'
+    return body + ('<p class="hint">서버는 일괄 등록용 바깥 ZIP에서 배정 파일만 읽습니다. '
+                   '학생용 ZIP 내부 파일을 서버에 풀거나 실행하지 않습니다.</p>')
+
+
+def _recipient_content(ui, course, material, session, revision, recipients, matching, filters, editable, recovery_action):
+    path = _path(ui, course, material)
+    body = filters.form(path) + filters.pagination(path, matching, len(recipients), 'recipients')
     rows = []
-    for row in recipients:
+    for row in filters.page_rows(matching, 'recipients'):
         if row.get('filename'):
             target = path + '/download/' + quote(str(row['student_id']), safe='')
             artifact = (f'<a href="{target}">{_e(row["filename"])} 다운로드·검토</a>'
                         f'<br><small>파일 v{_e(row.get("file_revision", 1))} · {_e(str(row.get("format", "")).upper())} · {_e(_size(row.get("size_bytes")))}</small>')
             if editable:
                 remove_target = path + '/remove/' + quote(str(row['student_id']), safe='')
+                expanded = ' open' if recovery_action.endswith('/remove/' + str(row['student_id'])) else ''
+                artifact += (f'<details id="material-remove-{_e(row["student_id"])}" class="material-remove" tabindex="-1"{expanded}><summary>배정 제외</summary>'
+                             '<p>학번을 잘못 지정했거나 배포 대상이 바뀌면 제외한 뒤 올바른 파일을 등록하세요. '
+                             '공개 중인 자료에서 배정을 제외하면 해당 학생의 접근이 즉시 종료됩니다. '
+                             '원본 파일은 서버의 비공개 저장소에 남지만 학생에게 제공되지 않습니다. 이미 받은 파일은 회수할 수 없습니다.</p>')
                 artifact += ui._form(remove_target, session, revision +
                                      _checkbox('confirm', str(row['student_key']) + ' 학생의 파일 배정을 제외합니다.') +
-                                     _button('배정 제외', danger=True))
+                                     _button('배정 제외', danger=True)) + '</details>'
+            requested = '요청 기록 있음' if row.get('request_count', 0) else '요청 기록 없음'
         else:
-            artifact = '미배정 · 학생에게 표시 안 됨'
-        rows.append((_e(row['student_key']), _e(row.get('name', '')), '활성' if row.get('active', True) else '비활성', artifact))
-    body += result_table(('학번', '이름', '수강 상태', '배정 파일'), rows, '학생별 배정 파일 확인') if rows else '<p>등록된 수강 학생과 배정 파일이 없습니다.</p>'
-    body += '</section><section><h3>3. 배포 공개</h3>'
+            artifact, requested = '미배정 · 학생에게 표시 안 됨', '—'
+        rows.append((_e(row['student_key']), _e(row.get('name', '')), '활성' if row.get('active', True) else '비활성', artifact, requested))
+    body += result_table(('학번', '이름', '수강 상태', '배정 파일', '현재 파일 요청'), rows, '학생별 배정 파일 확인') if rows else (
+        '<p>검색·필터 조건에 맞는 학생이 없습니다. 필터를 초기화하여 전체 학생을 확인하세요.</p>' if recipients
+        else '<p>등록된 수강 학생과 배정 파일이 없습니다.</p>')
+    return body
+
+
+def _request_content(path, assigned, matching, filters):
+    requested = sum(1 for row in assigned if row.get('request_count', 0))
+    not_requested = sum(1 for row in assigned if row.get('active', True) and not row.get('request_count', 0))
+    body = f'<p>요청 기록 있음 {requested}명 · 활성 배정 학생 중 요청 기록 없음 {not_requested}명</p>'
+    body += ('<p class="hint">현재 배정 파일의 요청 기록입니다. 파일이 교체되면 새 파일의 요청 횟수는 0부터 기록하며, '
+             '이전 요청은 파일 변경 이력에서 확인합니다. ' + _RECORD_NOTICE + '</p>')
+    body += f'<p><a href="{_e(filters.url(path, anchor="material-students"))}">학생 검색·필터 변경</a> · 배정 파일 목록과 같은 검색·필터 조건</p>'
+    body += filters.pagination(path, matching, len(assigned), 'requests')
+    rows = [(_e(row['student_key']), _e(row.get('name', '')), '활성' if row.get('active', True) else '비활성',
+             '요청 기록 있음' if row.get('request_count', 0) else '요청 기록 없음',
+             _e(_timestamp(row.get('first_requested_at')).replace('T', ' ')) or '—',
+             _e(_timestamp(row.get('last_requested_at')).replace('T', ' ')) or '—',
+             _e(row.get('request_count', 0))) for row in filters.page_rows(matching, 'requests')]
+    return body + (result_table(('학번', '이름', '수강 상태', '파일 요청', '최초 요청 (KST)', '최근 요청 (KST)', '요청 횟수'),
+                               rows, '배정 학생별 승인된 자료 요청 기록') if rows else (
+        '<p>검색·필터 조건에 맞는 배정 학생이 없습니다. 미배정 학생은 파일 요청 현황에 포함되지 않습니다.</p>' if assigned
+        else '<p>아직 배정된 파일이 없습니다.</p>'))
+
+
+def _publication_content(ui, course, material, session, revision, assigned, recovery_action):
+    path = _path(ui, course, material)
+    writable, draft = course['status'] != 'archived', material['status'] == 'draft'
     if not writable:
-        body += '<p>보관된 수업은 조회만 가능하며 학생 접근은 중지됩니다.</p>'
+        body = '<p>보관된 수업은 조회만 가능하며 학생 접근은 중지됩니다.</p>'
     elif draft and course['status'] != 'active':
-        body += f'<p>준비 중인 수업에서는 초안을 저장할 수 있습니다. 공개하려면 <a href="{ui._base(course)}/settings">수업 설정</a>에서 운영 상태로 변경하세요.</p>'
+        body = f'<p>준비 중인 수업에서는 초안을 저장할 수 있습니다. 공개하려면 <a href="{ui._base(course)}/settings">수업 설정</a>에서 운영 상태로 변경하세요.</p>'
     elif draft:
         if assigned:
-            body += '<p>배정된 활성 학생만 배포 기간에 자신의 파일을 다운로드할 수 있습니다.</p>'
+            body = '<p>배정된 활성 학생만 배포 기간에 자신의 파일을 다운로드할 수 있습니다.</p>'
             if material.get('previous_material_id'):
                 body += ('<p class="notice">수정본 공개와 동시에 기존 배포본은 보관되며 학생은 이 수정본만 받습니다. '
                          '수정본은 시작 시각이 현재 이하일 때 즉시 전환됩니다. 미래 시각으로 예약 전환할 수 없습니다. '
@@ -327,31 +350,101 @@ def detail(ui, course, material, session):
                             _checkbox('confirm', '학번별 파일과 배포 기간을 검토했으며 공개본 원본과 요청 기록이 보존됨을 확인했습니다.') +
                             _button('수정본 공개 · 기존 배포본 교체' if material.get('previous_material_id') else '학생별 자료 공개'))
         else:
-            body += '<p>학생별 파일을 1개 이상 등록하면 공개할 수 있습니다.</p>'
+            body = '<p>학생별 파일을 1개 이상 등록하면 공개할 수 있습니다.</p>'
     elif material['status'] == 'published':
-        body += '<p>공개된 자료는 배정된 학생에게만 배포 기간 동안 제공됩니다. 직접 수정한 내용은 별도 공개 버튼 없이 즉시 반영됩니다.</p>'
+        body = '<p>공개된 자료는 배정된 학생에게만 배포 기간 동안 제공됩니다. 직접 수정한 내용은 별도 공개 버튼 없이 즉시 반영됩니다.</p>'
     else:
-        body += '<p>학생은 보관된 자료에 접근할 수 없습니다. 배정 파일과 요청 기록은 보존됩니다.</p>'
-    student_url = ui.web_url + '/courses/' + quote(course['course_key'], safe='') + '/materials'
-    body += f'<p>학생에게 안내할 주소: <a href="{_e(student_url)}">{_e(student_url)}</a></p>'
+        body = '<p>학생은 보관된 자료에 접근할 수 없습니다. 배정 파일과 요청 기록은 보존됩니다.</p>'
     if writable and material['status'] != 'archived':
-        body += '<details><summary>배포 보관 · 학생 접근 종료</summary>'
+        expanded = ' open' if recovery_action.endswith('/archive') else ''
+        body += f'<details id="material-archive" tabindex="-1"{expanded}><summary>배포 보관 · 학생 접근 종료</summary>'
         body += ui._form(path + '/archive', session, revision +
                         _checkbox('confirm', '보관하면 학생 접근을 종료하고 복원할 수 없음을 확인했습니다.') + _button('보관', danger=True)) + '</details>'
-    body += '</section>' + _version_history(ui, course, material) + '<section><h3>이 배포본의 학생별 파일 요청 현황</h3>'
-    body += ('<p class="hint">현재 배정 파일의 요청 기록입니다. 파일이 교체되면 새 파일의 요청 횟수는 0부터 기록하며, '
-             '이전 요청은 아래 파일 변경 이력에서 확인합니다. ' + _RECORD_NOTICE + '</p>')
-    requested = sum(1 for row in assigned if row.get('request_count', 0))
-    not_requested = sum(1 for row in assigned if row.get('active', True) and not row.get('request_count', 0))
-    body += f'<p>요청 기록 있음 {requested}명 · 활성 배정 학생 중 요청 기록 없음 {not_requested}명</p>'
-    rows = [(_e(row['student_key']), _e(row.get('name', '')), '활성' if row.get('active', True) else '비활성',
-             '요청 기록 있음' if row.get('request_count', 0) else '요청 기록 없음',
-             _e(_timestamp(row.get('first_requested_at')).replace('T', ' ')) or '—',
-             _e(_timestamp(row.get('last_requested_at')).replace('T', ' ')) or '—',
-             _e(row.get('request_count', 0))) for row in assigned]
-    body += result_table(('학번', '이름', '수강 상태', '파일 요청', '최초 요청 (KST)', '최근 요청 (KST)', '요청 횟수'),
-                         rows, '배정 학생별 승인된 자료 요청 기록') if rows else '<p>아직 배정된 파일이 없습니다.</p>'
-    return material['title'] + ' · 학생별 자료 배포', body + '</section>' + _file_history(ui, course, material)
+    return body
+
+
+def detail(ui, course, material, session, values=None):
+    path = _path(ui, course, material)
+    draft, editable = material['status'] == 'draft', _editable(course, material)
+    recipients = ui.student_materials.recipients(course['course_key'], material['material_id'])
+    assigned = [row for row in recipients if row.get('filename')]
+    missing = sum(1 for row in recipients if row.get('active', True) and not row.get('filename'))
+    filters = MaterialFilters.from_values(values)
+    matching_recipients = filters.select(recipients)
+    matching_requests = [row for row in matching_recipients if row.get('filename')]
+    filters = filters.bounded(matching_recipients, matching_requests)
+    revision = _revision_field(material) + filters.hidden()
+    # Supplied only by the server's POST recovery path, never included in query
+    # links or mutation fields. Opening the failed area also works without JS.
+    recovery_action = (values or {}).get('_material_recovery_action', '')
+    body = '<div class="material-workspace">'
+    if recovery_action:
+        action = recovery_action.removeprefix('materials/' + material['material_id']).strip('/')
+        recovery_target = {'': 'material-metadata', 'upload': 'material-files', 'upload-batch': 'material-files',
+                           'publish': 'material-publication', 'archive': 'material-archive', 'revise': 'material-revision'}.get(action)
+        if re.fullmatch(r'remove/[0-9]{1,20}', action):
+            recovery_target = 'material-remove-' + action.split('/')[1]
+        if recovery_target:
+            body += f'<p class="material-recovery-link"><a class="ui-action" href="#{recovery_target}">입력 확인이 필요한 작업으로 이동</a></p>'
+    if not draft:
+        body += '<div class="material-dashboard-summary">'
+    body += ('<section class="material-overview" aria-label="자료 배포 요약">'
+            f'<div class="material-overview-heading"><strong class="material-state">{_e(_availability(material))}</strong>'
+            f'<span>{_e(_edition_label(material))}</span>' + _student_link(ui, course) + '</div>'
+            f'<p>배포 기간 <strong>{_e(_timestamp(material["opens_at"]).replace("T", " "))}'
+            f' ~ {_e(_timestamp(material["closes_at"]).replace("T", " "))}</strong> (KST)</p>'
+            f'<p>파일 배정 {len(assigned)}명 · 활성 수강 중 미배정 {missing}명</p></section>')
+    if not draft:
+        body += attention_summary(path, recipients) + '</div>'
+    if material.get('change_note'):
+        body += '<p><strong>변경 안내:</strong> ' + _e(material['change_note']).replace('\n', '<br>') + '</p>'
+    revision_notice = bool(material.get('superseded_by') or material.get('revision_draft_id') or
+                           (draft and material.get('previous_material_id')))
+    revision_controls = _revision_controls(ui, course, material, session, filters, recovery_action)
+    if revision_notice:
+        body += revision_controls
+    if editable:
+        pending = ui.student_materials.pending_batches(course['course_key'], material['material_id'], actor=_actor(ui))
+        if pending:
+            body += (f'<div class="notice"><strong>반영하지 않은 ZIP 검토본이 있습니다.</strong> '
+                     f'<a href="{_e(filters.url(_batch_path(ui, course, material, pending)))}">학생 매칭 검토 이어가기</a> '
+                     '· 새 ZIP을 정상 업로드하면 이전 검토본을 교체합니다.</div>')
+    students = ('<section id="material-students" class="material-students"><h3>학생별 파일·요청 확인</h3>' +
+                _recipient_content(ui, course, material, session, revision, recipients, matching_recipients,
+                                   filters, editable, recovery_action))
+    students += _work_area('material-requests', '학생별 요청 기록 상세',
+                           _request_content(path, assigned, matching_requests, filters),
+                           expanded=filters.requested != 'all' or 'requests_page' in (values or {})) + '</section>'
+    metadata = _work_area('material-metadata', '1. 자료 안내·배포 기간' if draft else '안내·배포 기간 수정' if editable else '자료 안내·배포 기간',
+                          _metadata_content(ui, course, material, session, revision, editable), step=draft,
+                          expanded=recovery_action == 'materials/' + material['material_id'])
+    uploads = _work_area('material-files', '2. 학생별 파일 등록·대상 확인' if draft else '파일 추가·교체',
+                         _upload_content(ui, course, material, session, revision, editable), step=draft,
+                         expanded=recovery_action.endswith(('/upload', '/upload-batch')))
+    publication = _publication_content(ui, course, material, session, revision, assigned, recovery_action)
+    if not revision_notice:
+        publication += revision_controls
+    publication = _work_area('material-publication', '3. 검토·공개' if draft else '배포 상태·접근 종료',
+                             publication, step=draft, expanded=recovery_action.endswith(('/publish', '/archive', '/revise')))
+    if draft:
+        body += '<p class="material-flow">안내·기간 저장 → 학번별 파일 등록·대상 확인 → 검토 후 공개</p>'
+        body += metadata + uploads + students + publication
+    else:
+        body += students
+        body += ('<section class="material-management"><h3>자료 관리</h3>'
+                 '<p class="hint">자료 배포는 성적·과제 채점과 무관합니다. 공개 후에도 안내·기간과 학생별 파일을 직접 수정할 수 있습니다. '
+                 '개별 저장·파일 교체·배정 제외는 즉시 반영됩니다. ZIP 일괄 업로드는 학생 매칭을 검토한 뒤 반영합니다. '
+                 '이전 파일과 당시 요청 이력은 보존합니다. 이미 다운로드한 파일은 회수하거나 자동으로 바꿀 수 없습니다.</p>')
+        body += metadata + (uploads if editable else '') + publication + '</section>'
+    if draft:
+        body += ('<p class="hint">자료 배포는 성적·과제 채점과 무관합니다. 공개 후에도 안내·기간과 학생별 파일을 직접 수정할 수 있습니다. '
+                 '개별 저장·파일 교체·배정 제외는 즉시 반영됩니다. 이미 다운로드한 파일은 회수하거나 자동으로 바꿀 수 없습니다.</p>')
+    history = _version_history(ui, course, material) + _file_history(ui, course, material)
+    if material.get('previous_material_id') and not draft:
+        previous = _path(ui, course, {'material_id': material['previous_material_id']})
+        history = f'<p><a href="{previous}">이전 배포본의 파일·요청 기록 보기</a></p>' + history
+    body += _work_area('material-history', '배포·파일 변경 이력', history)
+    return material['title'] + ' · 학생별 자료 배포', body + '</div>'
 
 
 def request(ui, method, course, route, form, session):
@@ -370,11 +463,12 @@ def request(ui, method, course, route, form, session):
     review_route = re.fullmatch(r'materials/(mat_[A-Za-z0-9_-]+)/batch-review/(mbatch_[0-9a-f]{32})(?:/(apply|cancel|refresh|file)(?:/([0-9]{1,20}))?)?', route)
     if review_route:
         material = service.get(key, review_route[1])
+        filters = MaterialFilters.from_values(form)
         review_id, action, student_id = review_route[2], review_route[3], review_route[4]
         if student_id is not None and action != 'file':
             raise PlatformNotFound()
         if method == 'GET' and action is None:
-            return batch_review(ui, course, material, service.review_batch(key, material['material_id'], review_id, actor=actor), session)
+            return batch_review(ui, course, material, service.review_batch(key, material['material_id'], review_id, actor=actor), session, filters)
         if method == 'GET' and action == 'file' and student_id is not None:
             data, metadata = service.review_batch_file(key, material['material_id'], review_id, int(student_id), actor=actor)
             suffix = metadata['format']
@@ -393,8 +487,8 @@ def request(ui, method, course, route, form, session):
         else:
             from .student_material_batch import refresh
             review = refresh(service, key, material['material_id'], review_id, actor=actor)
-            return ui._redirect(_batch_path(ui, course, material, review))
-        return ui._redirect(_path(ui, course, material))
+            return ui._redirect(filters.url(_batch_path(ui, course, material, review)))
+        return ui._redirect(filters.url(_path(ui, course, material)))
     match = re.fullmatch(r'materials/(mat_[A-Za-z0-9_-]+)(?:/(upload|upload-batch|publish|archive|download|remove|revise)(?:/([0-9]{1,20})(?:/([0-9]{1,12}))?)?)?', route)
     if not match:
         raise PlatformNotFound()
@@ -415,11 +509,12 @@ def request(ui, method, course, route, form, session):
             'X-Autograde-SHA256': metadata['sha256'],
         })
     if method == 'GET' and action is None:
-        return detail(ui, course, material, session)
+        return detail(ui, course, material, session, form)
     if method != 'POST' or action == 'download':
         raise PlatformNotFound()
     if action == 'remove' and student_id is None:
         raise PlatformNotFound()
+    filters = MaterialFilters.from_values(form)
     revision = _revision(form)
     if action is None:
         service.update(key, material['material_id'], revision=revision, **_metadata(form), actor=actor)
@@ -434,17 +529,17 @@ def request(ui, method, course, route, form, session):
             service.upload(key, material['material_id'], revision=revision, data=data, filename=filename, actor=actor)
         else:
             review = service.prepare_batch(key, material['material_id'], revision=revision, data=data, actor=actor)
-            return ui._redirect(_batch_path(ui, course, material, review))
+            return ui._redirect(filters.url(_batch_path(ui, course, material, review)))
     else:
         if _value(form, 'confirm') != 'yes':
             raise ValueError('수정본 생성·배정 제외·공개·보관 작업의 영향을 확인하고 확인란을 선택하세요.')
         if action == 'revise':
             new_material = service.create_revision(key, material['material_id'], revision=revision,
                                                    change_note=_value(form, 'change_note'), actor=actor)
-            return ui._redirect(_path(ui, course, new_material))
+            return ui._redirect(filters.url(_path(ui, course, new_material)))
         if action == 'remove':
             service.remove_recipient(key, material['material_id'], int(student_id), revision=revision, actor=actor)
-            return ui._redirect(_path(ui, course, material))
+            return ui._redirect(filters.url(_path(ui, course, material)))
         operation = service.publish if action == 'publish' else service.archive
         operation(key, material['material_id'], revision=revision, actor=actor)
-    return ui._redirect(_path(ui, course, material))
+    return ui._redirect(filters.url(_path(ui, course, material)))

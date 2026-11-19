@@ -24,6 +24,16 @@ test("latest zero is retained independently of previous best 100 and pending nul
   assert.equal(r.rows[0].score, 0); assert.equal(r.rows[0].previous_best?.score, 100);
   assert.equal(r.rows[1].score, null); assert.equal(r.rows[3].submission_id, null);
 });
+
+test("new portal navigation accepts only the authenticated course and fixed student entry", () => {
+  const payload = (href: string) => ({ ...sampleBootstrap, courses: [{ ...sampleBootstrap.courses[0],
+    navigation: [{ label: "과제·평가", items: [{id: "results", label: "제출·채점 현황", href}] }] }],
+    portal_navigation: [{label: "다른 포털", items: [{id: "student", label: "학생 포털", href: "/app/student"}]}] });
+  assert.equal(parseBootstrap(payload("/app?course_key=come2201")).courses[0].navigation?.[0].items[0].href, "/app?course_key=come2201");
+  for (const href of ["/app?course_key=other", "/app?course_key=come2201&next=https://evil.test", "//evil.test/app"]) {
+    assert.throws(() => parseBootstrap(payload(href)), ContractError);
+  }
+});
 test("malformed score, maximum, timestamp, version, and duplicate rows are rejected", () => {
   const check = (patch: object) => assert.throws(() => parseResults({ ...sampleResults, rows: [{ ...sampleResults.rows[0], ...patch }] }), ContractError);
   check({ score: "0" }); check({ score: Infinity }); check({ score: -1 }); check({ max_score: null });
