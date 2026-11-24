@@ -177,3 +177,40 @@ def test_compact_catalog_fixture_and_disclosed_bulk_help(setup, tmp_path):
     assert '검색·페이지 이동 시 선택은 초기화됩니다.' in page.body
     assert '다음 확인 화면에서 대상을 검토한 뒤 최종 실행합니다.' in page.body
     (tmp_path / 'assignment-catalog.html').write_text(page.body, encoding='utf-8')
+
+
+@pytest.mark.parametrize('action,scope', [('archive', 'open'), ('delete', 'inactive')])
+def test_filtered_bulk_review_cancel_validation_error_and_success_return_to_list(setup, action, scope):
+    browser, state, _, _, assignments = setup
+    for index in range(21):
+        item = release(state, assignment_id=f'week_{index}')
+        if scope == 'inactive':
+            assignments.archive_release('come2201', item.assignment_id)
+    context = {'q': 'CLI <Lab>', 'visibility': scope, 'page': '2'}
+    preview_path = BASE + '/assignments/bulk/preview'
+    apply_path = BASE + '/assignments/bulk/apply'
+    expected_url = assignment_catalog_url(BASE, context)
+    listing = visit(browser, expected_url)
+    form = next(f for f in Forms(listing.body).forms if f['action'] == preview_path)
+    fields = {k: v for k, v in form['fields'].items() if k != 'csrf'}
+    selected_name = re.search(r'name="(selected_week_\d+)"', listing.body)[1]
+    preview = browser.post(preview_path, **fields, action=action, **{selected_name: 'yes'})
+    assert preview.status == 200
+    assert parent_url(preview.body) == expected_url
+    assert f'href="{expected_url}">취소 · 과제 목록으로' in unescape(preview.body)
+    assert selected_name in visit(browser, expected_url).body
+    apply = next(f for f in Forms(preview.body).forms if f['action'] == apply_path)
+    review_fields = {k: v for k, v in apply['fields'].items() if k != 'csrf'}
+    invalid = browser.post(apply_path, **review_fields)  # Missing final confirmation
+    assert invalid.status == 400 and parent_url(invalid.body) == expected_url
+    done = browser.post(apply_path, **review_fields, confirm='yes')
+    if action == 'archive':
+        assert done.status == 200
+        assert parent_url(done.body) == expected_url
+        assert f'href="{expected_url}">과제 관리로' in unescape(done.body)
+    else:
+        assert done.status == 303 and done.headers['Location'] == expected_url
+    restored = visit(browser, expected_url)
+    assert restored.status == 200 and 'CLI &lt;Lab&gt;' in restored.body
+    assert selected_name not in restored.body
+    assert restored.body.count('data-assignment-select data-archived=') == 20

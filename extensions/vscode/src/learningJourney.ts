@@ -1,10 +1,14 @@
 import type { SubmissionSummary } from "./types";
 
+const publicationStep = "채점 완료 · 공개 대기";
+export const publicationGuidance = "교수자가 결과를 공개한 뒤 다시 확인하세요. 다시 제출할 필요는 없습니다.";
+export const awaitingPublication = (state?: string): boolean => state === "graded" || state === "result_pending";
+
 /** The same receipt states are used by the student portal. Saving is not submitting. */
 export function submissionLabel(state?: string): string {
   return ({ received: "제출 접수", pinning: "제출 접수", verifying: "제출 접수",
     accepted: "제출 접수", queued: "채점 대기", running: "채점 중",
-    graded: "결과 공개 대기", result_pending: "결과 공개 대기", published: "결과 공개",
+    graded: publicationStep, result_pending: publicationStep, published: "결과 공개",
     rejected: "처리 확인 필요", infra_failed: "처리 확인 필요", assessment_failed: "처리 확인 필요", failed: "처리 확인 필요",
   } as Record<string, string>)[state ?? ""] ?? (state ? "처리 확인 필요" : "공식 제출 전");
 }
@@ -22,7 +26,7 @@ export function submissionTime(value?: string): string {
 }
 
 export function receiptProgress(state?: string): { label: string; current: boolean; complete: boolean }[] {
-  const stage = state === "published" ? 3 : ["running", "graded", "result_pending"].includes(state ?? "") ? 2
-    : state === "queued" ? 1 : ["received", "pinning", "verifying", "accepted"].includes(state ?? "") ? 0 : -1;
-  return ["제출 접수", "채점 대기", "채점 중", "결과 공개"].map((label, index) => ({label, current: index === stage, complete: index < stage}));
+  const steps = ["제출 접수", "채점 대기", "채점 중", publicationStep, "결과 공개"];
+  const current = steps.indexOf(submissionLabel(state));
+  return steps.map((label, index) => ({label, current: index === current, complete: index < current}));
 }

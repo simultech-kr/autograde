@@ -4,12 +4,23 @@ import {scoreText, timeText, validScore, type CourseData, type Receipt} from "./
 import {scoreRows, scoreRowState} from "./scoreboard";
 import s from "./student.module.css";
 import w from "./workbench.module.css";
+import {useStudentListHistory} from "./useStudentListHistory";
 import {StudentGradebook} from "./StudentGradebook.tsx";
 import {studentRequest} from "./client.ts";
 import {criterionVerdict, feedbackPath, parseSubmissionFeedback, type SubmissionFeedback} from "./workbench.ts";
 
-export function StudentScores({data}: {data: CourseData}) {
-  const [view, setView] = useState<"practice" | "gradebook">("practice");
+export function StudentScores({data, navigationScope}: {data: CourseData; navigationScope?: string}) {
+  const {option: view, choose} = useStudentListHistory(navigationScope, "scores/" + data.course.course_key, ["practice", "gradebook"]);
+  function setView(next: "practice" | "gradebook") {
+    if (next === "gradebook") {
+      const url = new URL(window.location.href);
+      if (url.searchParams.has("assignment")) {
+        url.searchParams.delete("assignment");
+        window.history.replaceState(window.history.state, "", url);
+      }
+    }
+    choose(next);
+  }
   const rows = scoreRows(data.overview).sort((a,b)=>(b.receipt ? Date.parse(b.receipt.received_at) : 0) - (a.receipt ? Date.parse(a.receipt.received_at) : 0));
   const published = rows.filter(row => scoreRowState(row, Date.parse(data.server_time)).scored).length;
   return <><div className={w.resultSwitch} aria-label="성적 종류"><button aria-pressed={view === "practice"} onClick={()=>setView("practice")}>실습 제출 결과</button><button aria-pressed={view === "gradebook"} onClick={()=>setView("gradebook")}>시험·출석 성적</button></div>
@@ -18,12 +29,14 @@ export function StudentScores({data}: {data: CourseData}) {
     {!rows.length && <p className={s.empty}>점수를 확인할 공개 과제가 없습니다.</p>}
     <div className={w.results}>{rows.map((row,index) => {
       const state = scoreRowState(row, Date.parse(data.server_time)), receipt = row.receipt;
-      return <article className={w.result} key={row.assignment_id} data-score-assignment={row.assignment_id} data-newest={index === 0 && !!receipt}>
-        <div className={w.resultHeading}><div><p className={s.eyebrow}>{index === 0 && receipt ? "가장 최근 제출 · " : ""}{row.assignment_key}</p><h3>{row.title}</h3>{receipt && <p className={w.caption}>{timeText(receipt.received_at)} KST 제출 · 버전 {receipt.version}</p>}</div><span className={s.badge} data-tone={state.tone}>{state.label}</span></div>
+      return <article className={w.result} key={row.assignment_id} data-score-assignment={row.assignment_id} data-newest={index === 0 && !!receipt} aria-labelledby={`score-title-${row.assignment_id}`}>
+        <div className={w.resultHeading}><div><p className={s.eyebrow}>{index === 0 && receipt ? "가장 최근 제출 · " : ""}{row.assignment_key}</p><h3 id={`score-title-${row.assignment_id}`}>{row.title}</h3>{receipt && <p className={w.caption}>{timeText(receipt.received_at)} KST 제출 · 버전 {receipt.version}</p>}</div><span className={s.badge} data-tone={state.tone}>{state.label}</span></div>
         <dl className={w.scorePair}><div><dt>이번 제출 점수</dt><dd>{state.scored && receipt ? scoreText(receipt.score, receipt.max_score) : receipt ? "점수 미확정" : "—"}</dd></div>
           <div><dt>이전 제출 중 최고점</dt><dd>{receipt?.previous_best_id ? scoreText(receipt.previous_best_score, receipt.previous_best_max_score) : "—"}</dd><small>{receipt?.previous_best_at ? timeText(receipt.previous_best_at) + " KST" : "공개된 이전 점수 없음"}</small></div></dl>
         {!state.scored && <p>{state.hint}</p>}
-        {state.scored && receipt && <FeedbackDetails key={`${receipt.submission_id}:${receipt.published_at}:${receipt.score}:${receipt.max_score}`} data={data} receipt={receipt} />}
+        {state.scored && receipt && (receipt.feedback_policy === "score_only"
+          ? <p className={w.resultNotice}><strong>총점만 공개</strong> · 이 제출의 평가 항목과 수정 힌트는 공개되지 않습니다.</p>
+          : <FeedbackDetails key={`${receipt.submission_id}:${receipt.published_at}:${receipt.score}:${receipt.max_score}`} data={data} receipt={receipt} />)}
         {receipt && <p className={w.caption}>이전 최고점은 이번 제출을 제외한 기록입니다.{data.overview.history.some(item => item.submission_id === receipt.submission_id) && <> <a href={`#history-${receipt.submission_id}`}>이 제출의 코드 버전·접수 이력</a></>}</p>}
       </article>;
     })}</div>

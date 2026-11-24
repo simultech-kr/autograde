@@ -9,6 +9,7 @@ from urllib.parse import urlencode
 
 import pytest
 
+from autograde.course_admin import CourseAdminService
 from autograde.student_privacy import POLICY_VERSION
 from test_course_portal import portal, request, csrf, WEB
 from test_student_browser_sessions import CookieBrowser
@@ -88,6 +89,32 @@ def test_overview_requires_common_member_and_reads_only_their_active_enrollments
     with state._write() as db:
         db.execute("UPDATE admin_courses SET status='preparation' WHERE course_key=?", (COURSE,))
     assert read_api(browser, '/student/api/privacy')[2]['result']['consents'] == []
+
+
+@pytest.mark.parametrize('auth_method', ['member', 'course'])
+def test_consent_for_one_of_two_sections_is_identifiable_before_and_after_saving(portal, auth_method):
+    web, _, services, _, _ = portal
+    courses = CourseAdminService(services[COURSE].state)
+    for key, section in [('come2201', '01'), (COURSE, '02')]:
+        courses.update_course(key, name='실습 설계', code='design', year=2026, semester='2', section=section)
+    if auth_method == 'member':
+        browser = member_browser(portal)
+    else:
+        services['come2201'].set_student_password(student_key='20260001', password='000001')
+        browser = CookieBrowser(web)
+        csrf_token = read_api(browser, '/student/api/bootstrap')[2]['result']['csrf']
+        logged = read_api(browser, '/student/api/login', fields={
+            'csrf': csrf_token, 'student_key': '20260001', 'password': '000001'})
+        assert logged[0] == 200 and logged[2]['result']['auth_method'] == 'course'
+    overview = read_api(browser, '/student/api/privacy')[2]['result']
+    assert [(row['course_key'], row['course_name'], row['code'], row['year'], row['semester'], row['section'])
+            for row in overview['consents']] == [
+        ('come2201', '실습 설계', 'design', 2026, '2', '01'), (COURSE, '실습 설계', 'design', 2026, '2', '02')]
+    assert read_api(browser, API_PATH, fields={'csrf': overview['csrf'], 'decision': 'declined',
+                    'policy_version': POLICY_VERSION, 'revision': '0'})[0] == 200
+    updated = read_api(browser, '/student/api/privacy')[2]['result']['consents']
+    assert [(row['section'], row['decision'], len(row['history'])) for row in updated] == [
+        ('01', 'unanswered', 0), ('02', 'declined', 1)]
 
 
 @pytest.mark.parametrize('change', ["active=0", "password_hash='new-verifier'"])

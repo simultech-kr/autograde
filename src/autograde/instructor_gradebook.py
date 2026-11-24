@@ -186,7 +186,20 @@ def detail(ui, course, entry, session, notice='', options=None):
     options = options or {}
     requested_columns = _value(options, 'columns').split(',')
     selected = [column['key'] for column in columns if column['key'] in requested_columns]
-    student_preview = entry['status'] == 'draft' and _value(options, 'view') == 'student' and bool(selected)
+    student_preview = _value(options, 'view') == 'student'
+    if student_preview and (entry['status'] != 'draft' or not selected):
+        if 'cell' in options:
+            raise PlatformNotFound('확인할 성적표 항목을 찾을 수 없습니다.')
+        body = notice + f'<h3>{_e(entry["title"])}</h3>'
+        if entry['status'] == 'draft':
+            body += ('<p class="notice warning" role="alert">공개할 항목을 한 개 이상 선택하세요. '
+                     '선택한 항목이 있어야 학생 공개 내용을 미리볼 수 있습니다.</p>'
+                     f'<a class="button secondary" href="{path}#gradebook-columns">교수자 검토에서 공개 항목 선택</a>')
+        else:
+            body += (f'<p class="notice" role="status">현재 상태는 <strong>{_e(_STATUS[entry["status"]])}</strong>입니다. '
+                     '이 초안의 미리보기가 종료되었습니다.</p>'
+                     f'<a class="button secondary" href="{path}">교수자 성적표 검토 열기</a>')
+        return '학생 공개 내용 미리보기', body
     if 'cell' in options:
         return _full_cell(path, entry, options, selected, student_preview)
     edit_selection = path + '?' + urlencode({'columns': ','.join(selected)}) + '#gradebook-columns'
@@ -210,8 +223,6 @@ def detail(ui, course, entry, session, notice='', options=None):
             fields += f'<label><input type="checkbox" name="column_{_e(column["key"])}" value="yes"{checked}> {_e(column["label"])}</label>'
         fields += '</fieldset>' + _button('선택 항목으로 학생 화면 미리보기')
         body += '<section id="gradebook-columns"><h3>1. 공개 항목 선택</h3>' + ui._form(path + '/preview', session, fields)
-        if _value(options, 'view') == 'student' and not selected:
-            body += '<p class="notice warning" role="alert">공개할 항목을 한 개 이상 선택하세요. 아직 학생에게 공개되지 않았습니다.</p>'
         body += '</section>'
     reviewed = entry['rows']
     preview_columns = columns
@@ -239,7 +250,7 @@ def detail(ui, course, entry, session, notice='', options=None):
             body += '<details><summary>이 업로드 초안 삭제</summary><p>현재 학생 공개본에는 영향을 주지 않습니다.</p>' + ui._form(path + '/delete', session, _revision_field(entry) + _checkbox('confirm', '이 비공개 초안을 삭제합니다.') + _button('초안 삭제', danger=True)) + '</details>'
         elif entry['status'] == 'published':
             body += '<details><summary>학생 공개 중지</summary><p>학생의 점수 화면에서 이 성적표를 숨깁니다. 교수자는 이력에서 내용을 확인할 수 있습니다.</p>' + ui._form(path + '/hide', session, _revision_field(entry) + _checkbox('confirm', '이 성적표의 학생 공개를 중지합니다.') + _button('공개 중지', danger=True)) + '</details>'
-    return '성적표 검토', body
+    return ('학생 공개 내용 미리보기' if student_preview else '성적표 검토'), body
 
 
 def request(ui, method, course, route, form, session):

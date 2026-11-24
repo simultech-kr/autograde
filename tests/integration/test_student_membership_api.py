@@ -51,6 +51,7 @@ def test_signup_does_not_enroll_and_roster_match_requires_separate_identity_proo
     assert 'password' not in json.dumps(data)
     status, _, pending = enroll(browser, data)
     assert status == 200
+    assert '1개 수업은 계정 활성화 대기' in pending['result']['message']
     token = activation(facade.members.store)
     assert b'name="assignment_id"' not in browser.request('/courses/come3105')[2]
     data = api(browser)[2]['result']
@@ -64,6 +65,54 @@ def test_signup_does_not_enroll_and_roster_match_requires_separate_identity_proo
         stored = db.execute('SELECT * FROM student_membership_tokens').fetchone()
         assert token not in str(dict(stored)) and stored['used_at']
     assert api(browser, 'activate', {'csrf': data['csrf'], 'token': token})[0] == 403
+
+
+@pytest.mark.parametrize('both_on_roster', [False, True], ids=['mixed', 'all-connected'])
+def test_enrollment_confirmation_reports_returned_course_states(portal, both_on_roster):
+    web, _, _, facade, _ = portal
+    browser = CookieBrowser(web)
+    data = register(browser)
+    store = facade.members.store
+    token = activation(store)
+    assert api(browser, 'activate', {'csrf': data['csrf'], 'token': token})[0] == 200
+    if both_on_roster:
+        store.upload_eligibility('come2201', f'student_key\n{KEY}\n'.encode())
+    status, _, response = enroll(browser, data, ('come3105', 'come2201'))
+    assert status == 200
+    result = response['result']
+    assert {c['course_key']: c['status'] for c in result['courses']} == {
+        'come3105': 'matched', 'come2201': 'matched' if both_on_roster else 'pending',
+    }
+    if both_on_roster:
+        assert result['message'] == '신청한 수업 2개가 연결되었습니다. 내 수업에서 바로 열 수 있습니다.'
+    else:
+        assert '1개 수업은 내 수업에서 바로 열 수 있습니다.' in result['message']
+        assert '1개 수업은 교수자 명단 확인을 기다리고 있습니다.' in result['message']
+        assert api(browser, 'withdraw', {'csrf': data['csrf'], 'course_key': 'come2201'})[0] == 200
+        # The prior connected course must not be counted in this second request.
+        status, _, response = enroll(browser, data, ('come2201',))
+        assert status == 200
+        assert response['result']['message'] == '수강 신청을 접수했습니다. 1개 수업은 교수자 명단 확인을 기다리고 있습니다.'
+
+
+def test_enrollment_confirmation_hides_counts_when_session_expires_after_write(portal, monkeypatch):
+    web, _, _, facade, _ = portal
+    browser = CookieBrowser(web)
+    data = register(browser)
+    members = facade.members
+    submit = members.store.request_courses
+
+    def expire_after_write(account, courses):
+        submit(account, courses)
+        with members.lock:
+            members.sessions.clear()
+
+    monkeypatch.setattr(members.store, 'request_courses', expire_after_write)
+    status, _, response = enroll(browser, data)
+    assert status == 200
+    result = response['result']
+    assert not result['authenticated'] and result['student'] is None and result['courses'] == []
+    assert result['message'] == '다시 로그인한 뒤 내 수업에서 수강 신청 상태를 확인하세요.'
 
 
 @pytest.mark.parametrize('origin', [None, 'null', 'https://other.invalid', 'https://grade.example.edu:20000'])
@@ -100,14 +149,43 @@ def test_activation_code_bound_to_student_course_eligibility_and_expiry(portal):
     second = CookieBrowser(web)
     other = register(second, '20269997')
     token = activation(facade.members.store)
-    assert api(second, 'activate', {'csrf': other['csrf'], 'token': token})[0] == 403
+    status, _, response = api(second, 'activate', {'csrf': other['csrf'], 'token': token})
+    assert status == 403 and response['error']['code'] == 'invalid_activation_code'
     with facade.members.store.state._write() as db:
         db.execute('UPDATE student_membership_tokens SET expires_at=?', (time.time()-1,))
-    assert api(first, 'activate', {'csrf': data['csrf'], 'token': token})[0] == 403
+    status, _, response = api(first, 'activate', {'csrf': data['csrf'], 'token': token})
+    assert status == 403 and response['error']['code'] == 'invalid_activation_code'
     token = activation(facade.members.store)
     with facade.members.store.state._write() as db:
         db.execute('DELETE FROM student_course_eligibility WHERE student_key=?', (KEY,))
-    assert api(first, 'activate', {'csrf': data['csrf'], 'token': token})[0] == 403
+    status, _, response = api(first, 'activate', {'csrf': data['csrf'], 'token': token})
+    assert status == 403 and response['error']['code'] != 'invalid_activation_code'
+
+
+def test_activation_typo_can_be_corrected_in_same_session_but_csrf_and_expired_sessions_cannot(portal):
+    web, _, _, facade, _ = portal
+    browser = CookieBrowser(web)
+    data = register(browser)
+    assert enroll(browser, data)[0] == 200
+    token = activation(facade.members.store)
+    session_cookie = browser.cookie('autograde_member')
+    fields = {'csrf': data['csrf'], 'token': token}
+
+    status, _, response = api(browser, 'activate', {**fields, 'csrf': 'wrong'})
+    assert status == 403 and response['error']['code'] != 'invalid_activation_code'
+    status, headers, response = api(browser, 'activate', {**fields, 'token': 'mistyped'})
+    assert status == 403 and response['error']['code'] == 'invalid_activation_code'
+    assert '교수자' in response['error']['message']
+    assert headers.get_all('Set-Cookie') is None and browser.cookie('autograde_member') == session_cookie
+    assert not api(browser)[2]['result']['student']['verified']
+
+    status, _, response = api(browser, 'activate', fields)
+    assert status == 200 and response['result']['student']['verified']
+    assert next(row for row in response['result']['courses'] if row['course_key'] == 'come3105')['enrolled']
+    with facade.members.lock:
+        facade.members.sessions.clear()
+    status, _, response = api(browser, 'activate', {**fields, 'token': 'mistyped'})
+    assert status == 401 and response['error']['code'] == 'login_required'
 
 
 def test_password_change_and_single_use_reset_revoke_old_common_sessions(portal):
@@ -201,6 +279,21 @@ def test_api_logout_and_expiry_return_no_account_data(portal):
     status, _, expired = api(browser)
     assert status == 200 and expired['result']['student'] is None and expired['result']['courses'] == []
     assert api(browser, 'enroll', {'csrf': data['csrf'], 'course_keys': '["come3105"]'})[0] == 401
+
+
+def test_navigation_scope_is_stable_only_for_the_current_login(portal):
+    web, *_ = portal
+    browser = CookieBrowser(web)
+    data = register(browser)
+    tag = data['navigation_scope']
+    assert len(tag) == 64 and tag != data['csrf']
+    assert api(browser)[2]['result']['navigation_scope'] == tag
+    status, _, signed_out = api(browser, 'logout', {'csrf': data['csrf']})
+    assert status == 200 and 'navigation_scope' not in signed_out['result']
+    status, _, signed_in = api(browser, 'login', {
+        'csrf': signed_out['result']['csrf'], 'student_key': KEY, 'password': PASSWORD,
+    })
+    assert status == 200 and signed_in['result']['navigation_scope'] != tag
 
 
 def test_instructor_activation_issue_requires_auth_scope_csrf_and_identity_confirmation(portal):

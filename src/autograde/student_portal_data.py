@@ -40,6 +40,9 @@ def submission_overview(state, credential, *, limit=100, include_history=True):
             SELECT r.submission_id, r.assignment_id, r.rowid AS receipt_order,
                    r.received_at, r.state, receipt.source_digest AS code_version,
                    a.title, a.assignment_key, g.score, g.max_score, g.published_at,
+                   CASE WHEN g.published_at IS NULL THEN NULL
+                        WHEN receipt.result_policy='score_only' THEN 'score_only'
+                        ELSE 'details_allowed' END AS feedback_policy,
                    ROW_NUMBER() OVER (PARTITION BY r.assignment_id
                      ORDER BY r.received_at DESC, r.rowid DESC) AS newest_order,
                    ROW_NUMBER() OVER (PARTITION BY r.assignment_id
@@ -64,7 +67,7 @@ def submission_overview(state, credential, *, limit=100, include_history=True):
             received_at, state, code_version, score, max_score, published_at, version
             FROM owned ORDER BY received_at DESC, receipt_order DESC LIMIT ?''', (*scope, limit + 1)).fetchall() if include_history else []
         latest = db.execute(base + '''SELECT o.submission_id, o.assignment_id, o.title, o.assignment_key,
-            o.received_at, o.state, o.code_version, o.score, o.max_score, o.published_at, o.version,
+            o.received_at, o.state, o.code_version, o.score, o.max_score, o.published_at, o.version, o.feedback_policy,
             b.submission_id AS previous_best_id, b.score AS previous_best_score,
             b.max_score AS previous_best_max_score, b.received_at AS previous_best_at
             FROM owned o LEFT JOIN previous_best b ON b.assignment_id=o.assignment_id AND b.best_order=1

@@ -226,6 +226,8 @@ def test_published_feedback_uses_public_allowlist_and_exact_submission(portal, t
     body = read(browser, detail_path(sid))
     assert body['student_key'] == KEY and body['course_key'] == COURSE and body['submission_id'] == sid
     assert body['feedback_available'] and body['result']['score'] == 3
+    latest = read(browser, f'/student/api/course/{COURSE}')['overview']['latest']
+    assert next(row for row in latest if row['submission_id'] == sid)['feedback_policy'] == 'details_allowed'
     row = body['result']['rubric']['output']
     assert row['hint'] == '줄바꿈과 공백을 비교하세요.' and row['status'] == 'partial'
     assert row['path'] == 'main.cpp' and row['line'] == 3
@@ -242,6 +244,10 @@ def test_feedback_never_exposes_unpublished_or_score_only_rubric(portal, tmp_pat
     sid = make_result(portal, tmp_path, policy='score_only', published=published)
     browser = CookieBrowser(portal[0])
     login(browser)
+    latest = read(browser, f'/student/api/course/{COURSE}')['overview']['latest']
+    row = next(row for row in latest if row['submission_id'] == sid)
+    assert row['feedback_policy'] == ('score_only' if published else None)
+    assert 'rubric' not in row and 'diagnostics' not in row
     status, _, raw = browser.request(detail_path(sid))
     assert b'\xec\xa4\x84\xeb\xb0\x94\xea\xbf\x88' not in raw
     if not published:

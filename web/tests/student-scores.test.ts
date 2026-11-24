@@ -15,8 +15,13 @@ test("student score rows distinguish missing, queued, private and public results
   assert.equal(scoreRowState(rows[0]).scored, false);
   assert.equal(rows[0].receipt?.previous_best_score, 9);
   assert.equal(scoreRowState(rows[1]).label, "공식 제출 전");
-  data.latest[0] = {...row, state: "graded", score: 3, max_score: 10};
-  assert.equal(scoreRowState(scoreRows(data)[0]).scored, false);
+  for (const state of ["graded", "result_pending"]) {
+    data.latest[0] = {...row, state, score: 3, max_score: 10};
+    const waiting = scoreRowState(scoreRows(data)[0]);
+    assert.equal(waiting.scored, false);
+    assert.equal(waiting.label, "채점 완료 · 공개 대기");
+    assert.match(waiting.hint, /다시 제출할 필요는 없습니다/);
+  }
   data.latest[0] = {...data.latest[0], state: "published", published_at: "2026-11-01T01:02:00Z"};
   assert.equal(scoreRowState(scoreRows(data)[0]).scored, true);
   assert.equal(scoreRows(data)[0].receipt?.score, 3);

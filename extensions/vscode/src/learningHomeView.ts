@@ -60,7 +60,7 @@ export class LearningHomeView implements vscode.Disposable {
   }
 
   private stateScope(state: LearningHomeState): string {
-    return JSON.stringify([state.authenticated, state.trusted, state.sessionGeneration, state.serviceBaseUrl,
+    return JSON.stringify([state.authenticated, state.trusted, state.hasWorkspace, state.sessionGeneration, state.serviceBaseUrl,
       state.studentPortalBaseUrl, state.sharedSession, state.sessionNeedsRestart, state.assignment?.id]);
   }
 

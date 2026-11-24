@@ -3,6 +3,7 @@ import test from "node:test";
 import { publicSubmissionScore, receiptProgress, submissionLabel, submissionTime } from "../learningJourney";
 import { normalizeAssignments, normalizeSubmission } from "../helpers";
 import { learningNextStep, renderLearningHome } from "../learningHome";
+import { resultHtml } from "../resultSummary";
 import { studentPortalUrl, configuredStudentPortalBase } from "../studentPortalLink";
 
 const ready = {authenticated: true, trusted: true, hasWorkspace: true, hasAssignmentFolder: true};
@@ -44,6 +45,24 @@ test("home uses connected assignment, retains previous best separately and expla
   assert.match(html, /13:50:00/);
   assert.match(html, /과제·자료·제출 도구/);
   assert.match(html, /자동 저장은 공식 제출이나 채점을 시작하지 않습니다/);
+});
+
+test("graded and result-pending receipts identify the same current step and next action in home and details", () => {
+  for (const state of ["graded", "result_pending"]) {
+    const label = "채점 완료 · 공개 대기";
+    const receipt = {id: "submission", state, score: 81, maxScore: 100};
+    const home = renderLearningHome({...ready, assignment: {...assignment, latestSubmission: receipt}}, "nonce");
+    const detail = resultHtml(assignment, {...receipt, rubric: [], diagnostics: []}, receipt.id, "이번 제출");
+    assert.equal(submissionLabel(state), label);
+    assert.equal(receiptProgress(state).find(step => step.current)?.label, label);
+    for (const html of [home, detail]) {
+      assert.match(html, /<li aria-current="step">채점 완료 · 공개 대기<\/li>/);
+      assert.match(html, /다시 제출할 필요는 없습니다/);
+      assert.doesNotMatch(html, /81 \/ 100점/);
+    }
+  }
+  assert.equal(receiptProgress("running").find(step => step.current)?.label, "채점 중");
+  assert.equal(receiptProgress("published").find(step => step.current)?.label, "결과 공개");
 });
 
 test("student portal uses an explicit web origin and never converts an API port or accepts credentials", () => {

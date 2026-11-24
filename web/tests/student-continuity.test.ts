@@ -139,6 +139,60 @@ test("React: my scores separates the current submission from earlier best and re
   } finally {await app.dispose();}
 });
 
+test("React: a mistyped activation code keeps the account form available and focuses the correction", async () => {
+  const body = bootstrap();
+  body.result.student.verified = false;
+  body.result.courses = [];
+  const message = "활성화 코드를 다시 입력하거나 교수자에게 새 코드를 요청하세요.";
+  const app = await mount(async (url, options) => {
+    if (url === "/student/api/activate") {
+      const token = new URLSearchParams(String(options?.body)).get("token");
+      if (token !== "correct") return Response.json({error:{code:"invalid_activation_code", message}}, {status:403});
+      body.result.student.verified = true;
+    }
+    if (url === "/student/api/privacy") return Response.json(privacyOverview("declined", 1));
+    return Response.json(body);
+  }, "?view=account");
+  try {
+    const field = app.document.querySelector<HTMLInputElement>('input[name="token"]')!;
+    const form = field.form!;
+    field.value = "typo";
+    await act(async () => form.requestSubmit());
+    assert.equal(app.surface().hidden, false);
+    assert.equal(app.document.defaultView!.location.search, "?view=account");
+    assert.equal(app.document.activeElement, field);
+    assert.equal(field.value, "");
+    assert.equal(field.getAttribute("aria-invalid"), "true");
+    const description = app.document.getElementById(field.getAttribute("aria-describedby")!);
+    assert.equal(description?.textContent, message);
+
+    field.value = "correct";
+    await act(async () => form.requestSubmit());
+    assert.equal(app.document.querySelector('input[name="token"]'), null);
+    assert.match(app.document.querySelector("main")!.textContent!, /활성화 완료/);
+    assert.equal(app.requests.filter(item => item.url.endsWith("/bootstrap")).length, 1);
+    assert.equal(app.requests.filter(item => item.url.endsWith("/activate")).length, 2);
+  } finally { await app.dispose(); }
+});
+
+test("React: an activation request rejected for CSRF still shields the account", async () => {
+  const body = bootstrap();
+  body.result.student.verified = false;
+  body.result.courses = [];
+  const app = await mount(async url => {
+    if (url === "/student/api/activate") return Response.json({error:{code:"invalid_request", message:"화면을 새로 열어 주세요."}}, {status:403});
+    if (url === "/student/api/privacy") return Response.json(privacyOverview("declined", 1));
+    return Response.json(body);
+  }, "?view=account");
+  try {
+    const field = app.document.querySelector<HTMLInputElement>('input[name="token"]')!;
+    field.value = "code";
+    await act(async () => field.form!.requestSubmit());
+    assert.equal(app.surface().hidden, true);
+    assert.equal(app.document.querySelector('input[name="token"]'), null);
+  } finally { await app.dispose(); }
+});
+
 test("React: learning actions retain the selected course across materials and scores", async () => {
   const app = await mount(async url => {
     if (url === "/student/api/privacy") return Response.json(privacyOverview("declined", 1));

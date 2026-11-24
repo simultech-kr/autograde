@@ -43,7 +43,7 @@ test("editing and command channels require their own exact schema and nonce", ()
 });
 
 test("inline forms escape server and feedback data and clear a code before dispatch without webview persistence", () => {
-  const html = renderLearningHome({authenticated: false, trusted: true, hasWorkspace: false,
+  const html = renderLearningHome({authenticated: false, trusted: true, hasWorkspace: true,
     serviceBaseUrl: 'https://grade.example.test/\"><img src=x onerror=evil>', studentPortalBaseUrl: 'https://portal.example.test/\"'}, "current",
     {initialForm: "portal", feedback: "<img src=x onerror=evil>"});
   assert.doesNotMatch(html, /<img|localStorage|sessionStorage|setState|fetch\(/);

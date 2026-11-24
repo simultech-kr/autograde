@@ -56,7 +56,8 @@ class StudentPrivacy:
 
     @staticmethod
     def _authenticate(db, credential, member_verifier=None):
-        current = db.execute('''SELECT pw.password_hash,pw.locked_until FROM platform_student_passwords pw
+        current = db.execute('''SELECT pw.password_hash,pw.locked_until,c.name,c.code,c.year,c.semester,c.section
+            FROM platform_student_passwords pw
             JOIN platform_enrollments e ON e.id=pw.enrollment_id
             JOIN platform_students s ON s.id=e.student_id
             JOIN admin_courses c ON c.course_key=e.course_key
@@ -74,6 +75,9 @@ class StudentPrivacy:
                     or account['student_id'] != credential.student_id
                     or not hmac.compare_digest(account['password_hash'], password_hash)):
                 raise PlatformAccessDenied('회원 인증 상태가 변경되었습니다.')
+        return {'course_name': current['name'] or credential.course_key,
+                'code': current['code'], 'year': current['year'], 'semester': current['semester'],
+                'section': current['section']}
 
     @staticmethod
     def _read(db, credential):
@@ -112,7 +116,7 @@ class StudentPrivacy:
             consents = []
             if account['verified'] and account['student_id'] is not None:
                 rows = db.execute('''SELECT e.id AS enrollment_id,e.student_id,e.course_key,s.student_key,
-                    pw.password_hash,pw.locked_until,c.name AS course_name
+                    pw.password_hash,pw.locked_until
                     FROM platform_enrollments e JOIN platform_students s ON s.id=e.student_id
                     JOIN platform_student_passwords pw ON pw.enrollment_id=e.id
                     JOIN admin_courses c ON c.course_key=e.course_key
@@ -123,8 +127,8 @@ class StudentPrivacy:
                     if row['course_key'] not in allowed_courses or row['locked_until'] and row['locked_until'] > now:
                         continue
                     credential = SimpleNamespace(**dict(row))
-                    self._authenticate(db, credential, member_verifier)
-                    consents.append({**self._read(db, credential), 'course_name': row['course_name'] or row['course_key']})
+                    course = self._authenticate(db, credential, member_verifier)
+                    consents.append({**self._read(db, credential), **course})
             return {'student_key': student_key, 'policy': dict(POLICY), 'consents': consents}
 
     def overview_for_credentials(self, student_key, credentials, *, allowed_courses):
@@ -143,13 +147,10 @@ class StudentPrivacy:
                 if credential.student_key != student_key or credential.course_key in seen:
                     raise PlatformAccessDenied('수강 또는 인증 상태가 변경되었습니다.')
                 seen.add(credential.course_key)
-                self._authenticate(db, credential)
+                course = self._authenticate(db, credential)
                 if credential.course_key not in allowed_courses:
                     continue
-                course = db.execute('SELECT name FROM admin_courses WHERE course_key=?',
-                                    (credential.course_key,)).fetchone()
-                consents.append({**self._read(db, credential),
-                                 'course_name': course['name'] or credential.course_key})
+                consents.append({**self._read(db, credential), **course})
             consents.sort(key=lambda row: (row['course_name'], row['course_key']))
             return {'student_key': student_key, 'policy': dict(POLICY), 'consents': consents}
 

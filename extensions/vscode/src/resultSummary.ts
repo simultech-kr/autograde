@@ -1,5 +1,5 @@
 import { positiveResultPosition, safeResultPath } from "./helpers";
-import { receiptProgress, submissionLabel, submissionTime } from "./learningJourney";
+import { awaitingPublication, publicationGuidance, receiptProgress, submissionLabel, submissionTime } from "./learningJourney";
 import type { Assignment, GradeResult, ResultDiagnostic, RubricItem } from "./types";
 
 const valid = (score?: number, max?: number): boolean => Number.isFinite(score) && Number.isFinite(max)
@@ -68,7 +68,7 @@ export function summarizeResult(result: GradeResult) {
   const known = published && valid(result.score, result.maxScore) && !inconsistent;
   const headline = !published ? submissionLabel(result.state) : !known ? "결과 확인이 필요합니다" :
     full ? "자동채점 총점 기준 충족" : "수정이 필요합니다";
-  const next = !published ? (result.state === "graded" ? "교수자가 결과를 공개한 뒤 다시 확인하세요. 다시 제출할 필요는 없습니다." :
+  const next = !published ? (awaitingPublication(result.state) ? publicationGuidance :
     ["rejected", "infra_failed", "assessment_failed", "failed"].includes(result.state) ? "제출 안내를 확인하고 접수번호와 함께 교수자에게 문의하세요." :
     "접수된 제출은 서버에서 처리됩니다. 잠시 뒤 최신 결과를 확인하세요.") : inconsistent ?
     "점수와 항목 판정이 서로 맞지 않습니다. 공개된 피드백을 참고하고 교수자에게 확인하세요." : !known ?

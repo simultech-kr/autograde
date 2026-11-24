@@ -8,12 +8,14 @@ export type Course = {
 export type Bootstrap = {
   authenticated: boolean; csrf: string; expires_at: string | null; server_time?: string;
   auth_method?: "member" | "course";
+  navigation_scope?: string;
   student: { student_key: string; verified: boolean } | null; courses: Course[]; api_base_url: string; message?: string;
 };
 export type Assignment = { assignment_id: string; assignment_key: string; title: string; opens_at: string | null; due_at: string | null; accepted_at: string | null };
 export type Receipt = {
   submission_id: string; assignment_id: string; title: string; assignment_key: string; received_at: string;
   state: string; code_version: string; score: number | null; max_score: number | null; published_at: string | null; version: number;
+  feedback_policy?: "score_only" | "details_allowed";
   previous_best_id?: string | null; previous_best_score?: number | null; previous_best_max_score?: number | null; previous_best_at?: string | null;
 };
 export type CourseData = {
@@ -98,6 +100,7 @@ export function parseBootstrap(value: unknown): Bootstrap {
   });
   if (auth_method === "course" && (!authenticated || !student?.verified || courses.some(course => !course.enrolled || course.can_withdraw))) throw new StudentContractError();
   return { authenticated, auth_method: auth_method as Bootstrap["auth_method"], csrf: str(body.csrf, 256), expires_at, server_time: body.server_time === undefined ? undefined : date(body.server_time), student, courses, api_base_url: apiAddress(body.api_base_url),
+    navigation_scope: authenticated && typeof body.navigation_scope === "string" && /^[0-9a-f]{64}$/.test(body.navigation_scope) ? body.navigation_scope : undefined,
     message: body.message === undefined ? undefined : str(body.message, 1000) };
 }
 function scalar(value: unknown): number | string | undefined {
@@ -109,7 +112,10 @@ function identifier(value: unknown): string { const result = str(value, 256); if
 function receipt(value: unknown): Receipt {
   const item = object(value), version = numeric(item.version);
   if (version === null || !Number.isInteger(version) || version < 1) throw new StudentContractError();
+  const policy = item.feedback_policy;
+  if (policy != null && policy !== "score_only" && policy !== "details_allowed") throw new StudentContractError();
   return { submission_id: identifier(item.submission_id), assignment_id: identifier(item.assignment_id), title: str(item.title), assignment_key: str(item.assignment_key),
+    feedback_policy: policy ?? undefined,
     received_at: date(item.received_at), state: str(item.state, 80), code_version: str(item.code_version, 128), score: numeric(item.score), max_score: numeric(item.max_score),
     published_at: dateOrNull(item.published_at), version, previous_best_id: nullableString(item.previous_best_id), previous_best_score: numeric(item.previous_best_score),
     previous_best_max_score: numeric(item.previous_best_max_score), previous_best_at: dateOrNull(item.previous_best_at) };
@@ -160,7 +166,7 @@ export function parseClaim(value: unknown, expectedAssignment: string, expectedS
   if (assignment_id !== expectedAssignment || body.student_key !== expectedStudent) throw new StudentContractError();
   return { code: str(item.code, 128), expires_at: date(item.expires_at), api_url: apiAddress(item.api_url), assignment_id, title: str(item.title) };
 }
-export const stages = ["제출 접수", "채점 대기", "채점 중", "결과 공개"];
+export const stages = ["제출 접수", "채점 대기", "채점 중", "채점 완료 · 공개 대기", "결과 공개"];
 export function submissionState(row?: Pick<Receipt, "state" | "score" | "max_score" | "published_at">) {
   const unscored = { scored: false, tone: "info", stage: -1 };
   if (!row) return { ...unscored, label: "공식 제출 전", hint: "IDE에서 실습을 작성하고 공식 제출하세요." };
@@ -168,9 +174,11 @@ export function submissionState(row?: Pick<Receipt, "state" | "score" | "max_sco
   if (failed[row.state]) return { ...unscored, tone: "error", label: failed[row.state], hint: "접수번호와 함께 교수자에게 확인을 요청하세요. 이전 점수는 이번 제출의 결과가 아닙니다." };
   const stage = ["received", "accepted"].includes(row.state) ? 0 : row.state === "queued" ? 1 : row.state === "running" ? 2 : -1;
   if (stage >= 0) return { ...unscored, stage, label: stages[stage], hint: "현재 제출의 채점이 끝나면 점수가 표시됩니다. 다시 제출할 필요 없이 결과를 확인하세요." };
-  if (row.state === "published" && row.published_at && validScore(row.score, row.max_score)) return { scored: true, tone: row.score! < row.max_score! ? "warning" : "success", stage: 3,
+  if (row.state === "graded" || row.state === "result_pending") return { ...unscored, stage: 3, label: stages[3],
+    hint: "교수자가 결과를 공개한 뒤 다시 확인하세요. 다시 제출할 필요는 없습니다." };
+  if (row.state === "published" && row.published_at && validScore(row.score, row.max_score)) return { scored: true, tone: row.score! < row.max_score! ? "warning" : "success", stage: 4,
     label: "결과 공개", hint: "IDE의 채점 결과에서 평가 항목과 수정 안내를 확인하세요." };
-  return { ...unscored, label: row.state === "graded" ? "결과 공개 대기" : "결과 확인 대기", hint: "공개된 채점 결과를 기다리고 있습니다. 점수가 확정되기 전에는 이전 결과로 대체하지 않습니다." };
+  return { ...unscored, label: "결과 확인 대기", hint: "공개된 채점 결과를 기다리고 있습니다. 점수가 확정되기 전에는 이전 결과로 대체하지 않습니다." };
 }
 export function validScore(score: number | null | undefined, maximum: number | null | undefined): boolean {
   return typeof score === "number" && Number.isFinite(score) && typeof maximum === "number" && Number.isFinite(maximum) && score >= 0 && maximum > 0 && score <= maximum;
@@ -183,7 +191,8 @@ export function timeText(value: string | null | undefined): string {
   return new Intl.DateTimeFormat("ko-KR", { timeZone: "Asia/Seoul", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(value));
 }
 export function courseMeta(course: Partial<Course>): string {
-  return [course.term || [course.year && `${course.year}학년도`, course.semester && `${course.semester}학기`].filter(Boolean).join(" "), course.section && `${course.section}분반`].filter(Boolean).join(" · ") || "학기·분반 정보 미등록";
+  const semester = course.semester === "summer" ? "여름학기" : course.semester === "winter" ? "겨울학기" : course.semester && `${course.semester}학기`;
+  return [course.term || [course.year && `${course.year}학년도`, semester].filter(Boolean).join(" "), course.section && `${course.section}분반`].filter(Boolean).join(" · ") || "학기·분반 정보 미등록";
 }
 export function remainingSeconds(expires: string | null, now: number): number { return expires ? Math.max(0, Math.ceil((Date.parse(expires) - now) / 1000)) : 0; }
 export class RequestVersion { private version = 0; next() { return ++this.version; } current(version: number) { return this.version === version; } }

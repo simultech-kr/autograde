@@ -2,7 +2,7 @@
 import { learningPolicyLabel, type LearningPolicy } from "./learningEnvironment";
 import type { ClassroomSharingStatus } from "./classroomActivity";
 import type { Assignment } from "./types";
-import { publicSubmissionScore, receiptProgress, submissionLabel, submissionTime } from "./learningJourney";
+import { awaitingPublication, publicationGuidance, publicSubmissionScore, receiptProgress, submissionLabel, submissionTime } from "./learningJourney";
 import { STUDENT_PORTAL_COMMAND } from "./studentPortalLink";
 import { sharedSessionCleanupNotice, type SharedSessionCleanupMode } from "./sharedLearningSession";
 export const LEARNING_HOME_COMMAND = "autograde.openLearningHome";
@@ -74,6 +74,7 @@ const actions = {
   discoverServer: { command: "autograde.discoverServers", label: "주변 서버 검색", session: false, trust: false, workspace: false },
   connection: { command: "autograde.checkServerConnection", label: "서버 연결 확인", session: false, trust: false, workspace: false },
   claim: { command: "autograde.redeemAssignmentClaim", label: "수령 코드로 연결 · 과제 받기", session: false, trust: true, workspace: false },
+  prepareWorkspace: { command: "autograde.redeemAssignmentClaim", label: "수업 폴더 열기", session: false, trust: false, workspace: false },
   open: { command: "autograde.openAssignment", label: "기존 과제 이어서 열기", session: true, trust: true, workspace: false },
   accepted: { command: "autograde.acceptedAssignmentHistory", label: "수락 이력 · 과제 전환", session: true, trust: false, workspace: false },
   materials: { command: "autograde.studentMaterials", label: "내 배포 자료 · PDF / ZIP 받기", session: true, trust: false, workspace: false },
@@ -101,10 +102,14 @@ export function learningHomeAction(message: unknown, nonce?: string): LearningHo
 
 export function learningHomeCommand(action: LearningHomeAction): string { return actions[action].command; }
 
+function needsCourseFolder(state: LearningHomeState): boolean { return !state.sharedSession && !state.hasWorkspace; }
+
 export function learningHomeBlockedReason(action: LearningHomeAction, state: LearningHomeState): string | undefined {
   if (action === "endSession") return state.sharedSession ? undefined : "공용 실습 실행기로 시작한 세션에서 사용할 수 있습니다.";
   if (state.busy) return "이전 작업을 완료하거나 취소한 뒤 다시 선택하세요.";
   const item = actions[action];
+  if (action === "prepareWorkspace" && !needsCourseFolder(state)) return "현재 실습 공간의 수령 코드 입력란을 사용하세요.";
+  if (action === "claim" && needsCourseFolder(state)) return "수업 폴더를 연 뒤 수령 코드를 입력하세요.";
   if (state.sharedSession && ((state.authenticated || state.sessionNeedsRestart) && ["claim", "configure", "discoverServer"].includes(action)
     || state.sessionNeedsRestart && item.session)) {
     return "필요한 코드를 내보낸 뒤 공용 실습을 종료하고, 새 세션에서 수령 코드로 연결하세요.";
@@ -128,9 +133,11 @@ function escapeHtml(value: string): string {
 
 export function learningNextStep(state: LearningHomeState): { title: string; detail: string; action: LearningHomeAction } {
   if (state.sessionNeedsRestart) return { title: "공용 실습을 종료하세요", detail: "이전 학생의 공간은 다시 인증하지 않습니다. 필요한 코드를 내보낸 뒤 종료하고 새로 실행하세요.", action: "endSession" };
+  if (!state.authenticated && needsCourseFolder(state)) return { title: "실습할 수업 폴더를 먼저 여세요", detail: "과제를 저장할 폴더를 선택하세요. 열린 폴더에서 학생 포털의 수령 코드를 입력합니다.", action: "prepareWorkspace" };
   if (!state.authenticated) return { title: "수령 코드로 과제를 연결하세요", detail: "학생 포털에서 내 수업과 과제를 선택하고 수령 코드를 받으세요. 웹 비밀번호는 IDE에 입력하지 않습니다.", action: "claim" };
   if (!state.assignment) return { title: "수락한 과제를 확인하세요", detail: "현재 인증으로 이용할 수 있는 과제와 자료를 확인하고 실습할 과제를 선택하세요.", action: "downloads" };
   if (!state.hasAssignmentFolder) return { title: "과제 폴더를 열어 실습을 이어가세요", detail: "기존 폴더를 연결하거나 과제·자료에서 새로 다운로드하세요. 공용 실습의 이전 코드는 서버 저장본에서 복원합니다.", action: "open" };
+  if (state.assignment.latestSubmission && awaitingPublication(state.assignment.latestSubmission.state)) return { title: submissionLabel(state.assignment.latestSubmission.state), detail: publicationGuidance, action: "result" };
   if (state.assignment.latestSubmission) return { title: submissionLabel(state.assignment.latestSubmission.state), detail: ["received", "pinning", "verifying", "accepted", "queued", "running"].includes(state.assignment.latestSubmission.state)
     ? "접수번호가 발급되었습니다. 다시 제출하지 않아도 같은 접수의 채점 상태를 확인할 수 있습니다."
     : "이번 제출의 공개 결과와 이전 최고점을 확인하세요. 코드를 수정했다면 모두 저장한 뒤 공식 제출을 다시 진행하세요.", action: "result" };
@@ -213,15 +220,15 @@ ${discoveredServers.length ? `<ul class="server-list">${discoveredServers.map(se
     const current = state.serviceBaseUrl === server.apiUrl && state.studentPortalBaseUrl === server.portalUrl;
     return `<li class="server-card"><div><strong>${escapeHtml(server.displayName)}</strong>${current ? '<p class="detail">현재 주소 · 연결 확인 후 사용하세요.</p>' : ''}<p class="detail server-endpoints">채점 서버 <code>${escapeHtml(server.apiUrl)}</code><br>학생 포털 <code>${escapeHtml(server.portalUrl)}</code></p></div><button type="button" data-discovery-id="${escapeHtml(server.id)}"${disabled(selectionReason)}>${current ? "연결 확인" : "이 서버 선택"}</button></li>`;
   }).join("")}</ul>` : ""}<p class="detail">검색되지 않으면 아래 서버 주소 설정에서 직접 연결할 수 있습니다.</p>${configureReason ? `<p class="detail">${escapeHtml(configureReason)}</p>` : ""}</section>
-<section class="inline-connect" aria-labelledby="claim-heading"><h2 id="claim-heading">수령 코드로 연결</h2><p class="detail">학생 포털에서 받은 코드를 아래에 입력하세요. 비밀번호를 입력하지 마세요. 코드는 전송 즉시 지우며 저장하지 않습니다.</p><p class="detail">채점 서버 <code>${escapeHtml(state.serviceBaseUrl ?? "주소 설정 필요")}</code></p>
-<form data-form="claim" autocomplete="off" novalidate><label for="claim-code">과제 수령 코드</label><div class="input-row"><input id="claim-code" type="password" maxlength="128" autocomplete="off" autocapitalize="none" spellcheck="false" aria-describedby="claim-help"${disabled(claimReason)}><button type="submit" class="primary"${disabled(claimReason)}>코드로 연결</button></div><p id="claim-help" class="detail">${escapeHtml(claimReason ?? "이 입력란에서 Enter를 누르거나 코드로 연결을 선택하세요.")}</p></form></section>
+${needsCourseFolder(state) ? "" : `<section class="inline-connect" aria-labelledby="claim-heading"><h2 id="claim-heading">수령 코드로 연결</h2><p class="detail">학생 포털에서 받은 코드를 아래에 입력하세요. 비밀번호를 입력하지 마세요. 코드는 전송 즉시 지우며 저장하지 않습니다.</p><p class="detail">채점 서버 <code>${escapeHtml(state.serviceBaseUrl ?? "주소 설정 필요")}</code></p>
+<form data-form="claim" autocomplete="off" novalidate><label for="claim-code">과제 수령 코드</label><div class="input-row"><input id="claim-code" type="password" maxlength="128" autocomplete="off" autocapitalize="none" spellcheck="false" aria-describedby="claim-help"${disabled(claimReason)}><button type="submit" class="primary"${disabled(claimReason)}>코드로 연결</button></div><p id="claim-help" class="detail">${escapeHtml(claimReason ?? "이 입력란에서 Enter를 누르거나 코드로 연결을 선택하세요.")}</p></form></section>`}
 <p id="learning-feedback" class="feedback" role="status" aria-live="polite">${escapeHtml(presentation.feedback ?? "")}</p>
 <details id="server-settings" class="settings"${presentation.initialForm === "server" || presentation.initialForm === "portal" ? " open" : ""}><summary>서버 주소 설정</summary><p class="detail">채점 서버와 학생 포털은 주소가 다를 수 있습니다. 교수자가 안내한 주소를 각각 입력하세요.</p>
 <form data-form="server" autocomplete="off" novalidate><label for="server-address">채점 서버 주소</label><div class="input-row"><input id="server-address" type="url" maxlength="2048" autocomplete="off" spellcheck="false" value="${escapeHtml(state.serviceBaseUrl ?? "")}"${disabled(configureReason)}><button type="submit"${disabled(configureReason)}>채점 서버 적용</button></div></form>
 <form data-form="portal" autocomplete="off" novalidate><label for="portal-address">학생 포털 주소</label><div class="input-row"><input id="portal-address" type="url" maxlength="2048" autocomplete="off" spellcheck="false" value="${escapeHtml(state.studentPortalBaseUrl ?? "")}"${disabled(configureReason)}><button type="submit"${disabled(configureReason)}>학생 포털 적용</button></div></form>${configureReason ? `<p class="detail">${escapeHtml(configureReason)}</p>` : ""}</details>
 <details class="tools"><summary>과제·자료·제출 도구</summary>
 <div class="grid">
-<section aria-labelledby="connect"><h2 id="connect">1. 수업 연결</h2><p>교수자가 안내한 채점 서버 주소를 설정하세요. 학생 웹에서 받은 수령 코드를 입력합니다.</p><div class="actions">${button("configure")}${button("connection")}${button("claim", true)}</div></section>
+<section aria-labelledby="connect"><h2 id="connect">1. 수업 연결</h2><p>교수자가 안내한 채점 서버 주소를 설정하세요. 학생 웹에서 받은 수령 코드를 입력합니다.</p><div class="actions">${button("configure")}${button("connection")}${button(needsCourseFolder(state) ? "prepareWorkspace" : "claim", true)}</div></section>
 <section aria-labelledby="resume"><h2 id="resume">2. 실습과 배포 자료</h2><p>${state.sharedSession ? "이번 실습의 새 폴더에 과제를 받습니다. 이전 작업은 서버 작업 저장본 또는 제출 이력에서 새 폴더로 복원할 수 있습니다. 코드와 자료를 보관하려면 내 학습내용 내보내기를 사용하세요." : "IDE를 다시 열었다면 새 수령 코드로 연결한 뒤 기존 폴더를 여세요. 강의자료는 학생별 캐시에 변경분만 받고, 필요할 때 별도 폴더에 저장합니다. 과제 코드는 덮어쓰지 않습니다."}</p><div class="actions">${button("downloads", true)}${button("open")}${button("checkpointRestore")}${button("accepted")}${button("extensions")}</div></section>
 <section aria-labelledby="submit"><h2 id="submit">3. 제출과 피드백</h2><p>제출할 과제 폴더를 확인하세요. 제출 접수와 채점 완료는 별도이며, 현재 제출의 결과와 이전 이력을 확인할 수 있습니다.</p><div class="actions">${button("submit", true)}${button("result")}${button("history")}${button("exportLearning")}</div></section>
 </div></details>

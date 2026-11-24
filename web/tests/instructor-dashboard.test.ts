@@ -31,7 +31,7 @@ function loadDashboard(): ComponentType {
   return (load(resolve(sourceRoot, "features/results/InstructorDashboard.tsx")) as { InstructorDashboard: ComponentType }).InstructorDashboard;
 }
 
-async function mount(query = "") {
+async function mount(query = "", respondToResults?: (url: URL) => Response) {
   const dom = new JSDOM("<!doctype html><div id='root'></div>", { url: "https://example.test/app?course_key=come2201" + (query ? "&" + query : ""), pretendToBeVisual: true });
   const originals = new Map<string, PropertyDescriptor | undefined>();
   const bind = (key: string, value: unknown) => { originals.set(key, Object.getOwnPropertyDescriptor(globalThis, key)); Object.defineProperty(globalThis, key, { configurable: true, writable: true, value }); };
@@ -46,6 +46,7 @@ async function mount(query = "") {
     if (url.pathname.endsWith("/bootstrap")) return Response.json(sampleBootstrap);
     assert.equal(url.pathname, "/instructor/api/v1/courses/come2201/results");
     if (hold) { hold = false; await new Promise<void>(resolve => { release = resolve; }); }
+    if (respondToResults) return respondToResults(url);
     return Response.json({ ...sampleResults, page: Number(url.searchParams.get("page")) });
   };
   for (const [key, value] of Object.entries({ window: dom.window, document: dom.window.document, navigator: dom.window.navigator,
@@ -67,11 +68,75 @@ async function mount(query = "") {
     },
     async finishRefresh() { await act(async () => release?.()); },
     async dispose() {
-      await act(async () => root.unmount()); dom.window.close();
+      await act(async () => { root.unmount(); release?.(); }); dom.window.close();
       for (const [key, descriptor] of originals) { if (descriptor) Object.defineProperty(globalThis, key, descriptor); else Reflect.deleteProperty(globalThis, key); }
     },
   };
 }
+
+test("React: a failed manual refresh keeps the confirmed page until the instructor applies a changed result set", async () => {
+  let status = 200;
+  const app = await mount("sort=student&page=2", url => {
+    if (status !== 200) return Response.json({ error: { code: status === 409 ? "result_set_changed" : "unavailable" } }, { status });
+    return Response.json({ ...sampleResults, total: 24, page: Number(url.searchParams.get("page")) });
+  });
+  try {
+    await act(async () => app.get<HTMLInputElement>("poll-toggle").click());
+    const row = app.get("result-row");
+    const confirmedAt = app.get("last-success").querySelector(".lastTime")!.textContent;
+    status = 503;
+    await app.refreshWithDelay();
+    const refreshRequest = app.requests.at(-1)!;
+    assert.equal(refreshRequest.searchParams.get("page"), "2");
+    assert.equal(refreshRequest.searchParams.get("version"), sampleResults.version);
+    assert.equal(app.get("result-row"), row);
+    assert.match(app.get("last-success").textContent!, /새로 확인 중 · 마지막 확인 결과 표시/);
+    assert.equal(app.get("last-success").querySelector(".lastTime")!.textContent, confirmedAt);
+    await app.finishRefresh();
+    assert.match(app.get("last-success").textContent!, /조회 실패 · 마지막 확인 결과 표시/);
+    assert.equal(app.get("last-success").querySelector(".lastTime")!.textContent, confirmedAt);
+    assert.equal(app.get("result-row"), row);
+
+    status = 409;
+    await act(async () => app.get("api-error").querySelector("button")!.click());
+    assert.equal(app.requests.at(-1)!.href, refreshRequest.href);
+    assert.equal(app.get("result-row"), row);
+    assert.ok(app.get<HTMLButtonElement>("next-page").disabled);
+    assert.ok(app.get<HTMLButtonElement>("previous-page").disabled);
+    status = 200;
+    await act(async () => app.get("update-notice").querySelector("button")!.click());
+    const latest = app.requests.at(-1)!;
+    assert.equal(latest.searchParams.get("page"), "1");
+    assert.equal(latest.searchParams.get("sort"), "student");
+    assert.equal(latest.searchParams.has("version"), false);
+    assert.equal(app.dom.window.location.search, "?course_key=come2201&sort=student");
+    assert.equal(app.dom.window.document.querySelector('[data-testid="update-notice"]'), null);
+
+    status = 403;
+    await act(async () => app.get<HTMLButtonElement>("refresh-results").click());
+    assert.ok(app.get("auth-entry"));
+    assert.equal(app.dom.window.document.querySelector('[data-testid="result-row"]'), null);
+    assert.equal(app.dom.window.document.querySelector('[data-testid="last-success"]'), null);
+  } finally { await app.dispose(); }
+});
+
+test("React: a conflict while opening the next page does not present the previous page as confirmed", async () => {
+  const app = await mount("", url => url.searchParams.get("page") === "1"
+    ? Response.json({ ...sampleResults, total: 24 })
+    : Response.json({ error: { code: "result_set_changed" } }, { status: 409 }));
+  try {
+    assert.ok(app.get("result-row"));
+    await act(async () => app.get<HTMLButtonElement>("next-page").click());
+    assert.equal(app.requests.at(-1)!.searchParams.get("version"), sampleResults.version);
+    assert.equal(app.dom.window.location.search, "?course_key=come2201&page=2");
+    assert.equal(app.dom.window.document.querySelector('[data-testid="result-row"]'), null);
+    assert.match(app.get("last-success").textContent!, /아직 확인되지 않음/);
+    assert.doesNotMatch(app.get("update-notice").textContent!, /읽는 중인 결과를 유지/);
+    await act(async () => app.get("update-notice").querySelector("button")!.click());
+    assert.equal(app.dom.window.location.search, "?course_key=come2201");
+    assert.ok(app.get("result-row"));
+  } finally { await app.dispose(); }
+});
 
 test("React: compact instructor controls retain labels, scoped requests, score semantics and explicit loading", async () => {
   const app = await mount();

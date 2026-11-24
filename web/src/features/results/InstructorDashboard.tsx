@@ -31,7 +31,6 @@ export function InstructorDashboard() {
   const [changed, setChanged] = useState(false);
   const [automatic, setAutomatic] = useState(true);
   const [paused, setPaused] = useState(false);
-  const [lastSuccess, setLastSuccess] = useState("");
   const [bootEpoch, setBootEpoch] = useState(0);
   const [refreshEpoch, setRefreshEpoch] = useState(0);
   const studentSearch = useRef<HTMLInputElement>(null);
@@ -40,6 +39,7 @@ export function InstructorDashboard() {
   const pollControl = useRef<() => void>(() => {});
   const viewKey = JSON.stringify([course, query]);
   const visibleData = data?.key === viewKey ? data.value : null;
+  const lastSuccess = visibleData?.server_time || "";
 
   // Reauthenticate after history restoration: do not redisplay a previous user's data.
   useEffect(() => {
@@ -53,7 +53,7 @@ export function InstructorDashboard() {
     const controller = new AbortController(); let alive = true;
     let timedOut = false;
     const timeout = setTimeout(() => { timedOut = true; controller.abort(); }, 15000);
-    setBooting(true); setLoading(true); setError(null); setData(null); setIdentity(null); setLastSuccess("");
+    setBooting(true); setLoading(true); setError(null); setData(null); setIdentity(null);
     version.current = null;
     const params = new URLSearchParams(window.location.search); const initial = parseQuery(params);
     setQuery(initial); setStudentInput(initial.student); setCourse(params.get("course_key") || "");
@@ -79,7 +79,8 @@ export function InstructorDashboard() {
     if (version.current?.scope !== scope) version.current = null;
     let alive = true; let inFlight = false; let stopped = false; let failures = 0;
     let controller: AbortController | null = null; let timer: ReturnType<typeof setTimeout> | undefined;
-    setChanged(false); setError(null); setLoading(true); setData(null); setLastSuccess("");
+    setChanged(false); setError(null); setLoading(true);
+    setData(previous => previous?.key === viewKey ? previous : null);
     const available = () => document.visibilityState !== "hidden" && navigator.onLine;
     const schedule = () => { if (alive && !stopped && automaticRef.current && available()) timer = setTimeout(load, pollDelay(failures)); };
     const load = async () => {
@@ -90,16 +91,16 @@ export function InstructorDashboard() {
         const response = await results(course, query, current.signal, version.current?.scope === scope ? version.current.value : undefined);
         if (!alive || current.signal.aborted) return;
         if (response.course_key !== course || response.page !== query.page) throw new ContractError();
-        const oldVersion = version.current?.value; version.current = { scope, value: response.version };
-        setData(previous => previous?.key === viewKey && oldVersion === response.version ? previous : { key: viewKey, value: response });
-        setLastSuccess(response.server_time); setError(null); failures = 0;
+        version.current = { scope, value: response.version };
+        setData({ key: viewKey, value: response });
+        setError(null); failures = 0;
       } catch (err) {
         if (!alive || (current.signal.aborted && !timedOut)) return;
         if (err instanceof ApiError && err.code === "result_set_changed") {
           stopped = true; setChanged(true); setError(null);
         } else {
           const next = failure(err); setError(next); failures++;
-          if (next.terminal) { stopped = true; setData(null); setIdentity(null); setLastSuccess(""); version.current = null; }
+          if (next.terminal) { stopped = true; setData(null); setIdentity(null); version.current = null; }
         }
       } finally {
         clearTimeout(timeout); inFlight = false;
@@ -120,11 +121,12 @@ export function InstructorDashboard() {
   }, [identity, course, query, refreshEpoch, viewKey]);
 
   function changeCourse(key: string) {
-    version.current = null; setData(null); setLastSuccess(""); setError(null); setCourse(key); setQuery(defaultQuery); setStudentInput("");
+    version.current = null; setData(null); setError(null); setCourse(key); setQuery(defaultQuery); setStudentInput("");
   }
   function changeFilters(patch: Partial<ResultsQuery>) { setQuery(q => ({ ...q, ...patch, page: 1 })); }
   function resetFilters() { setQuery(defaultQuery); setStudentInput(""); studentSearch.current?.focus(); }
-  function refresh() { version.current = null; setData(null); setChanged(false); setQuery(q => ({ ...q, page: 1 })); setRefreshEpoch(n => n + 1); }
+  function refresh() { setRefreshEpoch(n => n + 1); }
+  function applyLatest() { version.current = null; setQuery(q => ({ ...q, page: 1 })); }
   function search(event: FormEvent<HTMLFormElement>) { event.preventDefault(); changeFilters({ student: studentInput.trim() }); }
   const assignments = visibleData?.assignments || [];
   const unknownAssignment = query.assignment && !assignments.some(a => a.assignment_id === query.assignment);
@@ -321,7 +323,7 @@ export function InstructorDashboard() {
                       data-testid="refresh-results"
                       className={styles.secondary}
                       onClick={refresh}
-                      disabled={loading}
+                      disabled={loading || changed}
                     >
                       {loading ? "확인 중…" : "새로고침"}
                     </button>
@@ -331,8 +333,8 @@ export function InstructorDashboard() {
                 {changed && (
                   <div role="status" data-testid="update-notice" className={styles.notice}>
                     <strong>목록이 변경되었습니다.</strong>
-                    <span> 읽는 중인 결과를 유지했습니다. 최신 목록은 첫 페이지부터 다시 확인해 주세요.</span>
-                    <button type="button" onClick={refresh}>최신 결과 반영</button>
+                    <span> {visibleData && "읽는 중인 결과를 유지했습니다. "}최신 목록은 첫 페이지부터 다시 확인해 주세요.</span>
+                    <button type="button" onClick={applyLatest}>최신 결과 반영</button>
                   </div>
                 )}
 

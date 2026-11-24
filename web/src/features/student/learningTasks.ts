@@ -16,7 +16,11 @@ export function learningTasks(home: LearningHome, courses: Course[], now: number
       const item = {course, assignment, receipt, receiptOnly:!knownAssignments.has(assignment.assignment_id)};
       if (!receipt && entry.overview.latest_truncated) tasks.push({...item,category:"results",label:"제출 기록 추가 확인 필요",action:"제출 기록 확인",destination:"scores",priority:4});
       else if (state.tone === "error") tasks.push({...item,category:"results",label:state.label,action:"처리 상태 확인",destination:"scores",priority:0});
-      else if (state.scored) tasks.push({...item,category:"results",label:receipt!.score! < receipt!.max_score! ? "수정할 부분 확인" : "평가 완료",action:"평가 결과 보기",destination:"scores",priority:receipt!.score! < receipt!.max_score! ? 3 : 7});
+      else if (state.scored) {
+        const partial = receipt!.score! < receipt!.max_score!;
+        const label = receipt!.feedback_policy === "score_only" ? "총점만 공개" : partial ? "수정할 부분 확인" : "평가 완료";
+        tasks.push({...item,category:"results",label,action:"평가 결과 보기",destination:"scores",priority:partial ? 3 : 7});
+      }
       else if (receipt) tasks.push({...item,category:"pending",label:state.label,action:"채점 상태 보기",destination:"scores",priority:6});
       else if (due <= now) tasks.push({...item,category:"work",label:"미제출 · 마감됨",action:"과제 상태 확인",destination:"course",priority:5});
       else tasks.push({...item,category:"work",label:due - now <= 86400000 ? "24시간 이내 마감" : assignment.accepted_at ? "작성 중 · 공식 제출 전" : "아직 제출하지 않음",action:assignment.accepted_at ? "실습 이어가기" : "실습 시작하기",destination:"course",priority:due - now <= 86400000 ? 1 : 2});

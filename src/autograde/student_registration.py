@@ -69,6 +69,11 @@ class RegistrationError(ValueError):
         self.status = status
 
 
+class InvalidMembershipCode(RegistrationError):
+    def __init__(self):
+        super().__init__('코드와 학번을 확인하거나 새 코드를 요청하세요.', 403)
+
+
 def initialize(state):
     with state._write() as db:
         for statement in SCHEMA.split(';'):
@@ -295,11 +300,11 @@ class StudentRegistration:
 
     def _token(self, db, key, token, purpose):
         if not isinstance(token, str) or not 16 <= len(token) <= 128:
-            raise RegistrationError('코드와 학번을 확인하거나 새 코드를 요청하세요.', 403)
+            raise InvalidMembershipCode()
         row = db.execute('SELECT t.* FROM student_membership_tokens t JOIN admin_courses c ON c.course_key=t.course_key WHERE token_hash=? AND student_key=? AND purpose=? AND used_at IS NULL AND expires_at>? AND c.status=\'active\'',
                          (hashlib.sha256(token.encode()).hexdigest(), key, purpose, time.time())).fetchone()
         if not row:
-            raise RegistrationError('코드와 학번을 확인하거나 새 코드를 요청하세요.', 403)
+            raise InvalidMembershipCode()
         eligible = db.execute('SELECT 1 FROM student_course_eligibility WHERE course_key=? AND student_key=?', (row['course_key'],key)).fetchone()
         enrolled = db.execute('SELECT 1 FROM platform_enrollments e JOIN platform_students s ON s.id=e.student_id WHERE e.course_key=? AND s.student_key=? AND e.active=1 AND s.active=1', (row['course_key'],key)).fetchone()
         if not (eligible or enrolled):

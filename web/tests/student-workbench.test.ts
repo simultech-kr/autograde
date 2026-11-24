@@ -112,6 +112,18 @@ test("React: queued latest result cannot show previous feedback or provisional s
   try{const card=app.document.querySelector('[data-score-assignment="a1"]')!;assert.match(card.textContent!,/점수 미확정/);assert.match(card.textContent!,/9 \/ 10점/);assert.doesNotMatch(card.textContent!,/8 \/ 10점/);assert.equal(card.querySelector('[aria-controls^="feedback-"]'),null);}finally{await app.dispose();}
 });
 
+test("React: score-only publication shows its scope without a feedback request", async () => {
+  const value = data();
+  value.overview.latest[0].feedback_policy = "score_only";
+  const app = await mount("StudentScores", value, async () => { throw new Error("unexpected detail request"); });
+  try {
+    const card = app.document.querySelector('[data-score-assignment="a1"]')!;
+    assert.match(card.textContent!, /총점만 공개/);
+    assert.match(card.textContent!, /3 \/ 10점/);
+    assert.equal(card.querySelector('button[aria-controls^="feedback-"]'), null);
+  } finally { await app.dispose(); }
+});
+
 test("React: a late feedback response cannot replace a newly queued submission",async()=>{
   let finish!:(value:Response)=>void;
   const app=await mount("StudentScores",data(),()=>new Promise<Response>(resolve=>{finish=resolve;}));

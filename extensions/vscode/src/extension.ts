@@ -682,6 +682,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     new ManagedExtensionsInstaller(sharedSession, environment, assignmentOperations, context.extension));
   managedExtensions.reconcile();
   const redeemAssignmentClaim = async (entered?: string, expectedServer?: string): Promise<void> => {
+    ensureSupportedWorkspacePlatform("수령 코드 입력 및 다운로드");
+    if (!sharedSession && !vscode.workspace.workspaceFolders?.length) {
+      if (entered !== undefined) throw new Error("수업 폴더가 닫혔습니다. 폴더를 다시 연 뒤 코드를 입력하세요. 코드는 아직 사용하지 않았습니다.");
+      await prepareClaimWorkspace(context.globalState);
+      return;
+    }
     const claimOrigin = transport.getBaseUrl();
     const claimGeneration = tokens.getSessionGeneration();
     const ensureClaimContext = (): void => {
@@ -692,21 +698,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     };
     ensureClaimContext();
     sharedSession?.assertCanAuthenticate();
-    studentMaterials.clear();
-    contentSync.clear();
-    examMode.clear();
-    ensureSupportedWorkspacePlatform("수령 코드 입력 및 다운로드");
     if (sharedSession) {
       await sharedSession.assertWorkspacePath(sharedSession.workspace);
       if (!(vscode.workspace.workspaceFolders ?? []).some(folder => path.resolve(folder.uri.fsPath) === sharedSession.initialWorkspace)) {
         throw new Error("공용 실습의 기본 작업 폴더가 닫혔습니다. IDE를 종료하고 실행기로 새 실습 세션을 시작하세요.");
       }
-    } else if (!await prepareClaimWorkspace(context.globalState)) throw new OperationCancelledError();
+    }
     ensureClaimContext();
     if (!vscode.workspace.isTrusted) {
       throw new Error("수령 코드로 파일을 받으려면 현재 workspace를 신뢰해야 합니다.");
     }
     if (entered === undefined) { learningHome.show("claim"); return; }
+    studentMaterials.clear();
+    contentSync.clear();
+    examMode.clear();
     const operation = assignmentClaims.redeem(entered);
     entered = undefined;
     if (!await operation) throw new OperationCancelledError();
@@ -985,7 +990,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     treeProvider.clear();
   });
   // Restore navigation only after a requested folder transition, never stored authentication.
-  void runCommand(() => resumeClaimWorkspace(context.globalState, () => learningHome.show()));
+  void runCommand(() => resumeClaimWorkspace(context.globalState, form => learningHome.show(form)));
   if (vscode.env.appName.startsWith("Autograde IDE") && !sharedSession?.authenticationUsed
     && discoveryMachineSetting<boolean>("discovery.enabled") && !vscode.env.remoteName && !process.env.WSL_DISTRO_NAME) {
     const autoSearch = setTimeout(() => { void runCommand(async () => { await serverDiscovery?.search(); }); }, 500);

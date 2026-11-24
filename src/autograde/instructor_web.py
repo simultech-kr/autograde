@@ -1147,9 +1147,10 @@ class InstructorWeb:
 
     def _assignment_bulk_preview(self, course, form, session):
         """Review exact server-validated targets without changing their state."""
+        context = assignment_catalog_context(form)
         ids = []
         for name in form:
-            if name in {'csrf', 'action'}:
+            if name in {'csrf', 'action', 'q', 'visibility', 'page'}:
                 continue
             if (not isinstance(name, str) or not name.startswith('selected_') or
                     _value(form, name) != 'yes'):
@@ -1179,14 +1180,15 @@ class InstructorWeb:
         body += result_table(('선택한 과제', '현재 상태', '학생 현황'), rows, f'일괄 {label} 대상 {preview["count"]}건')
         body += '<p class="hint">확인은 10분 동안 유효합니다. 과제 상태나 수락·제출 현황이 바뀌면 전체 처리를 중단하므로 목록에서 다시 확인하세요. 표시된 현황은 확인 시점 기준입니다.</p>'
         fields = f'<input type="hidden" name="ticket" value="{_e(ticket)}">'
+        fields += _assignment_context_fields(context)
         fields += _checkbox('confirm', f'위 {preview["count"]}개 과제를 일괄 {label}하며 기존 제출 이력을 보존함을 확인했습니다.')
         fields += '<div class="actions">' + _button(f'일괄 {label} 실행', danger=True)
-        fields += f'<a class="button secondary" href="{base}/assignments">취소 · 과제 목록으로</a></div>'
+        fields += f'<a class="button secondary" href="{_e(assignment_catalog_url(base, context))}">취소 · 과제 목록으로</a></div>'
         return f'일괄 {label} 확인', body + self._form(base + '/assignments/bulk/apply', session, fields)
 
     def _assignment_bulk_apply(self, course, form, session):
         """Only the reviewed, signed selection may enter the atomic operation."""
-        if set(form) - {'csrf', 'ticket', 'confirm'} or _value(form, 'confirm') != 'yes':
+        if set(form) - {'csrf', 'ticket', 'confirm', 'q', 'visibility', 'page'} or _value(form, 'confirm') != 'yes':
             raise ValueError('선택한 과제와 변경 내용을 확인한 뒤 실행해 주세요.')
         ticket = _value(form, 'ticket')
         if not ticket or len(ticket) > 16384 or not ticket.isascii():
@@ -1200,15 +1202,17 @@ class InstructorWeb:
         result = self.assignments.apply_release_batch(course['course_key'], reviewed.get('action'),
             reviewed.get('assignment_ids'), reviewed.get('fingerprint'))
         base = self._base(course)
+        context = assignment_catalog_context(form)
+        list_url = assignment_catalog_url(base, context)
         if result['action'] == 'delete':
             # Refresh the ordinary catalog with a GET, never reopen deleted
             # rows or leave a destructive POST to be replayed on refresh.
-            return self._redirect(base + '/assignments')
+            return self._redirect(list_url if context.get('visibility') != 'deleted' else base + '/assignments')
         body = (f'<div class="notice" role="status"><strong>일괄 보관 완료</strong> · 선택 {result["count"]}개 중 '
                 f'{result["changed_count"]}개 변경, {result["unchanged_count"]}개는 기존 상태 유지.</div>'
                 '<p>제출 코드·점수·이력은 보존했습니다. 이미 접수된 채점 작업은 계속됩니다.</p>'
                 f'<div class="actions"><a class="button" href="{base}/assignments?visibility=inactive">보관 목록 확인</a>'
-                f'<a class="button secondary" href="{base}/assignments">과제 관리로</a></div>')
+                f'<a class="button secondary" href="{_e(list_url)}">과제 관리로</a></div>')
         return '일괄 보관 완료', body
 
     def _assignment_list(self, course, form, session):
@@ -1293,6 +1297,7 @@ class InstructorWeb:
         if selectable:
             body += f'<form method="post" action="{base}/assignments/bulk/preview" data-assignment-bulk>'
             body += f'<input type="hidden" name="csrf" value="{_e(session["csrf"])}">'
+            body += _assignment_context_fields(context if filtered or catalog['page'] > 1 else {})
             body += '<div class="catalog-result-summary">' + summary
             body += ('<div class="assignment-selection-tools">'
                      '<label data-assignment-selection-control hidden><input type="checkbox" data-assignment-select-all> 현재 페이지 전체 선택</label>'

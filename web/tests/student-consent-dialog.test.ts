@@ -28,6 +28,15 @@ test("overview only accepts the signed-in student's unique, consistent course ch
   }
 });
 
+test("unregistered term or section still identifies legacy offerings unambiguously", () => {
+  const rows = [consent(), consent("unanswered", 0, "come3105")].map(row => ({
+    ...row, course_name: "실습 설계", code: "design", section: "", year: null, semester: null,
+  }));
+  const parsed = parsePrivacyOverview(overview(rows), student);
+  assert.deepEqual(parsed.consents.map(row => row.course_context), ["design · 수업 키 come2201", "design · 수업 키 come3105"]);
+  assert.equal(parsePrivacyOverview(overview(), student).consents[0].course_context, course);
+});
+
 type Props = {studentKey: string; sessionKey: string; visible: boolean; settings: boolean; preferredCourse?: string; onOpenSettings: () => void; onMutationStart?: () => void; onMutationEnd?: () => void};
 function loadComponent(): ComponentType<Props> {
   const require = createRequire(import.meta.url), modules = new Map<string, {exports: unknown}>();
@@ -116,6 +125,41 @@ test("answering one prompt does not imply consent for other courses or open back
     await app.click("동의하지 않습니다"); assert.equal(app.dialog(), null); assert.equal(rows[0].decision, "unanswered");
     await app.render({visible: false}); await app.render({visible: true}); assert.equal(app.dialog(), null);
     await app.render({settings: true}); assert.match(app.document.body.textContent!, /소프트웨어 설계/); assert.match(app.document.body.textContent!, /아직 선택하지 않음/);
+  } finally {await app.dispose();}
+});
+
+test("same-title offerings identify the selected section in the prompt, receipt, settings and history", async () => {
+  const rows = [consent(), consent("unanswered", 0, "come3105")].map((row, index) => ({
+    ...row, course_name: "실습 설계", code: "design", year: 2026, semester: "summer", section: index === 0 ? "01" : "02",
+  }));
+  const app = await mount(async (url, options) => {
+    if (url.endsWith("/dismiss")) return Response.json({ok: true, result: {dismissed: true}});
+    if (options?.method === "POST") {
+      assert.equal(url, "/student/api/course/come3105/privacy");
+      const next = consent("declined", 1, "come3105");
+      rows[1] = {...rows[1], decision: next.decision, revision: next.revision, updated_at: next.updated_at, history: next.history};
+      return Response.json({ok: true, result: next});
+    }
+    return Response.json(overview(rows));
+  });
+  try {
+    const select = app.dialog()!.querySelector("select")!;
+    assert.deepEqual(Array.from(select.options, option => option.textContent), [
+      "실습 설계 · 2026학년도 여름학기 · 01분반 · design", "실습 설계 · 2026학년도 여름학기 · 02분반 · design",
+    ]);
+    await act(async () => {
+      select.value = "come3105";
+      select.dispatchEvent(new app.document.defaultView!.Event("change", {bubbles: true}));
+    });
+    assert.match(app.dialog()!.querySelector("small")!.textContent!, /여름학기 · 02분반 · design/);
+    await app.click("동의하지 않습니다");
+    assert.match(app.document.querySelector('[role="status"]')!.textContent!, /실습 설계 · 2026학년도 여름학기 · 02분반 · design/);
+    await app.render({settings: true});
+    const choices = app.document.querySelectorAll('[aria-label="정보 활용을 설정할 수업"] button');
+    assert.match(choices[0].textContent!, /01분반.*아직 선택하지 않음/);
+    assert.match(choices[1].textContent!, /02분반.*동의하지 않음/);
+    assert.equal(choices[1].getAttribute("aria-pressed"), "true");
+    assert.match(app.document.querySelector("article")!.textContent!, /02분반[\s\S]*내 선택 변경 이력/);
   } finally {await app.dispose();}
 });
 

@@ -1,16 +1,19 @@
 import {useState} from "react";
 import {courseMeta, timeText, scoreText, type Course, type LearningHome} from "./model";
+import {useStudentListHistory} from "./useStudentListHistory";
 import {learningTasks} from "./learningTasks";
 import s from "./student.module.css";
 import h from "./learningHome.module.css";
 
 type Destination = "catalog" | "account" | "privacy" | "course" | "scores" | "materials";
-export function StudentHome({courses, verified, busy, navigate, refresh, withdraw, courseLogin = false, home = null, homeLoading = false, homeError = "", refreshHome = refresh, now = Date.now()}: {
+export function StudentHome({courses, verified, busy, navigate, refresh, withdraw, courseLogin = false, home = null, homeLoading = false, homeError = "", refreshHome = refresh, now = Date.now(), navigationScope}: {
+  navigationScope?: string;
   courses: Course[]; verified: boolean; busy: boolean; courseLogin?: boolean;
   home?: LearningHome | null; homeLoading?: boolean; homeError?: string; refreshHome?: () => void; now?:number;
   navigate: (view: Destination, course?: string, assignment?:string) => void; refresh: () => void; withdraw: (course: string) => void;
 }) {
-  const [filter, setFilter] = useState("all"), [expanded, setExpanded] = useState(false);
+  const {option: filter, choose: setFilter} = useStudentListHistory(navigationScope, "home", ["all", "work", "pending", "results"]);
+  const [expanded, setExpanded] = useState(false);
   const learning = courses.filter(course => course.enrolled), tasks = home ? learningTasks(home, courses, now) : [];
   const selected = tasks.filter(task => filter === "all" || task.category === filter), displayed = expanded ? selected : selected.slice(0, 6);
   const incomplete = home?.courses_truncated || home?.courses.some(item => item.overview.assignments_truncated || item.overview.latest_truncated);

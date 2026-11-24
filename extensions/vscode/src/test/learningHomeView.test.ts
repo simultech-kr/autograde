@@ -118,6 +118,35 @@ test("claim and address actions focus inline fields without invoking commands or
   view.dispose();
 });
 
+test("ordinary empty windows open the folder before accepting any code; managed sessions keep their workspace", async () => {
+  let state: LearningHomeState = {...ready, hasWorkspace: false, authenticated: false};
+  let claims = 0;
+  const view = new LearningHomeView(() => state, {...noCallbacks, claim: async () => { claims++; }});
+  view.show();
+  assert.match(panel.webview.html, /data-action="prepareWorkspace" class="primary">수업 폴더 열기/);
+  assert.doesNotMatch(panel.webview.html, /id="claim-code"/);
+  await handler(form("claim", "test-code"));
+  assert.equal(claims, 0);
+  const start = calls.length;
+  await handler(action("prepareWorkspace"));
+  assert.deepEqual(calls.slice(start), [["autograde.redeemAssignmentClaim"]]);
+  state = {...state, hasWorkspace: true};
+  view.refresh();
+  assert.doesNotMatch(panel.webview.html, /data-action="prepareWorkspace"/);
+  await handler(form("claim", "test-code"));
+  assert.equal(claims, 1);
+  const stale = form("claim", "old-folder-code");
+  state = {...state, hasWorkspace: false};
+  await handler(stale);
+  assert.equal(claims, 1);
+  state = {...state, hasWorkspace: true, sharedSession: true};
+  view.refresh();
+  assert.match(panel.webview.html, /id="claim-code"/);
+  await handler(action("prepareWorkspace"));
+  assert.equal(calls.length, start + 1);
+  view.dispose();
+});
+
 test("input edits defer noncritical refresh and focus switches, and apply it when cleared", async () => {
   let state = ready;
   const view = new LearningHomeView(() => state, noCallbacks); view.show();

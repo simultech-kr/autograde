@@ -13,7 +13,6 @@ let selection: { toString(): string }[] | undefined;
 let prompts: unknown[][] = [];
 let opened: unknown[][] = [];
 let fails = false;
-let duringPrompt: (() => void) | undefined;
 let beforeCommand: (() => void) | undefined;
 const stub = {
   workspace: {
@@ -22,7 +21,7 @@ const stub = {
     get isTrusted() { return trusted; },
   },
   window: {
-    showInformationMessage: async (...args: unknown[]) => { prompts.push(args); duringPrompt?.(); return action; },
+    showInformationMessage: async (...args: unknown[]) => { prompts.push(args); return action; },
     showOpenDialog: async () => selection,
   },
   commands: {
@@ -52,7 +51,7 @@ class State implements MementoLike {
 function uri(value = "file:///course") { return { toString: () => value }; }
 function reset() {
   folders = undefined; workspaceFile = undefined; trusted = true; action = undefined; selection = undefined;
-  prompts = []; opened = []; fails = false; duringPrompt = undefined; beforeCommand = undefined;
+  prompts = []; opened = []; fails = false; beforeCommand = undefined;
 }
 function pending(state: State, targetUri = "file:///course", createdAt = Date.now()) {
   state.value = { targetUri, createdAt };
@@ -139,18 +138,15 @@ test("a valid remote folder URI is matched without changing its authority", asyn
   assert.equal(await consumePendingClaimWorkspace(state), true);
 });
 
-test("resuming shows the learning home but requires an explicit action before claim input", async () => {
-  reset(); const state = new State(); pending(state); folders = [{ uri: uri() }]; let homes = 0;
-  assert.equal(await resumeClaimWorkspace(state, () => { homes += 1; }), true);
-  assert.equal(homes, 1); assert.equal(prompts.length, 1); assert.deepEqual(opened, []);
-  assert.equal(await resumeClaimWorkspace(state, () => { homes += 1; }), false);
-  assert.equal(homes, 1); assert.equal(prompts.length, 1);
-});
-
-test("explicit continuation dispatches only the existing claim command with no credentials", async () => {
-  reset(); const state = new State(); pending(state); folders = [{ uri: uri() }]; action = "수령 코드 입력";
-  await resumeClaimWorkspace(state, () => undefined);
-  assert.deepEqual(opened, [["autograde.redeemAssignmentClaim"]]); assert.equal(state.value, undefined);
+test("a prepared folder focuses an empty claim input once without authenticating", async () => {
+  reset(); const state = new State(); pending(state); folders = [{ uri: uri() }];
+  const focused: ("claim" | undefined)[] = [];
+  const show = (form?: "claim") => { focused.push(form); };
+  assert.equal(await resumeClaimWorkspace(state, show), true);
+  assert.equal(await resumeClaimWorkspace(state, show), false);
+  assert.deepEqual(focused, ["claim"]);
+  assert.deepEqual(prompts, []);
+  assert.deepEqual(opened, []);
 });
 
 test("untrusted continuation offers guidance only and does not expose a claim action", async () => {
@@ -161,11 +157,18 @@ test("untrusted continuation offers guidance only and does not expose a claim ac
   assert.match(String(prompts[0]?.[0]), /신뢰/); assert.deepEqual(opened, []); assert.equal(state.value, undefined);
 });
 
-test("trust and exact folder are rechecked after the continuation prompt", async () => {
-  for (const changed of [() => { trusted = false; }, () => { folders = [{ uri: uri("file:///other") }]; }]) {
-    reset(); const state = new State(); pending(state); folders = [{ uri: uri() }]; action = "수령 코드 입력";
-    duringPrompt = changed;
-    await resumeClaimWorkspace(state, () => undefined);
+test("folder identity and trust are checked after consuming the continuation", async () => {
+  for (const changed of ["folder", "trust"]) {
+    reset(); const state = new State(); pending(state); folders = [{ uri: uri() }];
+    const update = state.update.bind(state);
+    state.update = async (key, value) => {
+      await update(key, value);
+      if (changed === "folder") folders = [{ uri: uri("file:///other") }];
+      else trusted = false;
+    };
+    const focused: ("claim" | undefined)[] = [];
+    assert.equal(await resumeClaimWorkspace(state, form => focused.push(form)), changed === "trust");
+    assert.deepEqual(focused, changed === "trust" ? [undefined] : []);
     assert.deepEqual(opened, []);
   }
 });

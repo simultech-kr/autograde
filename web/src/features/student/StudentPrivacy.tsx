@@ -110,8 +110,8 @@ export function StudentPrivacy({studentKey, sessionKey, visible, settings, prefe
     try {
       const next = parsePrivacy(await studentRequest(coursePath(row.course_key) + "/privacy", {csrf: snapshot.csrf, decision, policy_version: row.policy.version, revision: String(row.revision)}, controller.signal), row.course_key, studentKey);
       if (mounted.current && current === generation.current) {
-        setData({...snapshot, consents: snapshot.consents.map(item => item.course_key === row.course_key ? {...next, course_name: item.course_name, prompt_dismissed: item.prompt_dismissed} : item)});
-        setNotice(`${row.course_name}: ${decision === "granted" ? "정보 활용에 동의했습니다." : "정보 활용에 동의하지 않는 것으로 저장했습니다."}`);
+        setData({...snapshot, consents: snapshot.consents.map(item => item.course_key === row.course_key ? {...item, ...next} : item)});
+        setNotice(`${row.course_name} · ${row.course_context} — ${decision === "granted" ? "정보 활용에 동의했습니다." : "정보 활용에 동의하지 않는 것으로 저장했습니다."}`);
         if (fromPrompt) closeReminder();
       }
     } catch (error) {
@@ -141,8 +141,8 @@ export function StudentPrivacy({studentKey, sessionKey, visible, settings, prefe
       {busy && <p role="status">{mutating.current ? "선택을 저장하고 있습니다…" : "내 설정을 불러오고 있습니다…"}</p>}
       {data && !data.consents.length && <div className={s.empty}><h3>연결된 수업이 생기면 여기서 선택할 수 있어요.</h3><p>수강 등록과 명단 연결이 완료된 수업의 설정을 모아서 보여드립니다.</p></div>}
       {data && data.consents.length > 0 && <div className={p.settingsLayout}>
-        <div className={p.courseList} aria-label="정보 활용을 설정할 수업">{data.consents.map(row => <button key={row.course_key} className={p.courseChoice} aria-pressed={current?.course_key === row.course_key} onClick={() => {setSelected(row.course_key); setNotice("");}}><span>{row.course_name}</span><small>{row.course_key}</small><span className={p.status} data-choice={row.decision}>{labels[row.decision]}</span></button>)}</div>
-        {current && <article className={p.detail}><div className={p.detailHeading}><div><p className={s.eyebrow}>{current.course_key}</p><h3>{current.course_name}</h3></div><span className={p.status} data-choice={current.decision}>{labels[current.decision]}</span></div>
+        <div className={p.courseList} aria-label="정보 활용을 설정할 수업">{data.consents.map(row => <button key={row.course_key} className={p.courseChoice} disabled={busy} aria-pressed={current?.course_key === row.course_key} onClick={() => {setSelected(row.course_key); setNotice("");}}><span>{row.course_name}</span><small>{row.course_context}</small><span className={p.status} data-choice={row.decision}>{labels[row.decision]}</span></button>)}</div>
+        {current && <article className={p.detail}><div className={p.detailHeading}><div><h3>{current.course_name}</h3><p className={s.muted}>{current.course_context}</p></div><span className={p.status} data-choice={current.decision}>{labels[current.decision]}</span></div>
           <Explanation /><PolicyDetails policy={current.policy} />
           <div className={p.decision}><h4>이 수업에서의 내 선택</h4><p>{current.decision === "granted" ? "연구와 수업 개선을 위한 정보 활용에 동의한 상태입니다." : current.decision === "declined" ? "이 수업의 연구용 집계에서 내 정보를 제외합니다." : "아직 선택하지 않았습니다. 선택 전에는 연구용 집계에 포함하지 않습니다."}</p>{choices(current)}{current.updated_at && <p className={s.muted}>마지막 변경 {timeText(current.updated_at)} KST</p>}</div>
           {current.history.length > 0 && <details className={p.policy}><summary>내 선택 변경 이력 · 최근 20건</summary><ol className={p.history}>{current.history.map((row, index) => <li key={index}><strong>{labels[row.decision]}</strong><span>{timeText(row.created_at)} KST · 안내 {row.policy_version}</span></li>)}</ol></details>}
@@ -154,7 +154,11 @@ export function StudentPrivacy({studentKey, sessionKey, visible, settings, prefe
     {prompt && <ConsentDialog onClose={closeReminder}>
       <div className={p.dialogHeading}><div><p className={s.eyebrow}>선택 안내</p><h2 id="research-dialog-heading" data-dialog-heading tabIndex={-1}>함께 더 나은 수업을 만들어요</h2></div><button className={p.close} aria-label="나중에 선택하고 닫기" onClick={closeReminder}>×</button></div>
       <p id="research-dialog-description" className={p.dialogDescription}>연구·수업 개선을 위한 선택적 정보 활용에 대해 알려드려요.</p>
-      <div className={p.promptCourse}>{eligible.length > 1 ? <label>이번에 선택할 수업<select value={prompt.course_key} onChange={event => setSelected(event.target.value)}>{eligible.map(row => <option key={row.course_key} value={row.course_key}>{row.course_name}</option>)}</select></label> : <><span className={s.eyebrow}>선택 대상 수업</span><strong>{prompt.course_name}</strong><small>{prompt.course_key}</small></>}</div>
+      <div className={p.promptCourse}>{eligible.length > 1 ? <>
+        <label>이번에 선택할 수업<select value={prompt.course_key} disabled={busy} onChange={event => setSelected(event.target.value)}>
+          {eligible.map(row => <option key={row.course_key} value={row.course_key}>{row.course_name} · {row.course_context}</option>)}
+        </select></label><small>{prompt.course_context}</small>
+      </> : <><span className={s.eyebrow}>선택 대상 수업</span><strong>{prompt.course_name}</strong><small>{prompt.course_context}</small></>}</div>
       <Explanation /><PolicyDetails policy={prompt.policy} />{choices(prompt, true)}
       {busy && <p role="status">선택을 저장하고 있습니다…</p>}
       <div className={p.dialogFooter}><button className={s.quiet} onClick={closeReminder}>나중에 선택</button><button className={s.quiet} onClick={() => {closeReminder(); onOpenSettings();}}>모든 수업의 설정 보기</button></div>

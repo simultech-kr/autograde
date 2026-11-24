@@ -1,4 +1,4 @@
-import {StudentContractError, unwrap, courseKey} from "./model.ts";
+import {StudentContractError, unwrap, courseKey, courseMeta} from "./model.ts";
 
 export type PrivacyChoice = "granted" | "declined" | "unanswered";
 export type PrivacyData = {
@@ -7,7 +7,7 @@ export type PrivacyData = {
   policy: Record<"version" | "title" | "purpose" | "items" | "retention" | "choice" | "withdrawal" | "scope" | "contact", string>;
   history: {decision: "granted" | "declined"; policy_version: string; created_at: string}[];
 };
-export type PrivacyCourse = PrivacyData & {course_name: string; prompt_dismissed: boolean};
+export type PrivacyCourse = PrivacyData & {course_name: string; course_context: string; prompt_dismissed: boolean};
 export type PrivacyOverview = {student_key: string; csrf: string; policy: PrivacyData["policy"]; consents: PrivacyCourse[]};
 const obj = (value: unknown): Record<string, unknown> => {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new StudentContractError();
@@ -49,7 +49,22 @@ export function parsePrivacyOverview(value: unknown, student: string): PrivacyOv
     const parsed = parsePrivacy({ok: true, result: {...row, policy: row.policy ?? parsedPolicy}}, course, student);
     if (Object.keys(parsedPolicy).some(key => parsed.policy[key as keyof typeof parsedPolicy] !== parsedPolicy[key as keyof typeof parsedPolicy])) throw new StudentContractError();
     if (row.prompt_dismissed !== undefined && typeof row.prompt_dismissed !== "boolean") throw new StudentContractError();
-    return {...parsed, course_name: str(row.course_name), prompt_dismissed: row.prompt_dismissed === true};
+    const year = row.year;
+    if (year != null && (typeof year !== "number" || !Number.isSafeInteger(year))) throw new StudentContractError();
+    const semester = str(row.semester ?? ""), section = str(row.section ?? ""), code = str(row.code ?? course) || course;
+    const period = year || semester || section ? courseMeta({year: year ?? undefined, semester, section}) : "";
+    const context = [period, code].filter(Boolean).join(" · ");
+    return {...parsed, course_name: str(row.course_name), course_context: context, prompt_dismissed: row.prompt_dismissed === true};
   });
+  // Legacy offerings can share a name and code without a term or section.
+  const labels = new Set<string>(), duplicates = new Set<string>();
+  for (const row of consents) {
+    const label = `${row.course_name} · ${row.course_context}`;
+    if (labels.has(label)) duplicates.add(label);
+    labels.add(label);
+  }
+  for (const row of consents) {
+    if (duplicates.has(`${row.course_name} · ${row.course_context}`)) row.course_context += ` · 수업 키 ${row.course_key}`;
+  }
   return {student_key: student, csrf: body.csrf, policy: parsedPolicy, consents};
 }

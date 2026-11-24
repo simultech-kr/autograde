@@ -88,6 +88,7 @@ export function refreshPresentation(state: {
   if (state.changed) return { tone: "warning", label: "새 결과 반영 필요" };
   if (state.failed) return { tone: "error", label: state.lastSuccess ? "조회 실패 · 마지막 확인 결과 표시" : "조회 실패 · 결과 확인 필요" };
   if (state.paused) return { tone: "neutral", label: "자동 확인 일시 정지" };
+  if (state.loading && state.lastSuccess) return { tone: "info", label: "새로 확인 중 · 마지막 확인 결과 표시" };
   if (!state.automatic) return { tone: "neutral", label: "수동 확인 모드" };
   if (!state.lastSuccess) return { tone: "info", label: state.loading ? "첫 결과 확인 중" : "서버 응답 확인 대기" };
   return { tone: "info", label: "자동 확인 켜짐" };

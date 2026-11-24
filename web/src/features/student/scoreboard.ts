@@ -22,3 +22,20 @@ export function scoreRowState(row: ScoreRow, now = Date.now()) {
     hint: "조회 범위를 초과하여 제출 여부를 확정할 수 없습니다. IDE에서 해당 과제의 제출 이력을 확인하세요."} : !row.receipt && row.due_at && Date.parse(row.due_at) <= now
     ? {scored:false,tone:"warning",stage:-1,label:"미제출 · 마감됨",hint:"제출 마감이 지났습니다. 추가 제출이 필요한 경우 교수자에게 문의하세요."} : submissionState(row.receipt);
 }
+
+export function visibleCourseAssignments(overview: CourseData["overview"], filter: string, now: number) {
+  const latest = new Map(overview.latest.map(receipt => [receipt.assignment_id, receipt]));
+  return overview.assignments.map(assignment => {
+    const receipt = latest.get(assignment.assignment_id);
+    const state = scoreRowState({...assignment, receipt, missingIsUnknown: overview.latest_truncated && !receipt}, now);
+    return {assignment, receipt, state};
+  }).filter(({receipt, state}) => {
+    switch (filter) {
+      case "open": return !receipt && !overview.latest_truncated;
+      case "pending": return Boolean(receipt) && state.tone === "info";
+      case "attention": return state.tone === "warning" || state.tone === "error";
+      case "completed": return state.scored;
+      default: return true;
+    }
+  });
+}

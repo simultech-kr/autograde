@@ -1,12 +1,13 @@
 "use client";
 import {useEffect, useRef, useState} from "react";
 import {timeText, type CourseData} from "./model";
+import {maxSearchLength, useStudentListHistory} from "./useStudentListHistory";
 import {fetchMaterial, fileSize, type MaterialItem} from "./workbench.ts";
 import s from "./student.module.css";
 import w from "./workbench.module.css";
 
-export function StudentMaterials({data, onRefresh}: {data: CourseData; onRefresh?: () => void}) {
-  const [query, setQuery] = useState(""), [format, setFormat] = useState("all");
+export function StudentMaterials({data, onRefresh, navigationScope}: {navigationScope?: string; data: CourseData; onRefresh?: () => void}) {
+  const {option: format, choose: setFormat, query, search: setQuery} = useStudentListHistory(navigationScope, "materials/" + data.course.course_key, ["all", "pdf", "zip"], data.csrf);
   const [busy, setBusy] = useState(""), [message, setMessage] = useState(""), [error, setError] = useState("");
   const controller = useRef<AbortController | null>(null), active = useRef(true), urls = useRef(new Set<string>());
   const context = `${data.student_key}:${data.csrf}:${data.course.course_key}`;
@@ -40,7 +41,7 @@ export function StudentMaterials({data, onRefresh}: {data: CourseData; onRefresh
   return <section aria-labelledby="student-materials-heading">
     <div className={s.sectionHeading}><div><h2 id="student-materials-heading">받을 자료</h2><p className={s.muted}>본인에게 배정된 자료와 수업 공통 자료입니다. 수령 코드 없이 바로 받을 수 있습니다.</p></div>{catalog && <span className={s.badge}>{catalog.items.length}개</span>}</div>
     {!catalog ? <div className={s.empty}><h3>자료 목록을 불러오지 못했습니다</h3><p>새로고침해 주세요. 계속되면 교수자에게 서버 업데이트 상태를 확인해 주세요.</p>{onRefresh && <button className={s.secondary} onClick={onRefresh}>자료 목록 새로고침</button>}</div> : <>
-      {catalog.items.length > 0 && <div className={w.filters}><label>자료 검색<input type="search" placeholder="자료명 또는 파일명" value={query} onChange={event=>setQuery(event.target.value)} /></label><label>파일 형식<select value={format} onChange={event=>setFormat(event.target.value)}><option value="all">모든 파일</option><option value="pdf">PDF</option><option value="zip">ZIP</option></select></label></div>}
+      {catalog.items.length > 0 && <div className={w.filters}><label>자료 검색<input type="search" maxLength={maxSearchLength} placeholder="자료명 또는 파일명" value={query} onChange={event=>setQuery(event.target.value)} /></label><label>파일 형식<select value={format} onChange={event=>setFormat(event.target.value)}><option value="all">모든 파일</option><option value="pdf">PDF</option><option value="zip">ZIP</option></select></label></div>}
       {error && <div className={s.error} role="alert"><p>{error}</p>{onRefresh && <button className={s.secondary} onClick={onRefresh}>자료 목록 새로고침</button>}</div>}
       {message && <p className={s.notice} role="status">{message}</p>}
       {!rows.length && <div className={s.empty}><h3>{catalog.items.length ? "검색한 자료가 없습니다" : "아직 배정된 자료가 없습니다"}</h3><p>{catalog.items.length ? "자료명이나 파일 형식을 바꿔 보세요." : "교수자가 자료를 배포하면 이곳에 표시됩니다."}</p></div>}

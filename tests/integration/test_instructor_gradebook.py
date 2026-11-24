@@ -208,6 +208,38 @@ def test_new_upload_is_private_and_selected_preview_excludes_private_values(grad
     assert browser.web.gradebook.review('come2201', entry['draft_id'])['status'] == 'draft'
 
 
+@pytest.mark.parametrize('columns', ['', 'unknown'])
+def test_empty_student_preview_returns_to_column_selection_without_showing_rows(gradebook, columns):
+    browser, *_ = gradebook
+    path, entry = upload(browser)
+    options = {'view': 'student', 'columns': columns}
+    preview = review_page(browser, path, **options)
+    assert preview.status == 200 and '공개할 항목을 한 개 이상 선택하세요' in preview.body
+    assert 'second student' not in preview.body and '교수자 메모' not in preview.body
+    assert f'href="{path}#gradebook-columns"' in preview.body
+    assert path + '/publish' not in preview.body
+    cell = review_page(browser, path, **options, cell='3:column_5')
+    assert cell.status == 404 and 'second student' not in cell.body
+    assert browser.web.gradebook.review('come2201', entry['draft_id'])['status'] == 'draft'
+
+
+def test_reopening_student_preview_after_publication_keeps_private_fields_out_of_view(gradebook):
+    browser, *_ = gradebook
+    path, entry = upload(browser)
+    # Another tab publishes a different selection while this preview remains open.
+    options = {'view': 'student', 'columns': 'column_2,column_5'}
+    assert 'second student' in review_page(browser, path, **options).body
+    assert browser.post(path + '/publish', **publish_fields(entry, ['column_2'])).status == 303
+    expired = review_page(browser, path, **options)
+    assert expired.status == 200 and '학생 공개 중' in expired.body
+    assert 'second student' not in expired.body and '교수자 메모' not in expired.body
+    assert f'href="{path}">교수자 성적표 검토 열기</a>' in expired.body
+    assert path + '/publish' not in expired.body
+    cell = review_page(browser, path, **options, cell='3:column_5')
+    assert cell.status == 404 and 'second student' not in cell.body
+    assert 'second student' in browser.get(path).body
+
+
 def test_all_rows_can_be_reviewed_and_filters_have_empty_recovery(gradebook):
     browser, *_ = gradebook
     rows = [['학번', '점수', '내부메모']] + [[f'{index:05d}', index, f'private-{index}'] for index in range(1, 251)]

@@ -6,10 +6,10 @@ No browser storage or IDE bearer token is used for the web session.
 from datetime import datetime, timezone, timedelta
 import json
 
-from .platform_auth import InvalidSignedValue, new_api_token, sign_browser_value, verify_browser_value
+from .platform_auth import InvalidSignedValue, new_api_token, secret_digest, sign_browser_value, verify_browser_value
 from .platform_service import PlatformResponse
 from .platform_state import PlatformAccessDenied, PlatformNotFound
-from .student_registration import RegistrationError, confirm_password
+from .student_registration import InvalidMembershipCode, RegistrationError, confirm_password
 
 PREFIX = '/student/api/'
 ACTIONS = {'bootstrap', 'register', 'login', 'logout', 'enroll', 'withdraw', 'password', 'reset', 'activate'}
@@ -46,6 +46,7 @@ def payload(members, cookies):
     now = datetime.now(timezone.utc)
     return {
         'authenticated': True, 'auth_method': session.auth_method, 'csrf': session.csrf,
+        'navigation_scope': secret_digest(members.portal.secret, 'student-view-history', session.csrf),
         'server_time': now.isoformat(),
         'expires_at': (now + timedelta(seconds=max(0, session.expires - members.portal.clock()))).isoformat(),
         'student': {'student_key': account['student_key'], 'verified': bool(account['verified'])},
@@ -53,7 +54,30 @@ def payload(members, cookies):
     }
 
 
-def bootstrap(members, cookies, *, message='', extra_cookies=()):
+def _enrollment_message(result, course_keys):
+    if not result['authenticated']:
+        return '다시 로그인한 뒤 내 수업에서 수강 신청 상태를 확인하세요.'
+    requested = set(course_keys)
+    courses = [course for course in result['courses'] if course['course_key'] in requested]
+    connected = sum(course['enrolled'] for course in courses)
+    pending = sum(course['status'] == 'pending' for course in courses)
+    if connected == len(requested):
+        return f'신청한 수업 {connected}개가 연결되었습니다. 내 수업에서 바로 열 수 있습니다.'
+    parts = ['수강 신청을 접수했습니다.']
+    if connected:
+        parts.append(f'{connected}개 수업은 내 수업에서 바로 열 수 있습니다.')
+    if pending:
+        if result['student']['verified']:
+            parts.append(f'{pending}개 수업은 교수자 명단 확인을 기다리고 있습니다.')
+        else:
+            parts.append(f'{pending}개 수업은 계정 활성화 대기 중입니다. 내 계정에서 본인 확인 코드를 입력하세요.')
+    remaining = len(requested) - connected - pending
+    if remaining:
+        parts.append(f'{remaining}개 수업은 수강 상태를 다시 확인하세요.')
+    return ' '.join(parts)
+
+
+def bootstrap(members, cookies, *, message='', extra_cookies=(), enrollment_keys=()):
     from .student_registration_web import ENTRY_COOKIE
     try:
         result = payload(members, cookies)
@@ -64,6 +88,8 @@ def bootstrap(members, cookies, *, message='', extra_cookies=()):
         result = {'authenticated': False, 'csrf': csrf, 'expires_at': None, 'server_time': datetime.now(timezone.utc).isoformat(), 'student': None,
                   'courses': [], 'api_base_url': members.portal.api_url}
         response_cookies = (*extra_cookies, members.cookie(entry, name=ENTRY_COOKIE))
+    if enrollment_keys:
+        message = _enrollment_message(result, enrollment_keys)
     if message:
         result['message'] = message
     return _json({'ok': True, 'result': result}, cookies=response_cookies)
@@ -148,7 +174,7 @@ def request(members, method, path, form, cookies, origin):
             if not isinstance(courses, list) or any(not isinstance(key, str) or key not in members.portal.services for key in courses):
                 raise RegistrationError('신청할 수 있는 수업을 확인하세요.')
             members.store.request_courses(account, courses)
-            return bootstrap(members, cookies, message='수강 신청을 접수했습니다. 본인 확인과 교수자 명단 확인이 완료되면 수업을 이용할 수 있습니다.')
+            return bootstrap(members, cookies, enrollment_keys=courses)
         if action == 'withdraw':
             members.store.withdraw_course(account, form['course_key'])
             return bootstrap(members, cookies, message='확인 대기 중인 수강 신청을 취소했습니다.')
@@ -167,4 +193,7 @@ def request(members, method, path, form, cookies, origin):
         status = getattr(exc, 'status', 401 if isinstance(exc, PlatformAccessDenied) else 403 if isinstance(exc, InvalidSignedValue) else 404)
         code = 'login_required' if status == 401 else 'rate_limited' if status == 429 else 'membership_conflict' if status == 409 else 'invalid_request'
         message = str(exc) if isinstance(exc, RegistrationError) else '로그인 또는 수강 상태를 확인하고 다시 시도하세요.'
+        if action == 'activate' and isinstance(exc, InvalidMembershipCode):
+            code = 'invalid_activation_code'
+            message = '교수자가 제공한 활성화 코드를 다시 입력하세요. 계속 사용할 수 없으면 교수자에게 새 코드를 요청하세요.'
         return _json({'ok': False, 'error': {'code': code, 'message': message}}, status=status)

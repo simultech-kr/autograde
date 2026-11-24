@@ -1,6 +1,8 @@
 # Documentation
 
 - [공통 UX 설계·개발 지침](../design/portal-ux-guidelines.md), [기능별 UX 검토 양식](../design/templates/ux-design-review.md): 교수자·학생·관리자, 웹·IDE·실습실과 SES 모듈의 공통 기준. 설계 목표와 구현·시험 상태를 구분해 사용한다.
+- [공통 UX 적용 결과와 재검증 시나리오](testing/common-ux-review-2026-11-20.md)에서 성적표 공개 미리보기, 결과 갱신, 수강 신청, 과제 일괄 관리의 변경 근거를 확인할 수 있다.
+- [학생 관점 사용성 평가](testing/student-usability-2026-11-22.md)에서 첫 로그인부터 과제 수령·피드백 확인까지의 관찰 결과와 개선 우선순위를 확인할 수 있다.
 
 - [기관·클라우드 설치 스크립트](operations/deployment-installers.md): Ubuntu·macOS·Windows/WSL2 실행기, SSH Ubuntu 배포, HTTPS·내부 DNS 설정, 개인 관리자 초기화·실행·점검·백업.
 

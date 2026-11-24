@@ -40,25 +40,18 @@ export async function consumePendingClaimWorkspace(storage: MementoLike, now = D
 }
 
 /** Restore the next visible step after openFolder restarts the old extension host. */
-export async function resumeClaimWorkspace(storage: MementoLike, showLearningHome: () => void): Promise<boolean> {
+export async function resumeClaimWorkspace(storage: MementoLike, showLearningHome: (form?: "claim") => void): Promise<boolean> {
   const targetUri = vscode.workspace.workspaceFolders?.[0]?.uri.toString();
-  if (!await consumePendingClaimWorkspace(storage)) return false;
-  showLearningHome();
+  if (!await consumePendingClaimWorkspace(storage) || !targetUri || !matchesClaimWorkspace(targetUri)) return false;
   if (!vscode.workspace.isTrusted) {
+    showLearningHome();
     await vscode.window.showInformationMessage(
       "수업 폴더가 열렸습니다. 폴더를 신뢰한 뒤 학습 홈의 ‘수령 코드로 연결 · 과제 받기’에서 계속하세요. 코드는 아직 사용하지 않았습니다.",
     );
     return true;
   }
-  const enterCode = "수령 코드 입력";
-  const chosen = await vscode.window.showInformationMessage(
-    "수업 폴더가 준비되었습니다. 학생 웹에서 받은 수령 코드를 입력해 과제를 받으세요. 코드는 아직 사용하지 않았습니다.",
-    enterCode,
-  );
-  // Explicit confirmation is required; never authenticate merely because a folder was opened.
-  if (chosen === enterCode && vscode.workspace.isTrusted && targetUri && matchesClaimWorkspace(targetUri)) {
-    await vscode.commands.executeCommand("autograde.redeemAssignmentClaim");
-  }
+  // Focus the input only. Authentication still requires the student to enter and submit the code.
+  showLearningHome("claim");
   return true;
 }
 
