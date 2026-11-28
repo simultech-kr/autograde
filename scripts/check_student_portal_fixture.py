@@ -35,6 +35,19 @@ def seed(fixture, *, auth_method='member', scenario='basic'):
     if auth_method == 'member':
         fixture.portal.members.store.register('20260001', STUDENT_PASSWORD, credential=credential)
     fixture.portal.members.store.upload_eligibility('come3105', b'student_key\n20260001\n')
+    if scenario == 'priorities':
+        if auth_method != 'member':
+            raise ValueError('Student priorities fixture requires member authentication')
+        data = seed_workbench(fixture)
+        members = fixture.portal.members.store
+        for key, section in [(pilot.COURSE, '01'), (pilot.OTHER_COURSE, '02')]:
+            fixture.courses.update_course(key, name='실습 설계', year=2026, semester='2', section=section)
+        members.request_courses(members.account(STUDENT_KEY), [pilot.OTHER_COURSE])
+        fresh = '20269991'
+        members.upload_eligibility(pilot.COURSE, f'student_key\n{fresh}\n'.encode())
+        activation = members.issue_token(pilot.COURSE, fresh, 'activate', actor='synthetic teacher',
+                                         reason='synthetic identity check')
+        return {**data, 'fresh_student': fresh, 'fresh_token': activation['token']}
     if scenario == 'workbench':
         return seed_workbench(fixture)
     assignment = fixture.assignment(0)
@@ -153,7 +166,7 @@ def main():
     parser.add_argument('--port', type=int, default=18186)
     parser.add_argument('--next-port', type=int, default=18185)
     parser.add_argument('--auth-method', choices=('member', 'course'), default='member')
-    parser.add_argument('--scenario', choices=('basic', 'workbench'), default='basic')
+    parser.add_argument('--scenario', choices=('basic', 'workbench', 'priorities'), default='basic')
     options = parser.parse_args()
     if not 1024 <= options.port <= 65535 or not 1024 <= options.next_port <= 65535:
         parser.error('loopback ports must be 1024..65535')

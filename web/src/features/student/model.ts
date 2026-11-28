@@ -1,3 +1,5 @@
+import {portalTime} from "../../lib/portalTime.ts";
+import {courseTerm, sectionLabel} from "../../lib/courseLabel.ts";
 import {parseMaterialCatalog, type MaterialCatalog} from "./workbench.ts";
 
 export type Course = {
@@ -11,7 +13,7 @@ export type Bootstrap = {
   navigation_scope?: string;
   student: { student_key: string; verified: boolean } | null; courses: Course[]; api_base_url: string; message?: string;
 };
-export type Assignment = { assignment_id: string; assignment_key: string; title: string; opens_at: string | null; due_at: string | null; accepted_at: string | null };
+export type Assignment = { title_context?: string; assignment_id: string; assignment_key: string; title: string; opens_at: string | null; due_at: string | null; accepted_at: string | null };
 export type Receipt = {
   submission_id: string; assignment_id: string; title: string; assignment_key: string; received_at: string;
   state: string; code_version: string; score: number | null; max_score: number | null; published_at: string | null; version: number;
@@ -122,7 +124,8 @@ function receipt(value: unknown): Receipt {
 }
 function assignment(value: unknown): Assignment {
   const item = object(value);
-  return {assignment_id: identifier(item.assignment_id), assignment_key: str(item.assignment_key), title: str(item.title), opens_at: dateOrNull(item.opens_at), due_at: dateOrNull(item.due_at), accepted_at: dateOrNull(item.accepted_at)};
+  return {assignment_id: identifier(item.assignment_id), assignment_key: str(item.assignment_key), title: str(item.title),
+    ...(item.title_context ? {title_context: str(item.title_context, 512)} : {}), opens_at: dateOrNull(item.opens_at), due_at: dateOrNull(item.due_at), accepted_at: dateOrNull(item.accepted_at)};
 }
 export function parseLearningHome(value: unknown, expectedStudent: string, allowedCourses: string[]): LearningHome {
   const body = object(unwrap(value)), seen = new Set<string>();
@@ -173,7 +176,7 @@ export function submissionState(row?: Pick<Receipt, "state" | "score" | "max_sco
   const failed: Record<string, string> = { rejected: "제출 확인 필요", infra_failed: "서버 처리 오류", assessment_failed: "채점 설정 확인 필요", failed: "처리 오류" };
   if (failed[row.state]) return { ...unscored, tone: "error", label: failed[row.state], hint: "접수번호와 함께 교수자에게 확인을 요청하세요. 이전 점수는 이번 제출의 결과가 아닙니다." };
   const stage = ["received", "accepted"].includes(row.state) ? 0 : row.state === "queued" ? 1 : row.state === "running" ? 2 : -1;
-  if (stage >= 0) return { ...unscored, stage, label: stages[stage], hint: "현재 제출의 채점이 끝나면 점수가 표시됩니다. 다시 제출할 필요 없이 결과를 확인하세요." };
+  if (stage >= 0) return { ...unscored, stage, label: stages[stage], hint: "이 제출을 처리하고 있습니다. 결과가 공개되면 점수를 확인할 수 있습니다." };
   if (row.state === "graded" || row.state === "result_pending") return { ...unscored, stage: 3, label: stages[3],
     hint: "교수자가 결과를 공개한 뒤 다시 확인하세요. 다시 제출할 필요는 없습니다." };
   if (row.state === "published" && row.published_at && validScore(row.score, row.max_score)) return { scored: true, tone: row.score! < row.max_score! ? "warning" : "success", stage: 4,
@@ -186,13 +189,9 @@ export function validScore(score: number | null | undefined, maximum: number | n
 export function scoreText(score: number | null | undefined, maximum: number | null | undefined): string {
   return validScore(score, maximum) ? `${score!.toLocaleString("ko-KR", { maximumFractionDigits: 20 })} / ${maximum!.toLocaleString("ko-KR", { maximumFractionDigits: 20 })}점` : "—";
 }
-export function timeText(value: string | null | undefined): string {
-  if (!value || !Number.isFinite(Date.parse(value))) return "—";
-  return new Intl.DateTimeFormat("ko-KR", { timeZone: "Asia/Seoul", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(value));
-}
+export const timeText = portalTime;
 export function courseMeta(course: Partial<Course>): string {
-  const semester = course.semester === "summer" ? "여름학기" : course.semester === "winter" ? "겨울학기" : course.semester && `${course.semester}학기`;
-  return [course.term || [course.year && `${course.year}학년도`, semester].filter(Boolean).join(" "), course.section && `${course.section}분반`].filter(Boolean).join(" · ") || "학기·분반 정보 미등록";
+  return [courseTerm(course), sectionLabel(course.section)].filter(Boolean).join(" · ") || "학기·분반 정보 미등록";
 }
 export function remainingSeconds(expires: string | null, now: number): number { return expires ? Math.max(0, Math.ceil((Date.parse(expires) - now) / 1000)) : 0; }
 export class RequestVersion { private version = 0; next() { return ++this.version; } current(version: number) { return this.version === version; } }

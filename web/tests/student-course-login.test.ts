@@ -74,7 +74,7 @@ async function mount(initiallyAuthenticated=false, query="", catalog?: {courses:
   const root=createRoot(dom.window.document.getElementById("root")!);
   await act(async()=>root.render(createElement(loadPortal())));
   return {document:dom.window.document,requests,
-    async click(label:string){const button=Array.from(dom.window.document.querySelectorAll("button")).find(node=>node.textContent?.trim()===label);assert.ok(button,`button ${label}`);await act(async()=>button.click());},
+    async click(label:string){const button=Array.from(dom.window.document.querySelectorAll<HTMLElement>("a, button")).find(node=>node.textContent?.trim()===label);assert.ok(button,`button ${label}`);await act(async()=>button.click());},
     async changeAuthentication(method:string){authMethod=method;await act(async()=>{dom.window.dispatchEvent(new dom.window.Event("focus"));});},
     async dispose(){await act(async()=>root.unmount());dom.window.close();for(const [name,descriptor] of originals){if(descriptor)Object.defineProperty(globalThis,name,descriptor);else Reflect.deleteProperty(globalThis,name);}}
   };
@@ -94,7 +94,7 @@ test("React: six-digit course password logs in without signup and retains claims
     assert.equal(password.value,"");
     assert.equal(app.requests.filter(request=>request.url==="/student/api/login").length,1);
     assert.equal(app.requests.some(request=>request.url==="/student/api/register"),false);
-    const buttons=Array.from(app.document.querySelectorAll("button")).map(button=>button.textContent?.trim());
+    const buttons=Array.from(app.document.querySelectorAll("button, a")).map(button=>button.textContent?.trim());
     for(const blocked of ["수강 선택","수업 추가","계정 활성화","신청 취소"]) assert.equal(buttons.includes(blocked),false);
     assert.match(app.document.body.textContent!,/지금 확인할 실습/);
     assert.equal(app.requests.filter(request=>request.url==="/student/api/home").length,1);
@@ -159,7 +159,7 @@ test("React: same student changing authentication source cannot inherit a prior 
     await app.changeAuthentication("member");
     assert.equal(app.document.querySelector('[aria-label="발급한 수령 코드"]'),null);
     assert.equal(app.requests.filter(request=>request.url.endsWith("/claims")).length,1);
-    assert.ok(Array.from(app.document.querySelectorAll("button")).some(button=>button.textContent?.trim()==="수강 선택"));
+    assert.ok(Array.from(app.document.querySelectorAll("a")).some(link=>link.textContent?.trim()==="수강 선택"));
   } finally {await app.dispose();}
 });
 
@@ -376,6 +376,22 @@ test("React: student home and gradebook choices survive Back; an explicit result
   } finally {await app.dispose();}
 });
 
+test("React: an instructor gradebook link opens the exam tab after login and can switch back to practice", async () => {
+  const app = await mount(false, `?course_key=${courseKey}&view=scores&tab=gradebook`);
+  try {
+    const currentTab = () => app.document.querySelector('[aria-label="성적 종류"] [aria-pressed=true]')?.textContent;
+    assert.equal(currentTab(), undefined);
+    const form = app.document.querySelector("form")!;
+    form.querySelector<HTMLInputElement>('input[name="student_key"]')!.value = key;
+    form.querySelector<HTMLInputElement>('input[name="password"]')!.value = "123456";
+    await act(async () => form.requestSubmit());
+    assert.equal(currentTab(), "시험·출석 성적");
+    await app.click("실습 제출 결과");
+    assert.equal(currentTab(), "실습 제출 결과");
+    assert.equal(new URL(app.document.defaultView!.location.href).searchParams.has("tab"), false);
+  } finally { await app.dispose(); }
+});
+
 test("React: a material filter and sealed search resume only in the same course and session", async () => {
   const url = `?course_key=${courseKey}&view=materials`, query = "이름 20260001";
   let saved;
@@ -413,4 +429,74 @@ test("React: a material filter and sealed search resume only in the same course 
       assert.equal(app.document.querySelector("select")?.value, scenario === "reload" ? "pdf" : "all");
     } finally {await app.dispose();}
   }
+});
+
+test("student course links preserve section, current page and a direct parent on deep entry", async () => {
+  const context = {...course, section: "01분반", year: 2026, semester: "1"} as Course;
+  const app = await mount(true, "?course_key=come2201&view=scores", {courses: [context, {...context, course_key: "another", year: 2027, semester: "summer"}]});
+  try {
+    const {document} = app;
+    const location = () => document.querySelector('nav[aria-label="현재 위치"]')!;
+    const parent = () => document.querySelector<HTMLAnchorElement>("a[data-parent-link]")!;
+    const courseMenu = () => document.querySelector('nav[aria-label="수업 메뉴"]')!;
+    const home = document.querySelector('nav[aria-label="학생 메뉴"] a[aria-current=location]')!;
+    assert.equal(home.textContent, "내 수업");
+    assert.equal(courseMenu().querySelector('a[aria-current=page]')?.textContent, "내 점수");
+    assert.equal(location().querySelector('[aria-current=page]')?.textContent, "내 점수");
+    const labels = Array.from(document.querySelectorAll<HTMLSelectElement>('select[aria-label="현재 수업"] option'), option => option.textContent);
+    assert.ok(labels.includes("설계 실습 · 2026학년도 1학기 · 01분반 · COME2201"));
+    assert.ok(labels.includes("설계 실습 · 2027학년도 여름학기 · 01분반 · COME2201"));
+    assert.match(location().textContent!, /설계 실습 · 2026학년도 1학기 · 01분반 · COME2201/);
+    assert.doesNotMatch(document.body.textContent!, /분반분반/);
+    assert.equal(parent().getAttribute("href"), "/app/student?course_key=come2201");
+    const link = courseMenu().querySelector<HTMLAnchorElement>('a[href$="view=materials"]')!;
+    const win = document.defaultView!;
+    let preservedNativeClick = false;
+    win.addEventListener("click", event => {preservedNativeClick = !event.defaultPrevented; event.preventDefault();}, {once: true});
+    link.dispatchEvent(new win.MouseEvent("click", {bubbles: true, cancelable: true, ctrlKey: true}));
+    assert.ok(preservedNativeClick, "modified clicks can open a separate tab");
+    assert.equal(location().querySelector('[aria-current=page]')?.textContent, "내 점수");
+    await act(async () => link.click());
+    assert.equal(location().querySelector('[aria-current=page]')?.textContent, "학습 자료");
+    assert.equal(courseMenu().querySelector('a[aria-current=page]')?.textContent, "학습 자료");
+    await act(async () => parent().click());
+    assert.equal(courseMenu().querySelector('a[aria-current=page]')?.textContent, "실습 과제");
+    assert.equal(parent().getAttribute("href"), "/app/student");
+    assert.equal(win.location.search, "?course_key=come2201");
+    assert.equal(app.requests.some(request => request.url.includes("/another")), false);
+  } finally {await app.dispose();}
+});
+
+test("a same-name assignment keeps its distinguishing label from selection through claim and result", async () => {
+  const tokenLabel = "마감 2035-04-03 13:50 KST · 과제 구분 assignment_01";
+  function twoAssignments() {
+    const data = courseResult();
+    const first = {...data.result.overview.assignments[0], due_at: "2035-04-03T04:50:00Z", title_context: tokenLabel};
+    const second = {...first, assignment_id: "assignment_02", title_context: "마감 2035-04-03 13:50 KST · 과제 구분 assignment_02"};
+    return {...data, result: {...data.result, overview: {...data.result.overview, assignments: [first, second]}}};
+  }
+  const app = await mount(true, `?course_key=${courseKey}`, undefined, twoAssignments);
+  try {
+    const card = app.document.querySelector<HTMLElement>('[data-assignment="assignment_01"]')!;
+    const issue = [...card.querySelectorAll("button")].find(button => button.textContent === "수령 코드 발급")!;
+    assert.equal(app.document.getElementById(issue.getAttribute("aria-describedby")!)?.textContent, tokenLabel);
+    let finish!: () => void;
+    const hold = new Promise<void>(resolve => {finish = resolve;});
+    const fetch = globalThis.fetch;
+    globalThis.fetch = async (...args) => {
+      if (String(args[0]).endsWith("/claims")) await hold;
+      return fetch(...args);
+    };
+    await act(async () => issue.click());
+    assert.equal(issue.textContent, "수령 코드 발급 중…");
+    assert.equal(issue.getAttribute("aria-busy"), "true");
+    assert.equal(app.document.querySelectorAll('button[aria-busy="true"]').length, 1);
+    await act(async () => {finish();});
+    const granted = app.document.querySelector('section[aria-label="과제 수령 코드"]')!;
+    assert.ok(granted.textContent?.includes(tokenLabel));
+    assert.ok(!granted.textContent?.includes("assignment_02"));
+    await app.click("평가 결과 보기");
+    const score = app.document.querySelector('[data-score-assignment="assignment_01"]')!;
+    assert.ok(score.textContent?.includes(tokenLabel));
+  } finally { await app.dispose(); }
 });

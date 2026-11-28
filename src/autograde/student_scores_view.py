@@ -1,13 +1,12 @@
 """Student score summary over an already authenticated, public-only projection."""
 from html import escape
-import math
+from .submission_presentation import valid_score
 
 
 def _scored(row):
     score, maximum = row.get('score'), row.get('max_score')
     return (row.get('state') == 'published' and bool(row.get('published_at'))
-            and type(score) in (int, float) and type(maximum) in (int, float)
-            and math.isfinite(score) and math.isfinite(maximum) and 0 <= score <= maximum and maximum > 0)
+            and valid_score(score, maximum))
 
 
 def render(overview, score_text, states):

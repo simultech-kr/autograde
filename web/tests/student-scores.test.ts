@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {scoreRows, scoreRowState} from "../src/features/student/scoreboard.ts";
+import {scoreRows, scoreRowState, visibleCourseAssignments} from "../src/features/student/scoreboard.ts";
 import type {CourseData, Receipt} from "../src/features/student/model.ts";
 
 const row: Receipt = {assignment_id: "a1", assignment_key: "p1", title: "Practice", submission_id: "s2", received_at: "2026-11-01T01:00:00Z", state: "queued", code_version: "c".repeat(64), score: null, max_score: null, published_at: null, version: 2, previous_best_id: "s1", previous_best_score: 9, previous_best_max_score: 10};
@@ -41,4 +41,14 @@ test("latest receipts outside the bounded assignment page remain visible once", 
   assert.deepEqual(rows.map(item => item.assignment_id), ["a2", "a1"]);
   assert.equal(rows[1].receipt?.submission_id, "s2");
   assert.deepEqual(scoreRows({...data, assignments: [], latest: []}), []);
+});
+
+test("assignment filters distinguish active grading, provisional scores, and publication", () => {
+  const data = overview();
+  const visible = (filter: string) => visibleCourseAssignments(data, filter, Date.now()).map(item => item.assignment.assignment_id);
+  for (const [state, expected] of [["queued", "pending"], ["graded", "awaiting_publication"], ["published", "completed"]]) {
+    data.latest[0] = {...row, state, score: 0, max_score: 10, published_at: state === "published" ? row.received_at : null};
+    for (const filter of ["pending", "awaiting_publication", "completed"])
+      assert.deepEqual(visible(filter), filter === expected ? ["a1"] : []);
+  }
 });

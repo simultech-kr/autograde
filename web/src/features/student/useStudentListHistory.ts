@@ -33,9 +33,9 @@ async function searchKey(csrf: string) {
 
 // The parent remounts these controls on navigation or session change. Only
 // the server's non-credential session tag and public enum are saved in clear.
-export function useStudentListHistory<T extends string>(scope: string | undefined, page: string, choices: readonly T[], csrf = "") {
+export function useStudentListHistory<T extends string>(scope: string | undefined, page: string, choices: readonly T[], {csrf = "", initialOption}: {csrf?: string; initialOption?: T} = {}) {
   const entry = read(scope, page);
-  const [option, setOption] = useState<T>(() => choices.includes(entry?.option as T) ? entry!.option as T : choices[0]);
+  const [option, setOption] = useState<T>(() => initialOption ?? (choices.includes(entry?.option as T) ? entry!.option as T : choices[0]));
   const [query, setQuery] = useState(() => entry?.queryId ? tabSearches.get(cacheKey(entry)) || "" : "");
 
   useEffect(() => {

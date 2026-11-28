@@ -25,12 +25,12 @@ input,
 select,
 textarea {
   font: inherit;
-  font-size: 1rem;
+  font-size: var(--field-text-size);
 }
 
 button,
 .button {
-  min-height: 44px;
+  min-height: var(--control-target);
   padding: 10px var(--space-4);
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
@@ -44,7 +44,7 @@ button,
 input,
 select,
 textarea {
-  min-height: 44px;
+  min-height: var(--control-target);
   min-width: 0;
   max-width: 100%;
   padding: 9px var(--space-3);

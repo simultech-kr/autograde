@@ -7,7 +7,7 @@ import s from "./student.module.css";
 import w from "./workbench.module.css";
 
 export function StudentMaterials({data, onRefresh, navigationScope}: {navigationScope?: string; data: CourseData; onRefresh?: () => void}) {
-  const {option: format, choose: setFormat, query, search: setQuery} = useStudentListHistory(navigationScope, "materials/" + data.course.course_key, ["all", "pdf", "zip"], data.csrf);
+  const {option: format, choose: setFormat, query, search: setQuery} = useStudentListHistory(navigationScope, "materials/" + data.course.course_key, ["all", "pdf", "zip"], {csrf:data.csrf});
   const [busy, setBusy] = useState(""), [message, setMessage] = useState(""), [error, setError] = useState("");
   const controller = useRef<AbortController | null>(null), active = useRef(true), urls = useRef(new Set<string>());
   const context = `${data.student_key}:${data.csrf}:${data.course.course_key}`;

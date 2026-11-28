@@ -1,0 +1,6 @@
+.locationRow { display:flex; align-items:center; flex-wrap:wrap; gap:0 16px; margin-bottom:8px; }
+.back { display:inline-flex; align-items:center; gap:8px; min-height:44px; overflow-wrap:anywhere; color:var(--link,var(--accent)); font-size:14px; text-decoration:none; }
+.breadcrumb { display:flex; align-items:center; flex-wrap:wrap; gap:8px; min-width:0; color:var(--muted); font-size:13px; }
+.breadcrumb a { color:var(--muted); min-height:44px; overflow-wrap:anywhere; display:inline-flex; align-items:center; }
+.breadcrumb [aria-current=page] { color:var(--text); font-weight:600; }
+.back:hover { text-decoration:underline; }

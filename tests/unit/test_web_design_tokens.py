@@ -58,7 +58,7 @@ def test_each_colour_role_is_defined_for_both_themes(token):
 def test_browser_base_has_accessible_controls_and_user_preferences():
     css = GLOBAL.read_text(encoding='utf-8')
     assert 'var(--control-border)' in css
-    assert 'min-height: 44px' in css
+    assert 'min-height: var(--control-target)' in css
     assert ':focus-visible' in css
     assert 'prefers-reduced-motion: reduce' in css
     assert 'forced-colors: active' in css

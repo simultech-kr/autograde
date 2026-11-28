@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Any, Iterator, List, Mapping, Optional, Sequence, Tuple, Union
 from urllib.parse import urlsplit
 
+from .submission_presentation import VALID_SCORE_SQL
 from .domain import DatetimeValue, git_oid, utc_iso
 from .download_diagnostics import SCHEMA as _DOWNLOAD_DIAGNOSTICS_SCHEMA
 from .assignment_documents import SCHEMA as _ASSIGNMENT_DOCUMENT_SCHEMA
@@ -6937,12 +6938,12 @@ class PlatformStateStore:
         """Caller must authorize the current submission first. Never disclose provisional grades."""
         with self._connection() as connection:
             row = connection.execute(
-                """SELECT p.submission_id, p.received_at, g.score, g.max_score
+                f"""SELECT p.submission_id, p.received_at, g.score, g.max_score
                    FROM bundle_submission_requests current
                    JOIN bundle_submission_requests p ON p.student_id=current.student_id
                      AND p.assignment_id=current.assignment_id
-                   JOIN bundle_submission_results g ON g.submission_id=p.submission_id
-                   WHERE current.submission_id=? AND p.state='published' AND g.published_at IS NOT NULL
+                   JOIN bundle_submission_results g ON g.submission_id=p.submission_id AND g.student_id=p.student_id
+                   WHERE {VALID_SCORE_SQL} AND current.submission_id=? AND p.state='published' AND g.published_at IS NOT NULL
                      AND (p.received_at < current.received_at OR
                           (p.received_at=current.received_at AND p.rowid < current.rowid))
                    ORDER BY g.score DESC, p.received_at DESC, p.rowid DESC LIMIT 1""",

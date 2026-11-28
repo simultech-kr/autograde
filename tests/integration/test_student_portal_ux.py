@@ -111,3 +111,14 @@ def test_export_student_browser_fixtures(portal, tmp_path):
                               data={'csrf': csrf(body), 'assignment_id': 'asn_come3105'})
     fixtures['claim'] = dict(html=body.decode(), csp=headers['Content-Security-Policy'])
     (tmp_path / 'student-browser-fixtures.json').write_text(json.dumps(fixtures), encoding='utf-8')
+
+
+def test_course_login_identifies_offering_without_repeating_section_suffix(portal):
+    from autograde.course_admin import CourseAdminService
+    web, _, services, facade, _ = portal
+    facade.courses = CourseAdminService(services['come2201'].state)
+    facade.courses.update_course('come2201', name='동명 실습', year=2026, semester='winter', section='01분반')
+    status, _, body = request(web, '/courses/come2201/login')
+    assert status == 200
+    assert '동명 실습 · 2026학년도 겨울학기 · 01분반 · come2201' in body.decode()
+    assert '분반분반' not in body.decode()

@@ -9,10 +9,12 @@ import threading
 import time
 from typing import Any, Mapping
 
+from .course_labels import course_location_label
 from .platform_auth import InvalidSignedValue, new_api_token, secret_digest, sign_browser_value, verify_browser_value
 from .platform_service import PlatformAPIError, PlatformResponse, StudentPlatformService
 from .platform_state import PlatformNotFound, utc_iso
 from .web_theme import THEME_CSS
+from .assignment_choice import add_choice_contexts
 from .student_browser import SCRIPT_TAG
 from .student_portal_view import STYLE, claim_body, deadline, urgency, navigation, role_landing, course_chooser
 
@@ -337,11 +339,7 @@ class CoursePortal:
     def _course_label(self, course):
         if self.courses is None:
             return course
-        details = self.courses.get_course(course)
-        period = {'1': '1학기', '2': '2학기', 'summer': '여름학기', 'winter': '겨울학기'}.get(details['semester'], '')
-        return ' · '.join(str(value) for value in (
-            details['code'], details['name'], details['year'], period,
-            details['section'] + '분반' if details['section'] else '분반 미설정') if value)
+        return course_location_label(self.courses.get_course(course))
 
     def _session(self, course, cookies):
         if self.members:
@@ -393,10 +391,14 @@ class CoursePortal:
                      f'<form data-assignment-picker method="post" action="/courses/{course}/claims">'
                      f'<input type="hidden" name="csrf" value="{session.csrf}">'
                      '<fieldset aria-describedby="assignment-help"><legend>수락할 실습 선택 (필수)</legend>')
-            for assignment in available:
+            choices = [dict(assignment_id=item.assignment_id, title=item.title, due_at=item.due_at) for item in available]
+            add_choice_contexts(choices)
+            for assignment, choice in zip(available, choices):
+                context = choice.get('title_context')
+                name = assignment.title + (' · ' + context if context else '')
                 body += ('<label class="assignment-choice">'
                          f'<input type="radio" name="assignment_id" value="{html.escape(assignment.assignment_id, quote=True)}" required>'
-                         f'<span><strong>{html.escape(assignment.title)}</strong>'
+                         f'<span><strong>{html.escape(name)}</strong>'
                          f'<small>마감: {html.escape(deadline(assignment.due_at))}</small>'
                          f'{urgency(assignment.due_at, now)}</span></label>')
             body += ('</fieldset><div class="claim-action"><p data-selected-assignment aria-live="polite">실습을 하나 선택하세요</p>'

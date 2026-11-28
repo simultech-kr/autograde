@@ -33,7 +33,7 @@ button, .button {
   background: var(--accent);
   color: var(--on-accent);
   border-radius: var(--radius-sm);
-  min-height: 44px;
+  min-height: var(--control-target);
   line-height: 1.4;
   font-weight: 600;
   text-align: center;
@@ -185,6 +185,10 @@ main[data-audience=student] {
   box-shadow: none;
   background: var(--surface);
   color: var(--text);
+}
+main[data-audience=student] :is(input:not([type=checkbox]):not([type=radio]),select,textarea) {
+  font-size: var(--field-text-size);
+  min-height: var(--control-target);
 }
 main[data-audience=student] > .student-brand {
   display: inline-block;

@@ -2,6 +2,8 @@
 from datetime import datetime, timedelta, timezone
 from html import escape
 
+from .assignment_choice import due_label
+
 KST = timezone(timedelta(hours=9))
 
 
@@ -150,6 +152,8 @@ def claim_body(course_label, assignment, code, api_url, expires_at, course, *, m
             f'<p><a href="/courses/{e(course, quote=True)}">다시 인증하여 새 코드 받기</a></p>')
     return (
         f'<p>{e(course_label)} · <strong>{e(assignment.title)}</strong></p>'
+        f'<p>{e(due_label(assignment.due_at))}</p>'
+        f'<details><summary>과제 구분 확인</summary><p>{e(assignment.assignment_id)}</p></details>'
         '<p class="progress-hint">다음 단계: 실습 PC의 Autograde 확장에 코드를 입력하세요.</p>'
         f'<div class="code-box"><div id="claim-code"><code>{e(code)}</code></div>'
         '<button type="button" data-copy-target="claim-code" data-copy-label="수령 코드" hidden>수령 코드 복사</button></div>'

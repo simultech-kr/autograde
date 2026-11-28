@@ -5,7 +5,9 @@ The SQL never selects private grader diagnostics, source paths or provisional gr
 """
 import hmac
 
+from .assignment_choice import choice_context
 from .platform_state import PlatformAccessDenied, utc_iso
+from .submission_presentation import VALID_SCORE_SQL
 
 
 def validate_credential(db, credential):
@@ -54,6 +56,7 @@ def submission_overview(state, credential, *, limit=100, include_history=True):
               AND a.course_key=receipt.course_key
             LEFT JOIN bundle_submission_results g ON g.submission_id=r.submission_id
               AND g.student_id=r.student_id AND r.state='published' AND g.published_at IS NOT NULL
+              AND {VALID_SCORE_SQL}
             WHERE r.student_id=? AND a.course_key=? AND a.active=1 AND a.ready=1
               {deletion_guard}
           ), previous_best AS (
@@ -78,7 +81,10 @@ def submission_overview(state, credential, *, limit=100, include_history=True):
         # never mint a broad IDE token to read a student's course workspace.
         assignments = db.execute(f'''
             SELECT a.assignment_id, a.assignment_key, a.title, a.opens_at, a.due_at,
-                   MAX(accepted.accepted_at) AS accepted_at
+                   MAX(accepted.accepted_at) AS accepted_at,
+                   COUNT(*) OVER (PARTITION BY a.title COLLATE NOCASE) AS same_title,
+                   COUNT(*) OVER (PARTITION BY a.title COLLATE NOCASE,
+                                  substr(a.due_at,1,16)) AS same_minute
             FROM bundle_assignment_releases a
             LEFT JOIN platform_assignment_acceptances accepted
               ON accepted.assignment_id=a.assignment_id AND accepted.delivery_mode='bundle'
@@ -88,12 +94,20 @@ def submission_overview(state, credential, *, limit=100, include_history=True):
             GROUP BY a.assignment_id
             ORDER BY CASE WHEN a.due_at IS NULL THEN 1 ELSE 0 END, a.due_at, a.title, a.assignment_id
             LIMIT ?''', (credential.enrollment_id, credential.course_key, utc_iso(), limit + 1)).fetchall()
+    visible_assignments = []
+    for row in assignments[:limit]:
+        item = dict(row)
+        context = choice_context(item['due_at'], item['assignment_id'],
+            same_title=item.pop('same_title'), same_minute=item.pop('same_minute'))
+        if context:
+            item['title_context'] = context
+        visible_assignments.append(item)
     return {
         'latest': [dict(row) for row in latest[:limit]],
         'history': [dict(row) for row in history[:limit]],
         'history_truncated': len(history) > limit,
         'latest_truncated': len(latest) > limit,
-        'assignments': [dict(row) for row in assignments[:limit]],
+        'assignments': visible_assignments,
         'assignments_truncated': len(assignments) > limit,
         'limit': limit,
     }

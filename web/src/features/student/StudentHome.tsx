@@ -1,3 +1,4 @@
+import { courseLocationLabels } from "../../lib/courseLabel.ts";
 import {useState} from "react";
 import {courseMeta, timeText, scoreText, type Course, type LearningHome} from "./model";
 import {useStudentListHistory} from "./useStudentListHistory";
@@ -15,6 +16,12 @@ export function StudentHome({courses, verified, busy, navigate, refresh, withdra
   const {option: filter, choose: setFilter} = useStudentListHistory(navigationScope, "home", ["all", "work", "pending", "results"]);
   const [expanded, setExpanded] = useState(false);
   const learning = courses.filter(course => course.enrolled), tasks = home ? learningTasks(home, courses, now) : [];
+  const courseLabels = courseLocationLabels(courses);
+  const repeatedTitles = new Set<string>(), seenTitles = new Set<string>();
+  for (const task of tasks) {
+    if (seenTitles.has(task.assignment.title)) repeatedTitles.add(task.assignment.title);
+    seenTitles.add(task.assignment.title);
+  }
   const selected = tasks.filter(task => filter === "all" || task.category === filter), displayed = expanded ? selected : selected.slice(0, 6);
   const incomplete = home?.courses_truncated || home?.courses.some(item => item.overview.assignments_truncated || item.overview.latest_truncated);
   return <>
@@ -23,10 +30,10 @@ export function StudentHome({courses, verified, busy, navigate, refresh, withdra
       {homeError && <div className={s.error} role="alert"><p>{homeError}</p>{home && <p>아래는 마지막 확인한 상태입니다.</p>}<button className={s.secondary} onClick={refreshHome}>다시 불러오기</button></div>}
       {homeLoading && !home && <p role="status" className={h.loading}>수업별 실습과 제출 상태를 확인하고 있습니다…</p>}
       {home && <>
-        <div className={h.filters} aria-label="실습 상태 필터">{([["all","전체"],["work","제출 전"],["pending","채점 진행"],["results","결과 확인"]] as const).map(([value,label]) => <button key={value} aria-pressed={filter === value} onClick={() => {setFilter(value);setExpanded(false);}}>{label}<span>{value === "all" ? tasks.length : tasks.filter(task=>task.category === value).length}</span></button>)}</div>
+        <div className={h.filters} aria-label="실습 상태 필터">{([["all","전체"],["work","제출 전"],["pending","처리·공개 대기"],["results","결과 확인"]] as const).map(([value,label]) => <button key={value} aria-pressed={filter === value} onClick={() => {setFilter(value);setExpanded(false);}}>{label}<span>{value === "all" ? tasks.length : tasks.filter(task=>task.category === value).length}</span></button>)}</div>
         <ul className={h.tasks}>{displayed.map(task => <li key={`${task.course.course_key}:${task.assignment.assignment_id}`}>
-          <div className={h.taskInfo}><div className={h.meta}><span>{task.course.name || task.course.code}{task.course.section && ` · ${task.course.section}분반`}</span><span className={s.badge} data-tone={task.priority <= 1 ? "warning" : task.category === "pending" ? "info" : undefined}>{task.label}</span></div><h3>{task.assignment.title}</h3><p>{task.receiptOnly ? "마감 정보는 수업에서 확인" : task.assignment.due_at ? `마감 ${timeText(task.assignment.due_at)} KST` : "마감일 미설정"}{task.receipt && ` · 제출 v${task.receipt.version}`}{task.receipt?.published_at && task.receipt.state === "published" && ` · 이번 점수 ${scoreText(task.receipt.score,task.receipt.max_score)}`}</p></div>
-          <button className={task.priority <= 2 ? s.primary : s.secondary} aria-label={`${task.assignment.title} · ${task.action}`} onClick={() => navigate(task.destination, task.course.course_key, task.assignment.assignment_id)}>{task.action}<span aria-hidden="true">→</span></button>
+          <div className={h.taskInfo}><div className={h.meta}><span>{courseLabels.get(task.course.course_key)}</span><span className={s.badge} data-tone={task.priority <= 1 ? "warning" : task.category === "pending" ? "info" : undefined}>{task.label}</span></div><h3>{task.assignment.title}</h3><p>{task.assignment.title_context || (task.receiptOnly ? "마감 정보는 수업에서 확인" : task.assignment.due_at ? `마감 ${timeText(task.assignment.due_at)} KST` : "마감일 미설정")}{task.receipt && ` · 제출 v${task.receipt.version}`}{task.receipt?.published_at && task.receipt.state === "published" && ` · 이번 점수 ${scoreText(task.receipt.score,task.receipt.max_score)}`}</p></div>
+          <button className={task.priority <= 2 ? s.primary : s.secondary} aria-label={[task.assignment.title, repeatedTitles.has(task.assignment.title) && courseLabels.get(task.course.course_key), task.assignment.title_context, task.action].filter(Boolean).join(" · ")} onClick={() => navigate(task.destination, task.course.course_key, task.assignment.assignment_id)}>{task.action}<span aria-hidden="true">→</span></button>
         </li>)}</ul>
         {!selected.length && <p className={h.empty}>{filter === "all" ? "현재 확인할 공개 실습이 없습니다. 아래에서 수업 자료를 확인할 수 있습니다." : "이 상태에 해당하는 실습이 없습니다."}</p>}
         {selected.length > 6 && <button className={s.quiet} onClick={() => setExpanded(value => !value)}>{expanded ? "간단히 보기" : `실습 ${selected.length - 6}개 더 보기`}</button>}
@@ -35,7 +42,7 @@ export function StudentHome({courses, verified, busy, navigate, refresh, withdra
     </section>}
     <div className={s.sectionHeading}><h2>내 수업 목록 <span>{courses.length}</span></h2>{!courseLogin && <button className={s.secondary} onClick={() => navigate("catalog")}>수업 추가</button>}</div>
     {!courses.length && <div className={s.empty}><h2>{courseLogin ? "연결된 수업을 확인할 수 없습니다" : "수강할 수업을 선택해 주세요"}</h2><p>{courseLogin ? "교수자에게 수강 상태를 확인한 뒤 다시 로그인하세요." : "교과목명과 분반을 확인하고 신청하세요."}</p>{!courseLogin && <button className={s.primary} onClick={() => navigate("catalog")}>수강할 수업 선택</button>}</div>}
-    <div className={s.grid}>{courses.map(course => <article className={s.course} key={course.course_key} aria-label={`${course.name || course.course_key} 수업`}>
+    <div className={s.grid}>{courses.map(course => <article className={s.course} key={course.course_key} aria-label={`${courseLabels.get(course.course_key)} 수업`}>
       <div className={s.courseCardTop}><span className={s.eyebrow}>{course.code}</span><span className={s.badge} data-tone={course.enrolled ? "success" : "warning"}>{course.enrolled ? "수강 중" : course.status === "suspended" ? "수강 상태 확인 필요" : !verified ? "계정 활성화 대기" : "명단 확인 대기"}</span></div>
       <h3>{course.name || course.course_key}</h3><p className={s.muted}>{courseMeta(course)}</p>
       {!course.enrolled && <p>{!verified ? "교수자에게 받은 활성화 코드를 입력하면 수강 명단을 연결할 수 있습니다." : "교수자 명단에 학번이 등록되면 연결됩니다. 연결되지 않으면 교수자에게 확인해 주세요."}</p>}

@@ -92,7 +92,10 @@ async function mount(handler?: Handler, query = `?course_key=${courseKey}`) {
     document: dom.window.document, requests, button, settle,
     surface: () => dom.window.document.querySelector("[data-theme] > div") as HTMLElement,
     code: () => dom.window.document.querySelector('[aria-label="발급한 수령 코드"]'),
-    async click(label: string) {await act(async () => button(label).click());},
+    async click(label: string) {
+      const link = Array.from(dom.window.document.querySelectorAll("nav a")).find(node => node.textContent === label) as HTMLAnchorElement | undefined;
+      await act(async () => (link || button(label)).click());
+    },
     async leave() {await act(async () => {visible = false; focused = false; dom.window.dispatchEvent(new dom.window.Event("blur")); dom.window.document.dispatchEvent(new dom.window.Event("visibilitychange"));});},
     async return() {await act(async () => {visible = true; focused = true; dom.window.document.dispatchEvent(new dom.window.Event("visibilitychange")); dom.window.dispatchEvent(new dom.window.Event("focus"));});},
     async tick() {await act(async () => {for (const callback of Array.from(intervals.values())) callback();});},

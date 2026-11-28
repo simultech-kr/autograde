@@ -1,12 +1,12 @@
 import {submissionState, type CourseData, type Receipt} from "./model.ts";
 
-export type ScoreRow = {assignment_id: string; title: string; assignment_key: string; due_at?:string|null; receipt?: Receipt; missingIsUnknown: boolean};
+export type ScoreRow = {title_context?:string; assignment_id: string; title: string; assignment_key: string; due_at?:string|null; receipt?: Receipt; missingIsUnknown: boolean};
 
 /** Bound to the already authenticated course projection; no student selector. */
 export function scoreRows(overview: CourseData["overview"]): ScoreRow[] {
   const latest = new Map(overview.latest.map(row => [row.assignment_id, row]));
   const rows: ScoreRow[] = overview.assignments.map(assignment => ({
-    assignment_id: assignment.assignment_id, title: assignment.title, assignment_key: assignment.assignment_key, due_at:assignment.due_at,
+    title_context: assignment.title_context, assignment_id: assignment.assignment_id, title: assignment.title, assignment_key: assignment.assignment_key, due_at:assignment.due_at,
     receipt: latest.get(assignment.assignment_id), missingIsUnknown: overview.latest_truncated && !latest.has(assignment.assignment_id),
   }));
   const seen = new Set(rows.map(row => row.assignment_id));
@@ -32,7 +32,8 @@ export function visibleCourseAssignments(overview: CourseData["overview"], filte
   }).filter(({receipt, state}) => {
     switch (filter) {
       case "open": return !receipt && !overview.latest_truncated;
-      case "pending": return Boolean(receipt) && state.tone === "info";
+      case "pending": return state.stage >= 0 && state.stage <= 2;
+      case "awaiting_publication": return state.stage === 3;
       case "attention": return state.tone === "warning" || state.tone === "error";
       case "completed": return state.scored;
       default: return true;

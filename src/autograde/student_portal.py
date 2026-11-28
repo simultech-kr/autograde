@@ -1,34 +1,27 @@
 """Student course home and receipt history over the existing short web session."""
 from html import escape
-import math
 import re
 
 from .platform_auth import InvalidSignedValue
 from .platform_service import PlatformAPIError, PlatformResponse
 from .platform_state import PlatformAccessDenied, utc_iso
 from .student_portal_data import submission_overview
+from .submission_presentation import SUBMISSION_LABELS as _STATES, score_pair, valid_score
 from .student_portal_view import deadline
 from .student_scores_view import render as score_summary
 from .portal_runtime_view import STATES as RUNTIME_STATES, overview as runtime_overview, time_label
 
 _PATH = re.compile(r'/courses/([A-Za-z0-9][A-Za-z0-9._~-]{0,127})/(portal|results)(/login)?')
-_STATES = {'received': '제출 접수', 'accepted': '제출 접수 완료', 'queued': '채점 대기',
-           'running': '채점 중', 'graded': '결과 공개 대기', 'published': '결과 공개',
-           'rejected': '제출 확인 필요', 'infra_failed': '서버 처리 오류', 'assessment_failed': '채점 설정 확인 필요'}
+
 
 
 def _score(score, maximum):
     if score is None:
         return '공개된 점수 없음'
-    # General-format's default six significant digits can turn 9.999999 into
-    # 10 and falsely display full marks. Preserve the stored numeric precision.
-    def valid(value):
-        return type(value) in (int, float) and (type(value) is int or math.isfinite(value))
-    if not valid(score) or not valid(maximum) or not 0 <= score <= maximum:
+    if not valid_score(score, maximum):
         return '점수 확인 필요'
-    def display(value):
-        return str(int(value)) if type(value) is float and value.is_integer() else str(value)
-    return f'{display(score)} / {display(maximum)}점'
+    return score_pair(score, maximum) + '점'
+
 
 
 def _logout(course, session):
